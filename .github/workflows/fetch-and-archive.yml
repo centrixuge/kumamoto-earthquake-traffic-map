@@ -1,0 +1,35 @@
+name: Fetch and archive traffic data
+
+on:
+  schedule:
+    # 6時間ごと。復旧期（本震から2週間）を過ぎるとfetch_and_prepare.py側が
+    # 新規取得なしを返すため実質no-opになる。不要になったらこのスケジュールを止めてよい。
+    - cron: "0 */6 * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt -r requirements-fetch.txt
+
+      - name: Fetch and archive traffic data
+        run: python fetch_and_prepare.py
+
+      - name: Commit and push if data changed
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add data/
+          git diff --cached --quiet || git commit -m "Auto-update traffic data archive [skip ci]"
+          git push

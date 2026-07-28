@@ -76,7 +76,18 @@ def create_traffic_geodf(
             "geometry": Point(coords[0], coords[1]),
         })
 
-    # GeoDataFrame の作成
+    # GeoDataFrame の作成（featuresが0件のときrowsも空になるため、
+    # geometry列を明示しないとGeoDataFrameの生成自体が失敗する）
+    if not rows:
+        return gpd.GeoDataFrame(
+            columns=[
+                "lon", "lat", "datetime", "traffic_up", "traffic_down",
+                "traffic_up_small", "traffic_up_large", "traffic_up_unidentified",
+                "traffic_down_small", "traffic_down_large", "traffic_down_unidentified",
+                "geometry",
+            ],
+            geometry="geometry", crs="EPSG:4326",
+        )
     df = gpd.GeoDataFrame(rows, crs="EPSG:4326")
 
     # オブジェクト型にキャストして None を保持
@@ -154,7 +165,18 @@ def create_traffic_geodf_img(
             "geometry": Point(coords[0], coords[1]),
         })
 
-    # GeoDataFrame の作成
+    # GeoDataFrame の作成（featuresが0件のときrowsも空になるため、
+    # geometry列を明示しないとGeoDataFrameの生成自体が失敗する）
+    if not rows:
+        return gpd.GeoDataFrame(
+            columns=[
+                "lon", "lat", "datetime", "traffic_up", "traffic_down",
+                "traffic_up_small", "traffic_up_large", "traffic_up_unidentified",
+                "traffic_down_small", "traffic_down_large", "traffic_down_unidentified",
+                "geometry",
+            ],
+            geometry="geometry", crs="EPSG:4326",
+        )
     df = gpd.GeoDataFrame(rows, crs="EPSG:4326")
 
     # オブジェクト型にキャストして None を保持
@@ -233,7 +255,18 @@ def create_traffic_geodf_img_hour(
             "geometry": Point(coords[0], coords[1]),
         })
 
-    # GeoDataFrame の作成
+    # GeoDataFrame の作成（featuresが0件のときrowsも空になるため、
+    # geometry列を明示しないとGeoDataFrameの生成自体が失敗する）
+    if not rows:
+        return gpd.GeoDataFrame(
+            columns=[
+                "lon", "lat", "datetime", "traffic_up", "traffic_down",
+                "traffic_up_small", "traffic_up_large", "traffic_up_unidentified",
+                "traffic_down_small", "traffic_down_large", "traffic_down_unidentified",
+                "geometry",
+            ],
+            geometry="geometry", crs="EPSG:4326",
+        )
     df = gpd.GeoDataFrame(rows, crs="EPSG:4326")
 
     # オブジェクト型にキャストして None を保持
