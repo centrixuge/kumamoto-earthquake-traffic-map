@@ -18,6 +18,7 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
+from folium.plugins import MarkerCluster
 from streamlit_folium import st_folium
 
 DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
@@ -51,6 +52,7 @@ def load_shelters() -> pd.DataFrame:
     return pd.read_parquet(path)
 
 
+@st.cache_data(ttl=300)
 def build_point_summary(post: pd.DataFrame) -> pd.DataFrame:
     if post.empty:
         return pd.DataFrame(columns=[
@@ -108,12 +110,20 @@ def render_folium_map(
     selected_points=(),
     shelters: pd.DataFrame = None,
 ) -> folium.Map:
+    """
+    決定的idにより、選択状態が変わらない限りHTMLが完全に同一になり
+    streamlit_foliumの不要な再マウントを避けられる（選択が変わった時は
+    見た目も変わるため再マウント自体は起きるが、避難所をクラスタ化して
+    その再マウントの実コストを下げている）。
+    folium.Map.render()は副作用を持ち複数回呼ぶと壊れるため、Mapオブジェクト
+    自体はキャッシュしない（毎回作り直す）。
+    """
     with _deterministic_branca_ids():
         center = [point_summary["point_lat"].mean(), point_summary["point_lon"].mean()]
         fmap = folium.Map(location=center, zoom_start=9, tiles="OpenStreetMap")
 
         if shelters is not None and not shelters.empty:
-            shelter_layer = folium.FeatureGroup(name="避難所（国土数値情報 H24時点）")
+            cluster = MarkerCluster(name="避難所（国土数値情報 H24時点）", disableClusteringAtZoom=14)
             for _, srow in shelters.iterrows():
                 folium.CircleMarker(
                     location=[srow["lat"], srow["lon"]],
@@ -124,22 +134,22 @@ def render_folium_map(
                     fill_color="#2b8cbe",
                     fill_opacity=0.6,
                     tooltip=f"避難所: {srow['name']}（{srow['shelter_type']}）",
-                ).add_to(shelter_layer)
-            shelter_layer.add_to(fmap)
+                ).add_to(cluster)
+            cluster.add_to(fmap)
 
         max_z = point_summary["max_abs_z"].max()
         max_z = max_z if max_z and max_z > 0 else 1.0
 
-        # 注意: マーカーの見た目は selected_points に依存させない。
-        # 依存させると選択が変わるたびに地図HTML全体が変化し、上記の
-        # 決定的id化をしても再マウントが起きてしまうため。
         for _, row in point_summary.iterrows():
             frac = row["max_abs_z"] / max_z
+            is_selected = row["point_id"] in selected_points
+            sel_idx = list(selected_points).index(row["point_id"]) if is_selected else None
+            border_color = SELECTION_COLORS[sel_idx] if is_selected else "#333333"
             folium.CircleMarker(
                 location=[row["point_lat"], row["point_lon"]],
-                radius=9 + 10 * frac,
-                color="#333333",
-                weight=1,
+                radius=(12 + 10 * frac) if is_selected else (9 + 10 * frac),
+                color=border_color,
+                weight=4 if is_selected else 1,
                 fill=True,
                 fill_color=_severity_color(frac),
                 fill_opacity=0.85,
@@ -219,15 +229,15 @@ def render_timeseries(observations: pd.DataFrame, selected_points, quake_at) -> 
             ))
         fig.add_vline(x=quake_at, line_dash="dot", line_color="black")
         fig.update_layout(
-            title=f"{label}交通量（5分間値）",
             height=380,
-            margin=dict(l=10, r=10, t=40, b=10),
+            margin=dict(l=10, r=10, t=30, b=10),
             legend=dict(
                 orientation="h", yanchor="bottom", y=1.02,
                 xanchor="left", x=0, font=dict(size=10),
             ),
             xaxis=dict(tickformat="%m/%d\n%H:%M"),
         )
+        st.markdown(f"**{label}交通量（5分間値）**")
         st.plotly_chart(fig, use_container_width=True)
 
     if len(selected_points) > 1:
@@ -322,6 +332,7 @@ def main():
                 st.caption(
                     "色・大きさが大きいほど地震後の交通量変化（|zスコア|）が大きい観測点。青いマーカーは震源。"
                     "青い小さな点は避難所（国土数値情報、H24時点）。"
+                    "クリックした観測点は赤/緑の枠で強調表示されます（最大2地点）。"
                 )
 
             clicked = map_state.get("last_object_clicked") if map_state else None
