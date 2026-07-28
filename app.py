@@ -111,7 +111,13 @@ def render_folium_map(
     """
     with _deterministic_branca_ids():
         center = [point_summary["point_lat"].mean(), point_summary["point_lon"].mean()]
-        fmap = folium.Map(location=center, zoom_start=9, tiles="OpenStreetMap")
+        fmap = folium.Map(location=center, tiles="OpenStreetMap")
+
+        bounds = [
+            [point_summary["point_lat"].min(), point_summary["point_lon"].min()],
+            [point_summary["point_lat"].max(), point_summary["point_lon"].max()],
+        ]
+        fmap.fit_bounds(bounds, padding=(40, 40))
 
         max_z = point_summary["max_abs_z"].max()
         max_z = max_z if max_z and max_z > 0 else 1.0
@@ -123,7 +129,7 @@ def render_folium_map(
             border_color = SELECTION_COLORS[sel_idx] if is_selected else "#333333"
             folium.CircleMarker(
                 location=[row["point_lat"], row["point_lon"]],
-                radius=(12 + 10 * frac) if is_selected else (9 + 10 * frac),
+                radius=(14 + 12 * frac) if is_selected else (11 + 12 * frac),
                 color=border_color,
                 weight=4 if is_selected else 1,
                 fill=True,
