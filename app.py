@@ -154,6 +154,8 @@ def render_timeseries(observations: pd.DataFrame, selected_points, quake_at) -> 
         st.info("地図上のマーカーをクリックすると、その観測点の時系列がここに表示されます（最大2地点まで比較可）。")
         return
 
+    marks = ["①", "②"]
+
     for direction, mean_col, std_col, label in [
         ("traffic_up", "baseline_mean_up", "baseline_std_up", "上り"),
         ("traffic_down", "baseline_mean_down", "baseline_std_down", "下り"),
@@ -161,6 +163,7 @@ def render_timeseries(observations: pd.DataFrame, selected_points, quake_at) -> 
         fig = go.Figure()
         for i, pid in enumerate(selected_points):
             color = SELECTION_COLORS[i % len(SELECTION_COLORS)]
+            mark = marks[i % len(marks)]
             pdf = observations[observations["point_id"] == pid].sort_values("datetime")
             if len(selected_points) == 1:
                 fig.add_trace(go.Scatter(
@@ -175,22 +178,32 @@ def render_timeseries(observations: pd.DataFrame, selected_points, quake_at) -> 
             fig.add_trace(go.Scatter(
                 x=pdf["datetime"], y=pdf[mean_col],
                 mode="lines", line=dict(color=color, dash="dot", width=1),
-                opacity=0.6, name=f"{pid} 平常時平均",
+                opacity=0.6, name=f"{mark}平常時平均",
             ))
             fig.add_trace(go.Scatter(
                 x=pdf["datetime"], y=pdf[direction],
                 mode="lines+markers",
                 line=dict(color=color, width=1.2),
                 marker=dict(size=3),
-                name=f"{pid} 実測",
+                name=f"{mark}実測",
             ))
         fig.add_vline(x=quake_at, line_dash="dot", line_color="black")
         fig.update_layout(
             title=f"{label}交通量（5分間値）",
-            height=350, margin=dict(l=20, r=20, t=40, b=20),
+            height=380,
+            margin=dict(l=10, r=10, t=40, b=10),
+            legend=dict(
+                orientation="h", yanchor="bottom", y=1.02,
+                xanchor="left", x=0, font=dict(size=10),
+            ),
+            xaxis=dict(tickformat="%m/%d\n%H:%M"),
         )
         st.plotly_chart(fig, use_container_width=True)
 
+    if len(selected_points) > 1:
+        st.caption(
+            f"①: {selected_points[0]} / ②: {selected_points[1]}"
+        )
     st.caption(
         "黒い点線が地震発生時刻（16:27）。灰色の帯（1地点選択時のみ）が平常時の平均±標準偏差、"
         "点線が平常時平均、実線が実測値。"
