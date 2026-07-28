@@ -7,9 +7,12 @@
 読み込んで表示するだけのビュー層。GDAL依存のgeopandas/shapelyはここでは使わない
 （Streamlit Community Cloud等の軽量環境でも動かせるようにするため）。
 """
+import itertools
 import json
 import os
+from contextlib import contextmanager
 
+import branca.element as branca_element
 import folium
 import pandas as pd
 import plotly.express as px
@@ -77,52 +80,79 @@ def _severity_color(frac: float) -> str:
     return "#{:02x}{:02x}{:02x}".format(*rgb)
 
 
+@contextmanager
+def _deterministic_branca_ids():
+    """
+    branca(folium)の各要素は既定でランダムなDOM idを振るため、内容が全く同じ
+    地図でもPython側で再構築するたびにHTMLが毎回変わってしまい、streamlit_foliumが
+    毎クリックごとに地図全体を再マウントしてしまう（＝選択が鈍く感じる主因）。
+    要素生成中だけid生成を連番の決定的な値に置き換えて、選択状態が変わらない限り
+    生成HTMLが完全に同一になるようにする。
+    """
+    counter = itertools.count()
+    original = branca_element.Element._generate_id
+
+    def _next_id(cls):
+        return format(next(counter), "032x")
+
+    branca_element.Element._generate_id = classmethod(_next_id)
+    try:
+        yield
+    finally:
+        branca_element.Element._generate_id = original
+
+
 def render_folium_map(
     point_summary: pd.DataFrame,
     mainshock: dict,
     selected_points=(),
     shelters: pd.DataFrame = None,
 ) -> folium.Map:
-    center = [point_summary["point_lat"].mean(), point_summary["point_lon"].mean()]
-    fmap = folium.Map(location=center, zoom_start=9, tiles="OpenStreetMap")
+    with _deterministic_branca_ids():
+        center = [point_summary["point_lat"].mean(), point_summary["point_lon"].mean()]
+        fmap = folium.Map(location=center, zoom_start=9, tiles="OpenStreetMap")
 
-    if shelters is not None and not shelters.empty:
-        shelter_layer = folium.FeatureGroup(name="避難所（国土数値情報 H24時点）")
-        for _, srow in shelters.iterrows():
+        if shelters is not None and not shelters.empty:
+            shelter_layer = folium.FeatureGroup(name="避難所（国土数値情報 H24時点）")
+            for _, srow in shelters.iterrows():
+                folium.CircleMarker(
+                    location=[srow["lat"], srow["lon"]],
+                    radius=3,
+                    color="#2b8cbe",
+                    weight=1,
+                    fill=True,
+                    fill_color="#2b8cbe",
+                    fill_opacity=0.6,
+                    tooltip=f"避難所: {srow['name']}（{srow['shelter_type']}）",
+                ).add_to(shelter_layer)
+            shelter_layer.add_to(fmap)
+
+        max_z = point_summary["max_abs_z"].max()
+        max_z = max_z if max_z and max_z > 0 else 1.0
+
+        # 注意: マーカーの見た目は selected_points に依存させない。
+        # 依存させると選択が変わるたびに地図HTML全体が変化し、上記の
+        # 決定的id化をしても再マウントが起きてしまうため。
+        for _, row in point_summary.iterrows():
+            frac = row["max_abs_z"] / max_z
             folium.CircleMarker(
-                location=[srow["lat"], srow["lon"]],
-                radius=3,
-                color="#2b8cbe",
+                location=[row["point_lat"], row["point_lon"]],
+                radius=9 + 10 * frac,
+                color="#333333",
                 weight=1,
                 fill=True,
-                fill_color="#2b8cbe",
-                fill_opacity=0.6,
-                tooltip=f"避難所: {srow['name']}（{srow['shelter_type']}）",
-            ).add_to(shelter_layer)
-        shelter_layer.add_to(fmap)
+                fill_color=_severity_color(frac),
+                fill_opacity=0.85,
+                tooltip=(
+                    f"{row['point_id']}（クリックで時系列に表示/解除）<br>"
+                    f"最大|zスコア|: {row['max_abs_z']:.2f} / 異常件数: {int(row['n_anomaly'])}"
+                ),
+            ).add_to(fmap)
 
-    max_z = point_summary["max_abs_z"].max()
-    max_z = max_z if max_z and max_z > 0 else 1.0
+        return _finish_map(fmap, mainshock, shelters)
 
-    for _, row in point_summary.iterrows():
-        frac = row["max_abs_z"] / max_z
-        is_selected = row["point_id"] in selected_points
-        sel_idx = list(selected_points).index(row["point_id"]) if is_selected else None
-        border_color = SELECTION_COLORS[sel_idx] if is_selected else "#333333"
-        folium.CircleMarker(
-            location=[row["point_lat"], row["point_lon"]],
-            radius=(12 + 10 * frac) if is_selected else (9 + 10 * frac),
-            color=border_color,
-            weight=4 if is_selected else 1,
-            fill=True,
-            fill_color=_severity_color(frac),
-            fill_opacity=0.85,
-            tooltip=(
-                f"{row['point_id']}（クリックで時系列に表示/解除）<br>"
-                f"最大|zスコア|: {row['max_abs_z']:.2f} / 異常件数: {int(row['n_anomaly'])}"
-            ),
-        ).add_to(fmap)
 
+def _finish_map(fmap: folium.Map, mainshock: dict, shelters) -> folium.Map:
     folium.Marker(
         location=[mainshock["epicenter_lat"], mainshock["epicenter_lon"]],
         icon=folium.Icon(color="blue", icon="star"),
