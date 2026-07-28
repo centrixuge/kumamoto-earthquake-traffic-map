@@ -1,5 +1,9 @@
 # 熊本地震・交通行動変容ダッシュボード (kumamoto-earthquake-traffic-map)
 
+[![Open in Streamlit](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://kumamoto-earthquake-traffic-map.streamlit.app/)
+
+**🔗 公開URL: https://kumamoto-earthquake-traffic-map.streamlit.app/**
+
 2026年7月28日16:27頃に熊本地方で発生した地震（M7.1・最大震度7）の前後で、交通量オープンデータにどのような変化（行動変容）が見られたかを可視化する簡易ダッシュボードです。
 
 - 交通量データと地震情報を重ね合わせ、平常時との比較による**簡易異常検知**を行います
@@ -8,7 +12,7 @@
 
 ## デモ
 
-Streamlit Community Cloudで公開時のURLはリポジトリの About / GitHub Pages 等を参照してください。ローカルでは以下の「セットアップ」を参照して起動できます。
+上記の公開URLからブラウザで直接見られます。ローカルで動かす場合は以下の「セットアップ」を参照してください。
 
 ## できること
 
