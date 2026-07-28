@@ -17,11 +17,21 @@ GDAL依存のgeopandas/shapelyはこのスクリプト側でのみ使用する�
 import json
 import os
 import sys
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import pandas as pd
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+# 全ての日時定数（TARGET_START, BASELINE_WINDOWS, 地震発生時刻など）は
+# タイムゾーン情報を持たないJSTの壁時計時刻として扱っている。GitHub Actionsの
+# ランナーはUTCで動くため、datetime.now()をそのまま使うと「今」がJSTより
+# 9時間早く扱われ、地震発生前後の判定が環境によって変わってしまう。
+JST = timezone(timedelta(hours=9))
+
+
+def _now_jst() -> datetime:
+    return datetime.now(JST).replace(tzinfo=None)
 
 from modules.api_request_func import fetch_traffic_range
 from modules.aggregation import create_traffic_geodf
@@ -121,7 +131,7 @@ def _fetch_missing_baseline(archive: pd.DataFrame) -> pd.DataFrame:
 
 def main():
     os.makedirs(DATA_DIR, exist_ok=True)
-    now = datetime.now()
+    now = _now_jst()
 
     mainshock = get_quake_info(MAINSHOCK_EID)
     quake_occurred_at = pd.Timestamp(
