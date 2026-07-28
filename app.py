@@ -202,7 +202,12 @@ def render_timeseries(observations: pd.DataFrame, selected_points, quake_at) -> 
                 marker=dict(size=3),
                 name=f"{mark}実測",
             ))
-        fig.add_vline(x=quake_at, line_dash="dot", line_color="black")
+        fig.add_vline(x=quake_at, line_dash="dot", line_color="black", line_width=2)
+        fig.add_annotation(
+            x=quake_at, y=1, yref="paper", yanchor="bottom",
+            text="地震発生 16:27", showarrow=False,
+            font=dict(size=11, color="black"),
+        )
         fig.update_layout(
             height=380,
             margin=dict(l=10, r=10, t=30, b=10),
