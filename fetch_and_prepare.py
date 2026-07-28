@@ -8,7 +8,6 @@
 - baseline.parquet     : 平常時（2週間前の同曜日ペア）の交通量データ
 - observations.parquet : 異常検知結果（zスコア・震源距離など）を結合した観測点×時刻のテーブル
 - quake_info.json      : 本震・主要余震（M4.0以上）の震源・震度情報
-- shelters.parquet     : 避難所（国土数値情報 P20、H24時点）のうちbbox内のもの
 
 Streamlitアプリ（app.py）はこの出力（parquet/json）だけを読み込むため、
 GDAL依存のgeopandas/shapelyはこのスクリプト側でのみ使用する。
@@ -18,7 +17,6 @@ import os
 import sys
 from datetime import datetime
 
-import geopandas as gpd
 import pandas as pd
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -35,7 +33,6 @@ MAINSHOCK_EID = "20260728162718"
 MIN_AFTERSHOCK_MAGNITUDE = 4.0
 
 DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
-SHELTER_SHP_PATH = os.path.join(DATA_DIR, "shelter", "P20-12_43.shp")
 
 TARGET_START = datetime(2026, 7, 27, 3, 0)
 TARGET_END_CAP = datetime(2026, 7, 29, 3, 0)  # 安全のための上限（この時刻以降は取得しない）
@@ -62,24 +59,6 @@ def _fetch_period(start_dt: datetime, end_dt: datetime, label: str) -> "pd.DataF
     return pd.DataFrame(gdf.drop(columns="geometry"))
 
 
-def _load_shelters(bbox) -> pd.DataFrame:
-    """
-    国土数値情報 避難所データ（P20、H24時点）を読み込み、bbox内のものだけを
-    軽量なテーブル（名称・所在地・種別・緯度経度）として返す。
-    """
-    gdf = gpd.read_file(SHELTER_SHP_PATH, encoding="cp932")
-    gdf = gdf.to_crs(epsg=4326)
-    min_x, min_y, max_x, max_y = bbox
-    gdf = gdf.cx[min_x:max_x, min_y:max_y]
-    return pd.DataFrame({
-        "name": gdf["P20_002"],
-        "address": gdf["P20_003"],
-        "shelter_type": gdf["P20_004"],
-        "lon": gdf.geometry.x,
-        "lat": gdf.geometry.y,
-    }).reset_index(drop=True)
-
-
 def main(target_start: datetime = TARGET_START, target_end: datetime = None):
     os.makedirs(DATA_DIR, exist_ok=True)
 
@@ -95,10 +74,6 @@ def main(target_start: datetime = TARGET_START, target_end: datetime = None):
 
     target_df.to_parquet(os.path.join(DATA_DIR, "target.parquet"))
     baseline_df.to_parquet(os.path.join(DATA_DIR, "baseline.parquet"))
-
-    shelters_df = _load_shelters(BBOX)
-    shelters_df.to_parquet(os.path.join(DATA_DIR, "shelters.parquet"))
-    print(f"[shelters] saved {len(shelters_df)} shelters within bbox", flush=True)
 
     mainshock = get_quake_info(MAINSHOCK_EID)
     quake_occurred_at = pd.Timestamp(
