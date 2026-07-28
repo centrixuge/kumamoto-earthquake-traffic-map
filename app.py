@@ -18,7 +18,6 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
-from folium.plugins import MarkerCluster
 from streamlit_folium import st_folium
 
 DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
@@ -42,14 +41,6 @@ def load_observations() -> pd.DataFrame:
 def load_quake_info() -> dict:
     with open(os.path.join(DATA_DIR, "quake_info.json"), encoding="utf-8") as f:
         return json.load(f)
-
-
-@st.cache_data(ttl=300)
-def load_shelters() -> pd.DataFrame:
-    path = os.path.join(DATA_DIR, "shelters.parquet")
-    if not os.path.exists(path):
-        return pd.DataFrame(columns=["name", "address", "shelter_type", "lon", "lat"])
-    return pd.read_parquet(path)
 
 
 @st.cache_data(ttl=300)
@@ -108,34 +99,19 @@ def render_folium_map(
     point_summary: pd.DataFrame,
     mainshock: dict,
     selected_points=(),
-    shelters: pd.DataFrame = None,
 ) -> folium.Map:
     """
     決定的idにより、選択状態が変わらない限りHTMLが完全に同一になり
-    streamlit_foliumの不要な再マウントを避けられる（選択が変わった時は
-    見た目も変わるため再マウント自体は起きるが、避難所をクラスタ化して
-    その再マウントの実コストを下げている）。
+    streamlit_foliumの不要な再マウントを避けられる。
     folium.Map.render()は副作用を持ち複数回呼ぶと壊れるため、Mapオブジェクト
     自体はキャッシュしない（毎回作り直す）。
+
+    避難所（748件）は、個別表示だとクリック応答が重く、クラスタ化すると
+    個々の場所が分からず意味が薄いため、地図には表示しない。
     """
     with _deterministic_branca_ids():
         center = [point_summary["point_lat"].mean(), point_summary["point_lon"].mean()]
         fmap = folium.Map(location=center, zoom_start=9, tiles="OpenStreetMap")
-
-        if shelters is not None and not shelters.empty:
-            cluster = MarkerCluster(name="避難所（国土数値情報 H24時点）", disableClusteringAtZoom=14)
-            for _, srow in shelters.iterrows():
-                folium.CircleMarker(
-                    location=[srow["lat"], srow["lon"]],
-                    radius=3,
-                    color="#2b8cbe",
-                    weight=1,
-                    fill=True,
-                    fill_color="#2b8cbe",
-                    fill_opacity=0.6,
-                    tooltip=f"避難所: {srow['name']}（{srow['shelter_type']}）",
-                ).add_to(cluster)
-            cluster.add_to(fmap)
 
         max_z = point_summary["max_abs_z"].max()
         max_z = max_z if max_z and max_z > 0 else 1.0
@@ -159,24 +135,17 @@ def render_folium_map(
                 ),
             ).add_to(fmap)
 
-        return _finish_map(fmap, mainshock, shelters)
+        folium.Marker(
+            location=[mainshock["epicenter_lat"], mainshock["epicenter_lon"]],
+            icon=folium.Icon(color="blue", icon="star"),
+            popup=folium.Popup(
+                f"震源（本震）: {mainshock['epicenter_name']}<br>"
+                f"M{mainshock['magnitude']} 最大震度{mainshock['max_intensity']}",
+                max_width=250,
+            ),
+        ).add_to(fmap)
 
-
-def _finish_map(fmap: folium.Map, mainshock: dict, shelters) -> folium.Map:
-    folium.Marker(
-        location=[mainshock["epicenter_lat"], mainshock["epicenter_lon"]],
-        icon=folium.Icon(color="blue", icon="star"),
-        popup=folium.Popup(
-            f"震源（本震）: {mainshock['epicenter_name']}<br>"
-            f"M{mainshock['magnitude']} 最大震度{mainshock['max_intensity']}",
-            max_width=250,
-        ),
-    ).add_to(fmap)
-
-    if shelters is not None and not shelters.empty:
-        folium.LayerControl(collapsed=False).add_to(fmap)
-
-    return fmap
+        return fmap
 
 
 def _nearest_point_id(lat, lon, point_summary: pd.DataFrame, tol_deg: float = 0.01):
@@ -271,7 +240,6 @@ def main():
 
     observations = load_observations()
     quake_info = load_quake_info()
-    shelters = load_shelters()
     mainshock = quake_info["mainshock"]
     quake_at = pd.Timestamp(mainshock["occurred_at"]).tz_localize(None)
 
@@ -324,14 +292,13 @@ def main():
 
             with col_map:
                 st.subheader("観測点別 異常度")
-                fmap = render_folium_map(point_summary, mainshock, selected_points, shelters)
+                fmap = render_folium_map(point_summary, mainshock, selected_points)
                 map_state = st_folium(
                     fmap, height=750, width=550,
                     returned_objects=["last_object_clicked"], key="quake_map_v3",
                 )
                 st.caption(
                     "色・大きさが大きいほど地震後の交通量変化（|zスコア|）が大きい観測点。青いマーカーは震源。"
-                    "青い小さな点は避難所（国土数値情報、H24時点）。"
                     "クリックした観測点は赤/緑の枠で強調表示されます（最大2地点）。"
                 )
 
