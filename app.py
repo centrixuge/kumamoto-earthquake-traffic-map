@@ -292,7 +292,8 @@ def build_data_dictionary(actual_columns: dict) -> tuple:
             "エラーではありません。列定義書はアプリのコードに書かれていてデプロイと同時に新しくなる一方、"
             "CSVの中身は「最後にデータを生成した時点」のものなので、列を増やした直後は"
             "次のデータ生成（6時間ごとの自動実行、または `python fetch_and_prepare.py`）が走るまでの間だけ"
-            "両者がずれます。定義書の `in_actual_csv` 列が `False` になっている列がそれです。"
+            "両者がずれます。このずれがある間だけ、列定義書に「配布中CSVに存在」列が追加され、"
+            "該当する列が `×` になります（全て揃っているときはこの列自体を省いています）。"
         )
         if any("point_code" in cols for cols in only_in_dict.values()):
             notes.append(
@@ -325,8 +326,18 @@ _DICT_SHEET_HEADERS = [
     ("列名", 30),
     ("単位・型", 18),
     ("説明", 90),
-    ("配布中CSVに存在", 16),
 ]
+_DICT_PRESENCE_HEADER = ("配布中CSVに存在", 20)
+
+
+def dictionary_has_missing_column(dict_df: pd.DataFrame) -> bool:
+    """
+    定義書にあるのに配布中CSVに無い列があるか。全て揃っているときは
+    「配布中CSVに存在」列が全て○になって情報量がないので、この判定で列自体を省く。
+    """
+    if dict_df.empty or "in_actual_csv" not in dict_df.columns:
+        return False
+    return bool(dict_df["in_actual_csv"].eq(False).any())
 
 
 @st.cache_data(ttl=300)
@@ -334,6 +345,7 @@ def to_dictionary_xlsx_bytes(dict_df: pd.DataFrame, notes: tuple) -> bytes:
     """
     列定義書をExcelブックにする。1シート＝1データセット（＝1CSVファイル）とし、
     先頭に全体の目次と備考をまとめた「はじめに」シートを置く。
+    「配布中CSVに存在」列は食い違いがあるときだけ追加する。
     """
     from openpyxl import Workbook
     from openpyxl.styles import Alignment, Font, PatternFill
@@ -343,6 +355,9 @@ def to_dictionary_xlsx_bytes(dict_df: pd.DataFrame, notes: tuple) -> bytes:
     header_fill = PatternFill("solid", fgColor="DDEBF7")
     wrap_top = Alignment(vertical="top", wrap_text=True)
     top = Alignment(vertical="top")
+
+    show_presence = dictionary_has_missing_column(dict_df)
+    headers = _DICT_SHEET_HEADERS + ([_DICT_PRESENCE_HEADER] if show_presence else [])
 
     wb = Workbook()
     intro = wb.active
@@ -382,7 +397,7 @@ def to_dictionary_xlsx_bytes(dict_df: pd.DataFrame, notes: tuple) -> bytes:
         ws["A1"] = dataset
         ws["A1"].font = Font(bold=True, size=12)
         ws["A2"] = f"CSVファイル名: {fname}"
-        for i, (label, width) in enumerate(_DICT_SHEET_HEADERS):
+        for i, (label, width) in enumerate(headers):
             cell = ws.cell(row=4, column=i + 1, value=label)
             cell.font = header_font
             cell.fill = header_fill
@@ -391,11 +406,12 @@ def to_dictionary_xlsx_bytes(dict_df: pd.DataFrame, notes: tuple) -> bytes:
         sub = dict_df[dict_df["csv_file"] == fname]
         for offset, (_, r) in enumerate(sub.iterrows()):
             out = 5 + offset
-            in_csv = r["in_actual_csv"]
-            values = [
-                r["column_order"], r["column"], r["unit_or_type"], r["description"],
-                "-" if in_csv is None else ("○" if in_csv else "×（次回生成時に追加）"),
-            ]
+            values = [r["column_order"], r["column"], r["unit_or_type"], r["description"]]
+            if show_presence:
+                in_csv = r["in_actual_csv"]
+                values.append(
+                    "-" if in_csv is None else ("○" if in_csv else "×（次回生成時に追加）")
+                )
             for i, v in enumerate(values):
                 c = ws.cell(row=out, column=i + 1, value=v)
                 c.alignment = wrap_top if i == 3 else top
@@ -1112,12 +1128,18 @@ def main():
         with st.expander("列定義書をこの画面で見る"):
             # Excelのシート分けと同じ区切りで見られるようにタブにする
             dict_tabs = st.tabs([sheet for _, sheet, _, _ in DATA_DICTIONARY])
+            # 「配布中CSVに存在」はxlsxと同じ条件（食い違いがあるときだけ）で出す
+            drop_cols = ["csv_file", "dataset"]
+            if not dictionary_has_missing_column(dict_df):
+                drop_cols.append("in_actual_csv")
             for tab, (fname, _sheet, dataset, _cols) in zip(dict_tabs, DATA_DICTIONARY):
                 with tab:
                     st.caption(f"{dataset}｜`{fname}`")
                     sub = dict_df[dict_df["csv_file"] == fname]
                     st.dataframe(
-                        sub.drop(columns=["csv_file", "dataset"]),
+                        sub.drop(columns=drop_cols).rename(
+                            columns={"in_actual_csv": "配布中CSVに存在"}
+                        ),
                         use_container_width=True, hide_index=True,
                     )
         st.divider()
