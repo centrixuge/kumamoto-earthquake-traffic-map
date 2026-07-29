@@ -399,19 +399,9 @@ def main():
 
             with col_map:
                 st.subheader("観測点別 異常度")
-                fmap = render_folium_map(point_summary, mainshock, selected_points, regulations)
-                map_state = st_folium(
-                    fmap, height=750, width=550,
-                    returned_objects=["last_object_clicked"], key="quake_map_v4",
-                )
-                st.caption(
-                    "通行規制データ: [熊本県防災ポータル](https://portal.bousai.pref.kumamoto.jp/?p=traffic)"
-                    "（[熊本市防災情報ポータル](https://city-kumamoto.my.salesforce-sites.com/)からもリンクあり）。"
-                    "始点・終点座標をOSRMで道路網にスナップして表示しています。"
-                )
                 st.markdown(
                     """
-                    <div style="display:flex; flex-wrap:wrap; gap:14px; align-items:center; font-size:0.85rem; margin:4px 0;">
+                    <div style="display:flex; flex-wrap:wrap; gap:14px; align-items:center; font-size:0.85rem; margin:0 0 6px 0;">
                         <div><span style="display:inline-block;width:22px;height:4px;background:#e60000;vertical-align:middle;"></span>
                             <b>×</b> 全面/車両通行止め（現行）</div>
                         <div><span style="display:inline-block;width:22px;height:4px;background:#e67e22;vertical-align:middle;"></span>
@@ -421,6 +411,16 @@ def main():
                     </div>
                     """,
                     unsafe_allow_html=True,
+                )
+                fmap = render_folium_map(point_summary, mainshock, selected_points, regulations)
+                map_state = st_folium(
+                    fmap, height=750, width=550,
+                    returned_objects=["last_object_clicked"], key="quake_map_v4",
+                )
+                st.caption(
+                    "通行規制データ: [熊本県防災ポータル](https://portal.bousai.pref.kumamoto.jp/?p=traffic)"
+                    "（[熊本市防災情報ポータル](https://city-kumamoto.my.salesforce-sites.com/)からもリンクあり）。"
+                    "始点・終点座標をOSRMで道路網にスナップして表示しています。"
                 )
                 st.caption(
                     "観測点は色が濃いほど地震後の交通量変化（|zスコア|）が大きいことを示す（青系のグラデーション）。"
