@@ -62,7 +62,7 @@ from modules.stations import (
 ROAD_TYPE = "3"
 TYPE_NAME = "t_travospublic_measure_5m"
 HOURLY_TYPE_NAME = "t_travospublic_measure_1h"
-BBOX = (130.450, 32.400, 130.900, 33.000)  # 熊本県
+BBOX = (130.450, 32.400, 131.000, 33.000)  # 熊本県
 MAINSHOCK_EID = "20260728162718"
 MIN_AFTERSHOCK_INTENSITY = 5  # 震度5弱以上（INTENSITY_ORDERの数値尺度）
 
