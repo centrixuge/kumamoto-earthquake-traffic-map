@@ -39,13 +39,6 @@
 | 常時観測点の5分間交通量／1時間交通量 | [JARTIC 交通量オープンデータ](https://www.jartic-open-traffic.org/) | [WFS APIの仕様書(PDF)](https://www.jartic-open-traffic.org/action_method.pdf)に基づき取得。認証・APIキー不要。5分値は過去1ヶ月・1時間値は過去3ヶ月まで遡れる。観測点は両者で同一（現在の対象エリアでは7点） |
 | 地震情報（震源・マグニチュード・市町村別最大震度） | 気象庁が公開している防災情報JSON (`https://www.jma.go.jp/bosai/quake/data/list.json`) | 公式なAPI仕様として文書化されたものではなく、気象庁ウェブサイトの表示に使われている公開JSONを利用（多くの防災アプリ・サイトで実利用されている形式）。同一地震に複数の報が出るため、報を統合して最新の非空値を採用している |
 | 道路通行規制情報（区間・時間帯・規制理由） | 熊本県「[防災情報くまもと](https://portal.bousai.pref.kumamoto.jp/)」の[通行規制情報](https://portal.bousai.pref.kumamoto.jp/?p=traffic)ページが使う公開JSON (`https://portal.bousai.pref.kumamoto.jp/data/traffic/traffic.json`) | 認証不要。[熊本市防災情報ポータル](https://city-kumamoto.my.salesforce-sites.com/)からもリンクあり。始点・終点の座標のみのため、[OSRM](https://project-osrm.org/) の公開デモサーバーで実際の道路網に沿った経路にスナップして地図に表示 |
-| 国民の祝日 | [内閣府 祝日CSV](https://www8.cao.go.jp/chosei/shukujitsu/syukujitsu.csv) | 平常時（ベースライン）の母集団から祝日を除外するために使用（Shift_JIS） |
-
-### 重ね合わせを検討して使わなかったデータ
-
-- **通行実績情報**（実際に車が通れた道）: 無償でAPI取得・ダウンロードできる形が見つかりませんでした。トヨタ・ホンダの通行実績マップは閲覧専用、パイオニアのKMZ形式データはG空間情報センター経由で有償（年額5.5万円）かつ再配布不可です
-- **SNS・人流データ**: 利用契約がないため使っていません
-- **推計震度分布**: 機械的な取得が難しく、断念しました
 
 ## 手法・注意点
 
