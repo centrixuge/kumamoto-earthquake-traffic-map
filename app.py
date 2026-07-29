@@ -570,7 +570,20 @@ def build_base_map(
         center = [point_summary["point_lat"].mean(), point_summary["point_lon"].mean()]
         fmap = folium.Map(location=center, tiles=None)
         # 通行規制などの重ね合わせ情報が見やすいよう、背景地図は半透明にする。
-        folium.TileLayer("OpenStreetMap", name="OpenStreetMap", opacity=0.55).add_to(fmap)
+        # 背景地図は1種類しかなく、切り替えられないものをレイヤ一覧に出しても
+        # 幅を取るだけなので control=False で一覧から外す。
+        folium.TileLayer(
+            "OpenStreetMap", name="OpenStreetMap", opacity=0.55, control=False,
+        ).add_to(fmap)
+        # 地図の列は幅が限られるので、レイヤ一覧が地図の外にはみ出さないよう
+        # 幅に上限を付け、長いラベルは折り返す。
+        fmap.get_root().header.add_child(folium.Element(
+            "<style>"
+            ".leaflet-control-layers{max-width:calc(100% - 24px);font-size:12px;}"
+            ".leaflet-control-layers-list{white-space:normal;}"
+            ".leaflet-control-layers label span{white-space:normal;overflow-wrap:anywhere;}"
+            "</style>"
+        ))
 
         bounds = [
             [point_summary["point_lat"].min(), point_summary["point_lon"].min()],
@@ -582,8 +595,10 @@ def build_base_map(
             now = _now_jst()
             quake_at = datetime.fromisoformat(mainshock["occurred_at"]).replace(tzinfo=None)
             # 地震前からの規制を先に描いて、地震起因の規制が上に重なるようにする。
-            post_layer = folium.FeatureGroup(name="通行規制：今回の地震以降に開始")
-            pre_layer = folium.FeatureGroup(name="通行規制：地震前からの規制（工事・過去の災害等）")
+            # ラベルは短くする（分類の意味は地図上部の凡例で説明しているため、
+            # ここで繰り返すとレイヤ一覧が地図幅を超えてしまう）。
+            post_layer = folium.FeatureGroup(name="規制：地震以降に開始")
+            pre_layer = folium.FeatureGroup(name="規制：地震前から")
             for reg in regulations:
                 is_post = _regulation_is_post_quake(reg, quake_at)
                 style = _regulation_style(reg, now, quake_at)
