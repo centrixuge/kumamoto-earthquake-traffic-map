@@ -7788,10 +7788,10 @@
   ],
   "events_min_intensity": 5,
   "events_period_start": "2026-07-28T16:27:00",
-  "events_period_end": "2026-07-29T15:47:28.304895",
-  "generated_at": "2026-07-29T15:47:28.304895",
+  "events_period_end": "2026-07-29T16:07:31.386087",
+  "generated_at": "2026-07-29T16:07:31.386087",
   "target_start": "2026-07-27T03:00:00",
-  "target_end": "2026-07-29T15:47:28.304895",
+  "target_end": "2026-07-29T16:07:31.386087",
   "target_end_cap": "2026-08-11T16:27:00",
   "baseline_windows": [
     {
@@ -7836,5 +7836,6 @@
       "start": "2026-07-21T03:00:00",
       "end": "2026-07-22T03:00:00"
     }
-  ]
+  ],
+  "hourly_baseline_excludes_holidays": true
 }

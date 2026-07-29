@@ -26,30 +26,23 @@ SELECTION_COLORS = ["red", "green"]
 # 時系列図の表示開始時刻（データ保持期間の先頭より後ろにしている）
 TIMESERIES_DISPLAY_START = pd.Timestamp("2026-07-27 12:00")
 
-# 時系列ビューの切り替え。5分間値は過去1ヶ月しか遡れず平常時が2日分しか取れないため、
-# 3ヶ月遡れる1時間値から広いレンジ（同曜日8週分）で平常時を求めた版も用意している。
+# 時系列ビューの切り替え。実績の既定は5分間値、平常時はいずれも1時間値
+# （同曜日8週分・祝日除く）から求めている。
 TIMESERIES_VIEWS = {
-    "5分間値（平常時は直近2日）": {
+    "5分間値（既定）": {
         "file": "observations.parquet",
-        "baseline_key": "baseline_windows",
-        "unit_label": "5分間値",
-        "note": "",
-    },
-    "5分間値（平常時は1時間値8週分÷12）": {
-        "file": "observations_5m_hourly_baseline.parquet",
-        "baseline_key": "hourly_baseline_windows",
         "unit_label": "5分間値",
         "note": (
-            "この表示では平常時を1時間値（同曜日8週分）から求め、単位を合わせるため1/12しています。"
+            "平常時は1時間値から求め、単位を合わせるため1/12しています。"
             "そのため帯は「平常時の1時間あたり交通量の日々のばらつき÷12」であり、"
             "5分間値そのもののばらつきではありません（帯は狭めに出ます）。"
+            "異常検知の判定は1時間値ベースで行っています。"
         ),
     },
-    "1時間値（参考・平常時も1時間値8週分）": {
+    "1時間値（参考）": {
         "file": "observations_hourly.parquet",
-        "baseline_key": "hourly_baseline_windows",
         "unit_label": "1時間値",
-        "note": "実績・平常時とも1時間値どうしの比較なので、統計的にはこの表示が素直です。",
+        "note": "実績・平常時とも1時間値どうしの比較で、異常検知の判定もこの粒度で行っています。",
     },
 }
 
@@ -480,7 +473,9 @@ def main():
         )
         st.stop()
 
-    observations = load_observations()
+    # 異常検知（zスコア・地図の色分け・異常検知一覧）は1時間値ベースで定義する。
+    # 時系列図の実績は既定で5分間値を使う（load_observationsで別途読み込む）。
+    observations = load_observations("observations_hourly.parquet")
     quake_info = load_quake_info()
     regulations = load_regulations()
     mainshock = quake_info["mainshock"]
@@ -679,7 +674,7 @@ def main():
                 render_timeseries(
                     load_observations(cfg["file"]),
                     selected_points, quake_at, other_event_times, point_labels,
-                    quake_info.get(cfg["baseline_key"]),
+                    quake_info.get("hourly_baseline_windows"),
                     unit_label=cfg["unit_label"],
                     extra_note=cfg["note"],
                 )
@@ -688,9 +683,13 @@ def main():
     # 異常検知一覧タブ
     # ------------------------------------------------------------------
     with tab_list:
-        st.subheader("異常検知結果一覧（地震発生後）")
+        st.subheader("異常検知結果一覧（地震発生後・1時間値ベース）")
         anomalies = observations[observations["is_anomaly"]].sort_values("datetime")
         st.write(f"検知件数: {len(anomalies)} 件")
+        st.caption(
+            "1時間値の実績と、平常時（同曜日8週分・祝日除く）の1時間値の平均・標準偏差を比べ、"
+            "|zスコア| >= 2 を異常としています。地図の色分けもこの判定に基づきます。"
+        )
         display_cols = [
             "point_id", "datetime", "traffic_up", "traffic_down",
             "baseline_mean_up", "baseline_mean_down", "z_up", "z_down",

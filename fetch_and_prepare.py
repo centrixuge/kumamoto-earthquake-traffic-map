@@ -7,12 +7,13 @@
 - archive/traffic_raw.parquet    : 5分間値の生データを丸ごと保持する恒久アーカイブ
                                 （JARTIC側の5分値は過去1ヶ月分しか遡れないため、削除・上書きせず追記していく）
 - archive/traffic_hourly.parquet : 1時間値の生データの恒久アーカイブ（1時間値は3ヶ月分遡れる）
-- observations_hourly.parquet    : 1時間値どうしの比較（同曜日8週分を平常時とする）
-- observations_5m_hourly_baseline.parquet
-                                : 5分間値に、1時間値ベース（同曜日8週分）の平常時を1/12して適用したもの
+- observations_hourly.parquet    : 1時間値どうしの比較。異常検知（zスコア・地図の色分け・
+                                   異常検知一覧）はこちらの定義を使う
+- holidays.json                  : 内閣府の祝日CSVのキャッシュ（平常時から祝日を除くために使用）
 - target.parquet       : 地震前後を含む対象期間の交通量データ（アーカイブから毎回再生成するビュー）
 - baseline.parquet     : 平常時（2週間前の同曜日ペア）の交通量データ（同上）
-- observations.parquet : 異常検知結果（zスコア・震源距離など）を結合した観測点×時刻のテーブル
+- observations.parquet : 5分間値の実績に、1時間値ベース（同曜日8週分・祝日除く）の平常時を
+                         1/12して適用したテーブル（時系列図の既定ビュー）
 - quake_info.json      : 本震・主要余震（M4.0以上）の震源・震度情報
 - regulations.json     : 「防災情報くまもと」の道路通行規制情報（OSRMで道路網にスナップ済み）
 
@@ -45,6 +46,7 @@ from modules.anomaly import (
     build_observation_table, compute_baseline_stats, scale_baseline_stats,
 )
 from modules.road_regulations import fetch_regulations, build_regulation_paths
+from modules.holidays import fetch_holidays
 
 ROAD_TYPE = "3"
 TYPE_NAME = "t_travospublic_measure_5m"
@@ -72,14 +74,35 @@ BASELINE_WINDOWS = [
 
 # 1時間値は過去3ヶ月遡れるので、本震と同じ曜日（火）を8週分さかのぼって
 # 平常時の平均・標準偏差の母集団にする。1日の区切りは5分間値側と揃えて03:00起点。
+# 祝日は交通量の傾向が平日と異なるため、母集団から除外する（下で実施）。
 HOURLY_BASELINE_WEEKS = 8
-HOURLY_BASELINE_WINDOWS = [
+_HOURLY_BASELINE_CANDIDATES = [
     (
         datetime(2026, 7, 21, 3, 0) - timedelta(weeks=i),
         datetime(2026, 7, 22, 3, 0) - timedelta(weeks=i),
     )
     for i in range(HOURLY_BASELINE_WEEKS)
 ]
+
+HOLIDAY_CACHE_PATH = os.path.join(DATA_DIR, "holidays.json")
+
+
+def _baseline_windows_excluding_holidays(candidates, holidays):
+    """祝日にあたる日を平常時の母集団から外す。除外内容は必ずログに出す。"""
+    kept, dropped = [], []
+    for start_dt, end_dt in candidates:
+        name = holidays.get(start_dt.date().isoformat())
+        if name:
+            dropped.append((start_dt.date(), name))
+        else:
+            kept.append((start_dt, end_dt))
+    if dropped:
+        for d, name in dropped:
+            print(f"[baseline-1h] excluding {d} ({name}) as a public holiday", flush=True)
+    else:
+        print("[baseline-1h] no public holidays fell in the baseline window", flush=True)
+    print(f"[baseline-1h] using {len(kept)} of {len(candidates)} candidate days", flush=True)
+    return kept
 
 
 def _fetch_period(
@@ -188,14 +211,19 @@ def main():
     target_df.to_parquet(os.path.join(DATA_DIR, "target.parquet"))
     baseline_df.to_parquet(os.path.join(DATA_DIR, "baseline.parquet"))
 
-    # --- 1時間値（参考ビュー用＋広いレンジの平常時） --------------------------
+    # --- 1時間値（平常時の母集団＋異常検知の基準） -----------------------------
+    holidays = fetch_holidays(HOLIDAY_CACHE_PATH)
+    hourly_baseline_windows = _baseline_windows_excluding_holidays(
+        _HOURLY_BASELINE_CANDIDATES, holidays
+    )
+
     hourly_archive = _load_archive(HOURLY_ARCHIVE_PATH)
     new_hourly_target = _fetch_missing_target(
         hourly_archive, target_end,
         type_name=HOURLY_TYPE_NAME, step=HOURLY_FETCH_STEP, label="target-1h",
     )
     new_hourly_baseline = _fetch_missing_baseline(
-        hourly_archive, windows=HOURLY_BASELINE_WINDOWS,
+        hourly_archive, windows=hourly_baseline_windows,
         type_name=HOURLY_TYPE_NAME, label="baseline-1h",
     )
     hourly_archive = _merge_into_archive(
@@ -205,7 +233,7 @@ def main():
 
     hourly_target_df = _slice(hourly_archive, TARGET_START, target_end)
     hourly_baseline_df = pd.concat(
-        [_slice(hourly_archive, s, e) for s, e in HOURLY_BASELINE_WINDOWS],
+        [_slice(hourly_archive, s, e) for s, e in hourly_baseline_windows],
         ignore_index=True,
     )
     hourly_baseline_stats = compute_baseline_stats(hourly_baseline_df)
@@ -221,18 +249,9 @@ def main():
         min_intensity=MIN_AFTERSHOCK_INTENSITY,
     )
 
-    observations = build_observation_table(
-        target_df=target_df,
-        baseline_df=baseline_df,
-        quake_occurred_at=quake_occurred_at,
-        epicenter_lat=mainshock["epicenter_lat"],
-        epicenter_lon=mainshock["epicenter_lon"],
-    )
-    observations.to_parquet(os.path.join(DATA_DIR, "observations.parquet"))
-
-    # 5分間値に、1時間値ベース（同曜日8週分）の平常時も併記できるようにする。
+    # 実績の既定は5分間値。平常時は1時間値（同曜日8週分・祝日除く）から求め、
     # 単位を合わせるため1/12にスケールする。
-    obs_wide_baseline = build_observation_table(
+    observations = build_observation_table(
         target_df=target_df,
         baseline_df=baseline_df,
         quake_occurred_at=quake_occurred_at,
@@ -240,11 +259,11 @@ def main():
         epicenter_lon=mainshock["epicenter_lon"],
         baseline_stats=scale_baseline_stats(hourly_baseline_stats, 1.0 / 12.0),
     )
-    obs_wide_baseline.to_parquet(
-        os.path.join(DATA_DIR, "observations_5m_hourly_baseline.parquet")
-    )
+    observations.to_parquet(os.path.join(DATA_DIR, "observations.parquet"))
 
-    # 1時間値どうしの比較（統計的にはこちらが素直）。
+    # 異常検知（zスコア・地図の色分け・異常検知一覧）は1時間値どうしの比較で定義する。
+    # 5分間値どうしだと短時間の揺らぎを拾いやすく、1時間値のσを1/12した帯と組み合わせると
+    # 過検知になるため。
     observations_hourly = build_observation_table(
         target_df=hourly_target_df,
         baseline_df=hourly_baseline_df,
@@ -272,8 +291,9 @@ def main():
         ],
         "hourly_baseline_windows": [
             {"start": s.isoformat(), "end": e.isoformat()}
-            for s, e in sorted(HOURLY_BASELINE_WINDOWS)
+            for s, e in sorted(hourly_baseline_windows)
         ],
+        "hourly_baseline_excludes_holidays": True,
     }
     with open(os.path.join(DATA_DIR, "quake_info.json"), "w", encoding="utf-8") as f:
         json.dump(quake_info, f, ensure_ascii=False, indent=2)
@@ -291,12 +311,16 @@ def main():
         )
     print(f"[regulations] saved {len(regulations)} entries", flush=True)
 
-    n_anomaly = int(observations["is_anomaly"].sum())
-    n_points = observations["point_id"].nunique()
+    # 異常検知の正式な定義は1時間値ベース。5分間値テーブルにも
+    # build_observation_table 由来の is_anomaly 列が入るが、そちらは
+    # 1時間値のσを1/12した狭い帯に対する判定なので参考値にすぎない。
+    n_anomaly = int(observations_hourly["is_anomaly"].sum())
+    n_points = observations_hourly["point_id"].nunique()
     print(
         f"done. archive rows={len(archive)} (5m) / {len(hourly_archive)} (1h), "
         f"observations rows={len(observations)} (5m) / {len(observations_hourly)} (1h), "
-        f"points={n_points}, anomalies flagged={n_anomaly}",
+        f"points={n_points}, anomalies flagged={n_anomaly} (1h basis; "
+        f"5m table's own flag would be {int(observations['is_anomaly'].sum())} and is not used)",
         flush=True,
     )
 
