@@ -168,6 +168,112 @@ def to_csv_bytes(df: pd.DataFrame) -> bytes:
     return df.to_csv(index=False).encode("utf-8-sig")
 
 
+# ダウンロードするCSVの列定義。「データセット名」はダウンロードするCSVのファイル名と
+# 対応させている。実データの列と食い違っていないかは build_data_dictionary で検査する。
+_TRAFFIC_COLUMNS = [
+    ("point_code", "文字列", "JARTICの常時観測点コード。観測点を一意に識別する公式のID"),
+    ("lon", "度（EPSG:4326）", "観測点の経度"),
+    ("lat", "度（EPSG:4326）", "観測点の緯度"),
+    ("datetime", "日時（JST）", "観測時刻。5分間値は5分刻み、1時間値は毎時0分（その時刻から始まる区間の集計値）"),
+    ("traffic_up", "台", "上り方向の合計交通量（小型＋大型＋車種判別不能）。いずれかが欠測なら空欄"),
+    ("traffic_down", "台", "下り方向の合計交通量（同上）"),
+    ("traffic_up_small", "台", "上り・小型車の交通量"),
+    ("traffic_up_large", "台", "上り・大型車の交通量"),
+    ("traffic_up_unidentified", "台", "上り・車種を判別できなかった交通量"),
+    ("traffic_down_small", "台", "下り・小型車の交通量"),
+    ("traffic_down_large", "台", "下り・大型車の交通量"),
+    ("traffic_down_unidentified", "台", "下り・車種を判別できなかった交通量"),
+]
+
+_OBSERVATION_COLUMNS = [
+    ("point_code", "文字列", "JARTICの常時観測点コード"),
+    ("point_id", "文字列", "内部の結合キー（経度_緯度を6桁に丸めた文字列）。観測点の識別にはpoint_codeを使ってください"),
+    ("point_lon", "度（EPSG:4326）", "観測点の経度（6桁に丸め）"),
+    ("point_lat", "度（EPSG:4326）", "観測点の緯度（6桁に丸め）"),
+    ("datetime", "日時（JST）", "観測時刻（1時間値なので毎時0分）"),
+    ("hour", "0〜23", "時刻の「時」。平常時の平均・標準偏差はこの単位で求めている"),
+    ("traffic_up", "台/時", "上り方向の実績交通量"),
+    ("traffic_down", "台/時", "下り方向の実績交通量"),
+    ("baseline_mean_up", "台/時", "平常時（同曜日8週分・祝日除く）の上り交通量の平均"),
+    ("baseline_std_up", "台/時", "同じ母集団での上り交通量の標準偏差"),
+    ("baseline_mean_down", "台/時", "平常時の下り交通量の平均"),
+    ("baseline_std_down", "台/時", "平常時の下り交通量の標準偏差"),
+    ("z_up", "無次元", "上りのzスコア =（実績 − 平常時平均）÷ 標準偏差。標準偏差が0や極小のときは下限でクリップ"),
+    ("z_down", "無次元", "下りのzスコア（同上）"),
+    ("is_post_quake", "真偽値", "本震（2026-07-28 16:27）以降の時刻かどうか"),
+    ("is_anomaly", "真偽値", "異常と判定したか。is_post_quakeがTrueかつ|z_up|または|z_down|が2以上"),
+    ("distance_km_from_epicenter", "km", "観測点と本震の震源との大圏距離。揺れの強さの代理指標として使用"),
+]
+
+_REGULATION_COLUMNS = [
+    ("regulation_key", "文字列", "規制の識別キー。路線名・地域・区間の始終点座標・規制開始日時を連結したもの（規制内容や終了日時は途中で変わるため含めない）"),
+    ("route_name", "文字列", "路線名"),
+    ("region", "文字列", "振興局などの地域区分"),
+    ("content", "文字列", "最新の規制内容（全面通行止め／片側交互通行止め／車両通行止め／解除 など）"),
+    ("reason_type", "文字列", "規制の原因区分（災害／工事／事故／その他）"),
+    ("reason_detail", "文字列", "原因の詳細（道路損壊など）。空欄のことも多い"),
+    ("start_timestamp", "日時（JST）", "規制の開始日時。本震（2026-07-28 16:27）以降かどうかで地震起因かを切り分けている"),
+    ("end_timestamp", "日時（JST）", "規制の終了日時（実績または予定）。未定なら空欄"),
+    ("length_km", "km", "規制区間の延長（ポータルの申告値）"),
+    ("start_lat", "度（EPSG:4326）", "規制区間の始点の緯度"),
+    ("start_lon", "度（EPSG:4326）", "規制区間の始点の経度"),
+    ("end_lat", "度（EPSG:4326）", "規制区間の終点の緯度"),
+    ("end_lon", "度（EPSG:4326）", "規制区間の終点の経度"),
+    ("first_seen", "日時（JST）", "この規制をアーカイブで最初に確認した日時"),
+    ("last_seen", "日時（JST）", "最後に確認した日時。still_listedがFalseならこの時点以降に一覧から消えた"),
+    ("still_listed", "真偽値", "最新の取得時点でポータルの一覧に載っていたか。Falseは解除等で削除されたことを示す"),
+    ("path_points", "個数", "地図描画用にOSRMで道路網へスナップした経路の座標点数（経路そのものはCSVには含めない）"),
+]
+
+_REGULATION_HISTORY_COLUMNS = [
+    ("regulation_key", "文字列", "規制の識別キー（一覧CSVのregulation_keyと対応）"),
+    ("route_name", "文字列", "路線名"),
+    ("observed_at", "日時（JST）", "この状態を観測した日時"),
+    ("content", "文字列", "その時点の規制内容"),
+    ("end_timestamp", "日時（JST）", "その時点で示されていた終了日時"),
+    ("reason_type", "文字列", "その時点の原因区分"),
+    ("reason_detail", "文字列", "その時点の原因詳細"),
+    ("length_km", "km", "その時点の規制区間延長"),
+]
+
+DATA_DICTIONARY = [
+    ("kumamoto_traffic_5min_archive.csv", "5分間交通量（アーカイブ全期間）", _TRAFFIC_COLUMNS),
+    ("kumamoto_traffic_hourly_archive.csv", "1時間交通量（アーカイブ全期間）", _TRAFFIC_COLUMNS),
+    ("kumamoto_road_regulations_archive.csv", "通行規制 一覧", _REGULATION_COLUMNS),
+    ("kumamoto_road_regulations_history.csv", "通行規制 状態変化の履歴", _REGULATION_HISTORY_COLUMNS),
+    ("kumamoto_observations_hourly.csv", "異常検知の入力データ（1時間値）", _OBSERVATION_COLUMNS),
+]
+
+
+def build_data_dictionary(actual_columns: dict) -> tuple:
+    """
+    列定義書を1枚の表にする。あわせて、実際のCSVの列と定義が食い違っていないかを
+    検査して警告文を返す（定義書だけが古くなるのを防ぐため）。
+    """
+    rows, warnings = [], []
+    for fname, dataset, columns in DATA_DICTIONARY:
+        documented = [c for c, _, _ in columns]
+        actual = actual_columns.get(fname)
+        if actual is not None:
+            missing = [c for c in actual if c not in documented]
+            stale = [c for c in documented if c not in actual]
+            if missing:
+                warnings.append(f"{fname}: 定義書に未記載の列があります → {', '.join(missing)}")
+            if stale:
+                warnings.append(f"{fname}: 定義書にあるが実データに無い列があります → {', '.join(stale)}")
+        for order, (col, unit, desc) in enumerate(columns, start=1):
+            rows.append({
+                "csv_file": fname,
+                "dataset": dataset,
+                "column_order": order,
+                "column": col,
+                "unit_or_type": unit,
+                "description": desc,
+                "in_actual_csv": (col in actual) if actual is not None else None,
+            })
+    return pd.DataFrame(rows), warnings
+
+
 @st.cache_data(ttl=300)
 def build_point_summary(post: pd.DataFrame) -> pd.DataFrame:
     if post.empty:
@@ -813,7 +919,7 @@ def main():
                 "5分間交通量（生データ・アーカイブ全期間）",
                 load_traffic_archive("traffic_raw.parquet"),
                 "kumamoto_traffic_5min_archive.csv",
-                "観測点（lon/lat）×日時ごとの上り・下り交通量。車種別の内訳列も含みます。",
+                "観測点（常時観測点コード）×日時ごとの上り・下り交通量。車種別の内訳列も含みます。",
             ),
             (
                 "1時間交通量（生データ・アーカイブ全期間）",
@@ -845,6 +951,31 @@ def main():
                 "地図の色分けと異常検知一覧の根拠になっている表そのものです。",
             ),
         ]
+
+        # --- 列定義書（データディクショナリ） ---
+        actual_columns = {
+            fname: list(df.columns)
+            for _, df, fname, _ in downloads
+            if df is not None and not df.empty
+        }
+        dict_df, dict_warnings = build_data_dictionary(actual_columns)
+        st.markdown("**CSVの列定義書（各列の意味・単位）**")
+        st.caption(
+            f"上記すべてのCSVについて、列の並び順・単位・意味をまとめた表です（{len(dict_df)} 行）。"
+            "データを受け取った人が中身を解釈できるよう、CSVと一緒に配布してください。"
+        )
+        st.download_button(
+            "列定義書をダウンロード（kumamoto_data_dictionary.csv）",
+            to_csv_bytes(dict_df),
+            file_name="kumamoto_data_dictionary.csv",
+            mime="text/csv", key="dl_dictionary",
+        )
+        for w in dict_warnings:
+            # 列定義書と実データがずれたら黙って配らず、画面に出す
+            st.warning(f"列定義書と実データの不一致: {w}")
+        with st.expander("列定義書をこの画面で見る"):
+            st.dataframe(dict_df, use_container_width=True, hide_index=True, height=420)
+        st.divider()
 
         for title, df, fname, desc in downloads:
             st.markdown(f"**{title}**")
