@@ -11,6 +11,7 @@ import itertools
 import json
 import os
 from contextlib import contextmanager
+from datetime import datetime, timedelta, timezone
 
 import branca.element as branca_element
 import folium
@@ -23,6 +24,15 @@ from streamlit_folium import st_folium
 DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
 MAX_SELECTED_POINTS = 2
 SELECTION_COLORS = ["red", "green"]
+
+# 通行規制の日時はJSTの壁時計時刻（naive）で保存されている。Streamlit Cloud等の
+# UTCサーバーでdatetime.now()をそのまま使うと「終了済みか」の判定がずれるため、
+# fetch_and_prepare.py と同様にJST固定の「今」を使う。
+JST = timezone(timedelta(hours=9))
+
+
+def _now_jst() -> datetime:
+    return datetime.now(JST).replace(tzinfo=None)
 
 st.set_page_config(
     page_title="熊本地震・交通行動変容ダッシュボード",
@@ -73,25 +83,44 @@ def build_point_summary(post: pd.DataFrame) -> pd.DataFrame:
     return summary.sort_values("max_abs_z", ascending=False).reset_index(drop=True)
 
 
-REGULATION_COLORS = {
-    "全面通行止め": "#c0392b",
-    "車両通行止め": "#c0392b",
-    "片側交互通行止め": "#e67e22",
-    "解除": "#7f8c8d",
-}
-
-
-def _regulation_color(content: str) -> str:
-    return REGULATION_COLORS.get(content, "#7f8c8d")
+FULL_CLOSURE_CONTENTS = {"全面通行止め", "車両通行止め"}
 
 
 def _severity_color(frac: float) -> str:
-    """0(平常)〜1(最大異常)のfracを薄黄色〜濃い赤の16進カラーに変換する。"""
+    """
+    0(平常)〜1(最大異常)のfracを寒色系（薄い水色〜濃い紺）の16進カラーに変換する。
+    通行規制の色（赤系）と見分けやすいよう、観測点側はあえて寒色にしている。
+    """
     frac = max(0.0, min(1.0, frac))
-    low = (255, 237, 160)
-    high = (165, 15, 21)
+    low = (222, 235, 247)
+    high = (8, 48, 107)
     rgb = [int(low[i] + (high[i] - low[i]) * frac) for i in range(3)]
     return "#{:02x}{:02x}{:02x}".format(*rgb)
+
+
+def _regulation_is_ended(reg: dict, now: datetime) -> bool:
+    """規制が発災後に開始・終了済み（既に解除済み）かどうかを判定する。"""
+    if reg.get("content") == "解除":
+        return True
+    end_ts = reg.get("end_timestamp")
+    if not end_ts:
+        return False
+    try:
+        end_dt = datetime.strptime(end_ts, "%Y-%m-%d %H:%M:%S")
+    except ValueError:
+        return False
+    return end_dt < now
+
+
+def _regulation_style(reg: dict, now: datetime) -> dict:
+    """規制の状態（継続中/終了済み）と内容に応じて線の色・破線・×マーカーの要否を決める。"""
+    if _regulation_is_ended(reg, now):
+        return {"color": "#95a5a6", "dash_array": "6,8", "show_x": False}
+    if reg.get("content") in FULL_CLOSURE_CONTENTS:
+        return {"color": "#e60000", "dash_array": None, "show_x": True}
+    if reg.get("content") == "片側交互通行止め":
+        return {"color": "#e67e22", "dash_array": None, "show_x": False}
+    return {"color": "#95a5a6", "dash_array": "6,8", "show_x": False}
 
 
 @contextmanager
@@ -133,7 +162,9 @@ def render_folium_map(
     """
     with _deterministic_branca_ids():
         center = [point_summary["point_lat"].mean(), point_summary["point_lon"].mean()]
-        fmap = folium.Map(location=center, tiles="OpenStreetMap")
+        fmap = folium.Map(location=center, tiles=None)
+        # 通行規制などの重ね合わせ情報が見やすいよう、背景地図は半透明にする。
+        folium.TileLayer("OpenStreetMap", name="OpenStreetMap", opacity=0.55).add_to(fmap)
 
         bounds = [
             [point_summary["point_lat"].min(), point_summary["point_lon"].min()],
@@ -142,25 +173,36 @@ def render_folium_map(
         fmap.fit_bounds(bounds, padding=(40, 40))
 
         if regulations:
+            now = _now_jst()
             reg_layer = folium.FeatureGroup(name="通行規制情報（熊本県防災ポータル）")
             for reg in regulations:
+                style = _regulation_style(reg, now)
+                ended = _regulation_is_ended(reg, now)
                 period = reg["start_timestamp"] or "?"
-                if reg["end_timestamp"]:
-                    period += f" 〜 {reg['end_timestamp']}"
-                else:
-                    period += " 〜 (継続中)"
+                period += f" 〜 {reg['end_timestamp']}" if ended and reg["end_timestamp"] else " 〜 (継続中)"
+                status_label = "解除済み" if ended else "規制中"
                 folium.PolyLine(
                     locations=reg["path"],
-                    color=_regulation_color(reg["content"]),
+                    color=style["color"],
                     weight=5,
-                    opacity=0.8,
+                    opacity=0.5 if ended else 0.85,
+                    dash_array=style["dash_array"],
                     tooltip=(
-                        f"{reg['route_name']}（{reg['region']}）<br>"
+                        f"{reg['route_name']}（{reg['region']}）｜{status_label}<br>"
                         f"{reg['content']}｜{reg['reason_type']}"
                         f"{('・' + reg['reason_detail']) if reg['reason_detail'] else ''}<br>"
                         f"{period}"
                     ),
                 ).add_to(reg_layer)
+                if style["show_x"]:
+                    mid = reg["path"][len(reg["path"]) // 2]
+                    folium.Marker(
+                        location=mid,
+                        icon=folium.DivIcon(html=(
+                            '<div style="font-size:22px;font-weight:900;color:#e60000;'
+                            'line-height:1;text-shadow:0 0 2px white,0 0 2px white;">×</div>'
+                        )),
+                    ).add_to(reg_layer)
             reg_layer.add_to(fmap)
             folium.LayerControl(collapsed=False).add_to(fmap)
 
@@ -355,9 +397,11 @@ def main():
                     returned_objects=["last_object_clicked"], key="quake_map_v4",
                 )
                 st.caption(
-                    "色・大きさが大きいほど地震後の交通量変化（|zスコア|）が大きい観測点。青いマーカーは震源。"
-                    "クリックした観測点は赤/緑の枠で強調表示されます（最大2地点）。"
-                    "赤・オレンジの線は熊本県防災ポータルの通行規制情報（OSRMで道路網にスナップ）。"
+                    "観測点は色が濃いほど地震後の交通量変化（|zスコア|）が大きいことを示す（青系のグラデーション）。"
+                    "青いマーカーは震源。クリックした観測点は赤/緑の枠で強調表示されます（最大2地点）。"
+                    "通行規制（熊本県防災ポータル、OSRMで道路網にスナップ）: "
+                    "赤＋×＝全面/車両通行止め、オレンジ＝片側交互通行止め、"
+                    "グレーの破線＝発災後に開始・終了済みの規制。"
                 )
 
             clicked = map_state.get("last_object_clicked") if map_state else None
