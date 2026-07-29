@@ -46,6 +46,18 @@ JARTIC交通量オープンデータの5分値は**過去1ヶ月分しか遡っ�
 - `target.parquet`/`baseline.parquet`/`observations.parquet`/`quake_info.json` はこのアーカイブから毎回再生成される「現在時点のビュー」で、上書きされて構いません
 - 実行のたびに、アーカイブ済みの範囲は再取得せず、まだ取得していない範囲だけをAPIに問い合わせます（APIへの負荷軽減、かつ既存データを失わない）
 - GitHub Actions（後述）で定期実行することで、復旧期（本震+2週間）が終わるまで自動的にアーカイブが育っていきます
+- 1時間値も同様に `data/archive/traffic_hourly.parquet` に蓄積します（1時間値は3ヶ月遡れる）
+
+### 通行規制情報のアーカイブ
+
+通行規制も**解除されるとポータルの一覧から消えて、後から取得できません**。そのため `data/archive/regulations_archive.json` に**追記専用**で蓄積します（削除は一切しません）。
+
+- 各規制は「路線名・区間の始終点座標・規制開始日時」をキーに識別します（規制内容や終了日時は途中で変わるためキーに含めません）
+- `first_seen` / `last_seen`（初めて／最後に確認した日時）と `still_listed`（まだポータルに載っているか）を保持するので、一覧から消えた後も「いつからいつまで、どういう規制だったか」を追えます
+- 規制内容や終了日時が変わったときだけ `history` に1行追記します（全面通行止め → 片側交互通行止め → 解除 といった推移が残ります）
+- スナップ済みの経路はアーカイブから再利用するため、定期実行のたびに全件をOSRMの公開デモサーバーへ投げ直しません
+- ポータルからの取得に失敗した回は、**アーカイブを一切変更しません**（取得できなかったことを「一覧から消えた」と誤判定しないため）
+- `data/regulations.json` は地図描画用の「現在のスナップショット」で、こちらは毎回上書きされます
 
 ### 自動取得（GitHub Actions）
 
@@ -97,7 +109,7 @@ python fetch_and_prepare.py
 app.py                        Streamlitダッシュボード本体
 fetch_and_prepare.py           データ取得・前処理スクリプト
 modules/                       データ取得・変換・異常検知ロジック
-data/archive/traffic_raw.parquet  恒久アーカイブ（追記専用）
+data/archive/                  恒久アーカイブ（追記専用）: 5分値・1時間値・通行規制
 data/                          前処理済みデータ（parquet/json）のスナップショット
 .github/workflows/             定期自動取得（GitHub Actions）
 requirements.txt               app.py 実行用の軽量な依存関係

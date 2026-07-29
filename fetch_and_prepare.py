@@ -10,6 +10,10 @@
 - observations_hourly.parquet    : 1時間値どうしの比較。異常検知（zスコア・地図の色分け・
                                    異常検知一覧）はこちらの定義を使う
 - holidays.json                  : 内閣府の祝日CSVのキャッシュ（平常時から祝日を除くために使用）
+- archive/regulations_archive.json
+                                 : 通行規制の追記専用アーカイブ。規制は解除されるとポータルの
+                                   一覧から消えて後から取得できないため、初出/最終確認日時・
+                                   規制内容の変化履歴つきで残し続ける
 - target.parquet       : 地震前後を含む対象期間の交通量データ（アーカイブから毎回再生成するビュー）
 - baseline.parquet     : 平常時（2週間前の同曜日ペア）の交通量データ（同上）
 - observations.parquet : 5分間値の実績に、1時間値ベース（同曜日8週分・祝日除く）の平常時を
@@ -45,7 +49,10 @@ from modules.earthquake_data import get_quake_info, get_significant_events
 from modules.anomaly import (
     build_observation_table, compute_baseline_stats, scale_baseline_stats,
 )
-from modules.road_regulations import fetch_regulations, build_regulation_paths
+from modules.road_regulations import (
+    fetch_regulations, build_regulation_paths, merge_regulations_archive,
+    regulation_key,
+)
 from modules.holidays import fetch_holidays
 
 ROAD_TYPE = "3"
@@ -58,6 +65,7 @@ MIN_AFTERSHOCK_INTENSITY = 5  # 震度5弱以上（INTENSITY_ORDERの数値尺�
 DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
 ARCHIVE_PATH = os.path.join(DATA_DIR, "archive", "traffic_raw.parquet")
 HOURLY_ARCHIVE_PATH = os.path.join(DATA_DIR, "archive", "traffic_hourly.parquet")
+REGULATIONS_ARCHIVE_PATH = os.path.join(DATA_DIR, "archive", "regulations_archive.json")
 FETCH_STEP = timedelta(minutes=5)
 HOURLY_FETCH_STEP = timedelta(hours=1)
 
@@ -298,18 +306,53 @@ def main():
     with open(os.path.join(DATA_DIR, "quake_info.json"), "w", encoding="utf-8") as f:
         json.dump(quake_info, f, ensure_ascii=False, indent=2)
 
+    # 規制情報は解除されるとポータルの一覧から消え、後から取得できない。
+    # スナップ済み経路を再利用しつつ（OSRMへの再問い合わせを避ける）、
+    # 取得したスナップショットは必ず追記専用アーカイブに残す。
+    reg_archive = {}
+    if os.path.exists(REGULATIONS_ARCHIVE_PATH):
+        with open(REGULATIONS_ARCHIVE_PATH, encoding="utf-8") as f:
+            reg_archive = json.load(f)
+    known_paths = {
+        key: rec.get("path")
+        for key, rec in (reg_archive.get("items") or {}).items()
+        if rec.get("path")
+    }
+
+    regulations = None
     try:
         reg_items = fetch_regulations()
-        regulations = build_regulation_paths(reg_items)
+        regulations = build_regulation_paths(reg_items, known_paths=known_paths)
     except Exception as e:  # noqa: BLE001 - 規制情報の取得失敗でパイプライン全体は止めない
         print(f"[regulations] fetch failed, skipping: {e}", flush=True)
-        regulations = []
-    with open(os.path.join(DATA_DIR, "regulations.json"), "w", encoding="utf-8") as f:
-        json.dump(
-            {"generated_at": now.isoformat(), "items": regulations},
-            f, ensure_ascii=False, indent=2,
+
+    if regulations is None:
+        # 取得できなかった回は「一覧から消えた」と誤判定しないよう、
+        # アーカイブには一切手を触れず、前回のスナップショットも残す。
+        print("[regulations] archive left untouched for this run", flush=True)
+    else:
+        reg_archive = merge_regulations_archive(
+            reg_archive, regulations, now.isoformat()
         )
-    print(f"[regulations] saved {len(regulations)} entries", flush=True)
+        os.makedirs(os.path.dirname(REGULATIONS_ARCHIVE_PATH), exist_ok=True)
+        with open(REGULATIONS_ARCHIVE_PATH, "w", encoding="utf-8") as f:
+            json.dump(reg_archive, f, ensure_ascii=False, indent=2)
+
+        with open(os.path.join(DATA_DIR, "regulations.json"), "w", encoding="utf-8") as f:
+            json.dump(
+                {"generated_at": now.isoformat(), "items": regulations},
+                f, ensure_ascii=False, indent=2,
+            )
+        archived = reg_archive.get("items") or {}
+        n_gone = sum(1 for r in archived.values() if not r.get("still_listed"))
+        reused = sum(1 for r in regulations if regulation_key(r) in known_paths)
+        print(
+            f"[regulations] snapshot {len(regulations)} entries "
+            f"(paths reused from archive: {reused}); "
+            f"archive now holds {len(archived)} "
+            f"({n_gone} no longer listed on the portal)",
+            flush=True,
+        )
 
     # 異常検知の正式な定義は1時間値ベース。5分間値テーブルにも
     # build_observation_table 由来の is_anomaly 列が入るが、そちらは
