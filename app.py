@@ -281,12 +281,34 @@ def _nearest_point_id(lat, lon, point_summary: pd.DataFrame, tol_deg: float = 0.
     return point_summary.loc[idx, "point_id"]
 
 
+def describe_baseline(baseline_windows) -> str:
+    """
+    「平常時」が具体的にどの期間を指すのかを説明する文を作る。
+    期間は fetch_and_prepare.py が実際に使った値を quake_info.json 経由で受け取るため、
+    説明文と計算内容がずれない。
+    """
+    weekdays = ["月", "火", "水", "木", "金", "土", "日"]
+    days = []
+    for w in baseline_windows or []:
+        try:
+            d = datetime.fromisoformat(w["start"])
+        except (ValueError, KeyError, TypeError):
+            continue
+        days.append(f"{d.month}/{d.day}（{weekdays[d.weekday()]}）")
+    if not days:
+        return "**平常時**＝地震発生前の平日同時刻の交通量（時刻帯ごとの平均）。"
+    return (
+        f"**平常時**＝地震発生前の同じ曜日（{ '・'.join(days) }）の、同じ時刻の交通量。"
+        "観測点ごと・時刻（時）ごとに平均と標準偏差を求め、今回の実績と比べています。"
+    )
+
+
 def render_timeseries(
     observations: pd.DataFrame, selected_points, quake_at,
-    other_event_times=(), point_labels: dict = None,
+    other_event_times=(), point_labels: dict = None, baseline_windows=None,
 ) -> None:
     if not selected_points:
-        st.info("上のセレクタか、地図上のマーカーをクリックして観測点を選ぶと、ここに時系列が表示されます（最大2地点まで比較可）。")
+        st.info("上のプルダウンから選ぶか、地図上の丸いマーカーをクリックして観測点を選ぶと、ここに時系列が表示されます（最大2地点まで比較可）。")
         return
 
     point_labels = point_labels or {}
@@ -323,7 +345,7 @@ def render_timeseries(
                 mode="lines+markers",
                 line=dict(color=color, width=1.2),
                 marker=dict(size=3),
-                name=f"{mark} 実測",
+                name=f"{mark} 災害後（実績）",
             ))
         for t in other_event_times:
             fig.add_vline(x=t, line_dash="dot", line_color="lightgray", line_width=1, opacity=0.7)
@@ -347,11 +369,14 @@ def render_timeseries(
         st.markdown(f"**{label}交通量（5分間値）**")
         st.plotly_chart(fig, use_container_width=True)
 
+    st.markdown(describe_baseline(baseline_windows))
     st.caption(
+        "実線「災害後（実績）」＝今回の実測値（比較のため地震前日からの推移も含めて描いています）。"
+        "点線「平常時」＝上記の平常時平均。"
+        "灰色の帯「平常時±σ」（1地点選択時のみ）＝平常時の平均±標準偏差で、"
+        "この帯から外れているほど平常時と違う動きをしていることを示します。"
         "黒い点線が本震の発生時刻（16:27）、薄いグレーの細い点線がその他の主要な地震"
         f"（震度5弱以上、{len(other_event_times)}件）の発生時刻。"
-        "灰色の帯（1地点選択時のみ、凡例では「平常時±σ」）が平常時の平均±標準偏差、"
-        "点線が平常時平均、実線が実測値。"
     )
 
 
@@ -466,7 +491,8 @@ def main():
             col_select, col_clear = st.columns([5, 1])
             with col_select:
                 picked = st.multiselect(
-                    f"観測点を選択（最大{MAX_SELECTED_POINTS}地点。こちらが確実・高速です）",
+                    f"観測点の選び方：このプルダウンから選ぶか、地図上の丸いマーカーをクリック"
+                    f"（最大{MAX_SELECTED_POINTS}地点まで並べて比較できます）",
                     options=list(point_labels.keys()),
                     default=[p for p in selected_points if p in point_labels],
                     max_selections=MAX_SELECTED_POINTS,
@@ -544,10 +570,11 @@ def main():
                         st.rerun()
 
             with col_ts:
-                st.subheader("選択観測点の時系列（平常時帯 vs 実測）")
+                st.subheader("選択観測点の時系列（平常時 vs 災害後の実績）")
                 render_timeseries(
                     observations, selected_points, quake_at,
                     other_event_times, point_labels,
+                    quake_info.get("baseline_windows"),
                 )
 
     # ------------------------------------------------------------------

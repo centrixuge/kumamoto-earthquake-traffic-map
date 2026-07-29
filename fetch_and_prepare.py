@@ -186,6 +186,11 @@ def main():
         "target_start": TARGET_START.isoformat(),
         "target_end": target_end.isoformat(),
         "target_end_cap": target_end_cap.isoformat(),
+        # ダッシュボード側で「平常時」の定義を正確に説明できるように、
+        # 実際に使ったベースライン期間もそのまま書き出しておく。
+        "baseline_windows": [
+            {"start": s.isoformat(), "end": e.isoformat()} for s, e in BASELINE_WINDOWS
+        ],
     }
     with open(os.path.join(DATA_DIR, "quake_info.json"), "w", encoding="utf-8") as f:
         json.dump(quake_info, f, ensure_ascii=False, indent=2)
