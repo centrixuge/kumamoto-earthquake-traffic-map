@@ -1161,15 +1161,36 @@ def main():
                     if not _regulation_is_post_quake(r, quake_at)
                     and not _regulation_is_ended(r, _now_jst())
                 )
-                # 地震後が全て欠測の観測点があるときだけ、その凡例を出す
+                # 観測点の凡例。異常度が計算できたものと、地震後が欠測で
+                # 計算できなかったものの両方を書く（片方だけだと、寒色の丸が
+                # 何を表しているのか凡例から分からなくなる）。
+                n_points = len(point_summary)
                 n_no_data = int(point_summary["max_abs_z"].isna().sum())
-                no_data_legend = (
+                point_legend = (
                     '<div style="width:100%; margin-top:2px;">'
-                    f'<b>観測点（{n_no_data}点は地震後のデータなし）</b></div>'
-                    '<div><span style="display:inline-block;width:13px;height:13px;border-radius:50%;'
-                    'background:#f0f0f0;border:2px dashed #777;vertical-align:middle;"></span>'
-                    ' 灰色・破線は欠測で異常度が計算できない観測点</div>'
-                ) if n_no_data else ""
+                    f'<b>観測点（{n_points}点）</b></div>'
+                    '<div><span style="display:inline-block;width:34px;height:12px;border-radius:6px;'
+                    'background:linear-gradient(to right,#deebf7,#08306b);'
+                    'border:1px solid #aaa;vertical-align:middle;"></span>'
+                    f' 濃く大きいほど異常度（|zスコア|）が大きい（{n_points - n_no_data}点）</div>'
+                )
+                if n_no_data:
+                    point_legend += (
+                        '<div><span style="display:inline-block;width:13px;height:13px;border-radius:50%;'
+                        'background:#f0f0f0;border:2px dashed #777;vertical-align:middle;"></span>'
+                        f' 灰色・破線は地震後が欠測で異常度を計算できない（{n_no_data}点）</div>'
+                    )
+                # 直轄国道の規制が掛かる観測点には▲を重ねているので、それも書く
+                n_mlit_marks = sum(
+                    1 for _, r in point_summary.iterrows()
+                    if mlit_regulations_for_point(mlit, r.get("point_code"))
+                )
+                if n_mlit_marks:
+                    point_legend += (
+                        '<div><span style="display:inline-block;color:#b00000;font-weight:900;'
+                        'vertical-align:middle;">▲</span>'
+                        f' 地図に線を描けない規制（直轄国道）が掛かる観測点（{n_mlit_marks}点）</div>'
+                    )
                 st.markdown(
                     f"""
                     <div style="display:flex; flex-wrap:wrap; gap:6px 14px; align-items:center; font-size:0.85rem; margin:0 0 6px 0;">
@@ -1183,7 +1204,7 @@ def main():
                             今回の地震とは無関係</div>
                         <div><span style="display:inline-block;width:22px;height:0;border-top:3px dashed #95a5a6;vertical-align:middle;"></span>
                             破線はいずれも解除済み</div>
-                        {no_data_legend}
+                        {point_legend}
                     </div>
                     """,
                     unsafe_allow_html=True,
