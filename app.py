@@ -794,11 +794,21 @@ def render_mlit_notice(mlit: dict, point_summary: pd.DataFrame, point_labels: di
                 f"**{item['route_name']}（{item['section']}"
                 f"{'・約' + str(item['length_km']) + 'km' if item.get('length_km') else ''}）**  \n"
                 f"{item['content']}｜{item['start_timestamp']} 〜 "
-                f"{item['end_timestamp'] or '(道第3報の時点で継続)'}｜{item.get('reason', '')}  \n"
-                + (f"関係する観測点: {', '.join(affected)}  \n" if affected else "")
+                f"{item['end_timestamp'] or '(継続中)'}｜{item.get('reason', '')}  \n"
+                + (
+                    f"この規制が掛かる観測点: {', '.join(affected)}  \n" if affected
+                    else "観測点との対応づけなし（下記の根拠を参照）  \n"
+                )
                 + "出典: "
                 + " / ".join(f"[{r['label']}]({r['url']})" for r in item.get("reports", []))
             )
+            # 観測点と規制の対応づけは推測で行わない。根拠（または裏付けが取れな
+            # かったこと）をそのまま出して、誤った因果の読み取りを防ぐ。
+            if item.get("match_basis"):
+                st.caption(f"観測点との対応づけ: {item['match_basis']}")
+            st.markdown("---")
+        if mlit.get("coverage_note"):
+            st.caption(mlit["coverage_note"])
         if mlit.get("note"):
             st.caption(mlit["note"])
 
