@@ -325,7 +325,7 @@ def main():
     st.caption(
         "[JARTIC交通量オープンデータ](https://www.jartic-open-traffic.org/)（常設トラカン5分値）"
         "と気象庁の地震情報を重ね合わせた簡易異常検知。"
-        "震度分布そのものではなく震源からの距離を揺れの強さの代理指標として用いている点に注意。"
+        "熊本県の道路通行規制情報（熊本県防災ポータル）も合わせて表示しています。"
     )
 
     data_missing = not os.path.exists(os.path.join(DATA_DIR, "observations.parquet"))
@@ -406,14 +406,25 @@ def main():
                 )
                 st.caption(
                     "通行規制データ: [熊本県防災ポータル](https://portal.bousai.pref.kumamoto.jp/?p=traffic)"
-                    "（[熊本市防災情報ポータル](https://city-kumamoto.my.salesforce-sites.com/)からもリンクあり）"
+                    "（[熊本市防災情報ポータル](https://city-kumamoto.my.salesforce-sites.com/)からもリンクあり）。"
+                    "始点・終点座標をOSRMで道路網にスナップして表示しています。"
+                )
+                st.markdown(
+                    """
+                    <div style="display:flex; flex-wrap:wrap; gap:14px; align-items:center; font-size:0.85rem; margin:4px 0;">
+                        <div><span style="display:inline-block;width:22px;height:4px;background:#e60000;vertical-align:middle;"></span>
+                            <b>×</b> 全面/車両通行止め（現行）</div>
+                        <div><span style="display:inline-block;width:22px;height:4px;background:#e67e22;vertical-align:middle;"></span>
+                            片側交互通行止め（現行）</div>
+                        <div><span style="display:inline-block;width:22px;height:0;border-top:3px dashed #95a5a6;vertical-align:middle;"></span>
+                            発災後に開始・終了済みの規制</div>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
                 )
                 st.caption(
                     "観測点は色が濃いほど地震後の交通量変化（|zスコア|）が大きいことを示す（青系のグラデーション）。"
                     "青いマーカーは震源。クリックした観測点は赤/緑の枠で強調表示されます（最大2地点）。"
-                    "通行規制（OSRMで道路網にスナップ）: "
-                    "赤＋×＝全面/車両通行止め、オレンジ＝片側交互通行止め、"
-                    "グレーの破線＝発災後に開始・終了済みの規制。"
                 )
 
             clicked = map_state.get("last_object_clicked") if map_state else None
