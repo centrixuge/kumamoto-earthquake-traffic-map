@@ -375,6 +375,34 @@ def main():
         f"（本震から復旧期の終端、または現在時刻のいずれか早い方まで）。"
         f"データ生成時刻: {quake_info.get('generated_at', '不明')}"
     )
+
+    MAXI_DISPLAY = {
+        "1": "1", "2": "2", "3": "3", "4": "4",
+        "5-": "5弱", "5+": "5強", "6-": "6弱", "6+": "6強", "7": "7",
+    }
+    st.markdown(f"##### 最大震度{min_intensity_label}以上を観測した地震の発生状況")
+    events_rows = []
+    for e in quake_info.get("events", []):
+        dt = datetime.fromisoformat(e["occurred_at"])
+        events_rows.append({
+            "発生時刻": dt.strftime("%Y年%m月%d日%H時%M分"),
+            "震央地名": e["epicenter_name"],
+            "マグニチュード": e["magnitude"],
+            "最大震度": MAXI_DISPLAY.get(e["max_intensity"], e["max_intensity"] or "-"),
+            "震度": f"https://www.jma.go.jp/bosai/map.html#&contents=estimated_intensity_map&id={dt.strftime('%Y%m%d%H%M')}",
+        })
+    st.dataframe(
+        pd.DataFrame(events_rows),
+        hide_index=True,
+        use_container_width=True,
+        column_config={
+            "震度": st.column_config.LinkColumn("震度", display_text="推計震度分布図"),
+        },
+    )
+    st.caption(
+        "出典: [気象庁](https://www.jma.go.jp/jma/menu/20260728_kumamoto_jishin.html)。"
+        "推計震度分布図は地震発生直後に発表されたもの（発表がない地震ではリンク先に情報がない場合があります）。"
+    )
     st.divider()
 
     tab_overview, tab_list = st.tabs(
