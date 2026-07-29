@@ -87,6 +87,74 @@ def load_regulations() -> list:
 
 
 @st.cache_data(ttl=300)
+def load_traffic_archive(filename: str) -> pd.DataFrame:
+    """交通量の恒久アーカイブ（5分値／1時間値）をそのまま読む。"""
+    path = os.path.join(DATA_DIR, "archive", filename)
+    if not os.path.exists(path):
+        return pd.DataFrame()
+    df = pd.read_parquet(path)
+    df["datetime"] = pd.to_datetime(df["datetime"])
+    return df.sort_values(["datetime", "lon", "lat"]).reset_index(drop=True)
+
+
+@st.cache_data(ttl=300)
+def load_regulations_archive() -> tuple:
+    """
+    通行規制の恒久アーカイブを、CSVにしやすい2つの表に開く。
+      - 規制一覧: 1件1行（経路の座標列は列数が膨大になるので含めない）
+      - 状態変化履歴: 規制内容・終了日時などが変わった時点ごとに1行
+    """
+    path = os.path.join(DATA_DIR, "archive", "regulations_archive.json")
+    if not os.path.exists(path):
+        return pd.DataFrame(), pd.DataFrame()
+    with open(path, encoding="utf-8") as f:
+        items = (json.load(f).get("items") or {})
+
+    rows, hist_rows = [], []
+    for key, rec in items.items():
+        rows.append({
+            "regulation_key": key,
+            "route_name": rec.get("route_name"),
+            "region": rec.get("region"),
+            "content": rec.get("content"),
+            "reason_type": rec.get("reason_type"),
+            "reason_detail": rec.get("reason_detail"),
+            "start_timestamp": rec.get("start_timestamp"),
+            "end_timestamp": rec.get("end_timestamp"),
+            "length_km": rec.get("length_km"),
+            "start_lat": rec.get("start_lat"), "start_lon": rec.get("start_lon"),
+            "end_lat": rec.get("end_lat"), "end_lon": rec.get("end_lon"),
+            "first_seen": rec.get("first_seen"),
+            "last_seen": rec.get("last_seen"),
+            "still_listed": rec.get("still_listed"),
+            "path_points": len(rec.get("path") or []),
+        })
+        for h in rec.get("history") or []:
+            hist_rows.append({
+                "regulation_key": key,
+                "route_name": rec.get("route_name"),
+                "observed_at": h.get("observed_at"),
+                "content": h.get("content"),
+                "end_timestamp": h.get("end_timestamp"),
+                "reason_type": h.get("reason_type"),
+                "reason_detail": h.get("reason_detail"),
+                "length_km": h.get("length_km"),
+            })
+
+    regs = pd.DataFrame(rows).sort_values("start_timestamp", ascending=False)
+    hist = pd.DataFrame(hist_rows)
+    if not hist.empty:
+        hist = hist.sort_values(["observed_at", "route_name"])
+    return regs.reset_index(drop=True), hist.reset_index(drop=True)
+
+
+@st.cache_data(ttl=300)
+def to_csv_bytes(df: pd.DataFrame) -> bytes:
+    """Excelでそのまま開けるようBOM付きUTF-8にする。"""
+    return df.to_csv(index=False).encode("utf-8-sig")
+
+
+@st.cache_data(ttl=300)
 def build_point_summary(post: pd.DataFrame) -> pd.DataFrame:
     if post.empty:
         return pd.DataFrame(columns=[
@@ -542,8 +610,8 @@ def main():
     )
     st.divider()
 
-    tab_overview, tab_list = st.tabs(
-        ["地図・時系列", "異常検知一覧"]
+    tab_overview, tab_list, tab_dl = st.tabs(
+        ["地図・時系列", "異常検知一覧", "データダウンロード"]
     )
 
     # ------------------------------------------------------------------
@@ -589,7 +657,7 @@ def main():
             col_map, col_ts = st.columns([2, 3])
 
             with col_map:
-                st.subheader("観測点別 異常度")
+                st.subheader("観測点別の異常度 × 通行規制")
                 n_post = sum(
                     1 for r in regulations
                     if _regulation_is_post_quake(r, quake_at)
@@ -701,6 +769,80 @@ def main():
             anomalies[display_cols].to_csv(index=False).encode("utf-8-sig"),
             file_name="kumamoto_traffic_anomalies.csv",
             mime="text/csv",
+        )
+
+    # ------------------------------------------------------------------
+    # データダウンロードタブ
+    # ------------------------------------------------------------------
+    with tab_dl:
+        st.subheader("アーカイブデータのダウンロード")
+        st.caption(
+            "JARTICの5分値は過去1ヶ月・1時間値は過去3ヶ月しか遡れず、通行規制は解除されると"
+            "ポータルの一覧から消えてしまいます。このダッシュボードは取得した分を追記専用で"
+            "蓄積しているため、ここから取得済みの全期間をCSVで取り出せます。"
+        )
+
+        downloads = [
+            (
+                "5分間交通量（生データ・アーカイブ全期間）",
+                load_traffic_archive("traffic_raw.parquet"),
+                "kumamoto_traffic_5min_archive.csv",
+                "観測点（lon/lat）×日時ごとの上り・下り交通量。車種別の内訳列も含みます。",
+            ),
+            (
+                "1時間交通量（生データ・アーカイブ全期間）",
+                load_traffic_archive("traffic_hourly.parquet"),
+                "kumamoto_traffic_hourly_archive.csv",
+                "同じ観測点の1時間値。平常時（同曜日8週分）の母集団もこのデータから作っています。",
+            ),
+        ]
+        regs_df, hist_df = load_regulations_archive()
+        downloads += [
+            (
+                "通行規制 一覧（アーカイブ全期間）",
+                regs_df,
+                "kumamoto_road_regulations_archive.csv",
+                "1件1行。初回・最終確認日時と、まだポータルに載っているか（still_listed）を含みます。"
+                "経路の座標列は列数が膨大になるためCSVには含めていません（`data/archive/regulations_archive.json` にあります）。",
+            ),
+            (
+                "通行規制 状態変化の履歴",
+                hist_df,
+                "kumamoto_road_regulations_history.csv",
+                "規制内容や終了日時が変わった時点ごとに1行。"
+                "全面通行止め → 片側交互通行止め → 解除 といった推移を追えます。",
+            ),
+            (
+                "異常検知の入力データ（1時間値＋平常時＋zスコア）",
+                observations,
+                "kumamoto_observations_hourly.csv",
+                "地図の色分けと異常検知一覧の根拠になっている表そのものです。",
+            ),
+        ]
+
+        for title, df, fname, desc in downloads:
+            st.markdown(f"**{title}**")
+            if df is None or df.empty:
+                st.caption(f"{desc}（まだデータがありません）")
+                continue
+            csv_bytes = to_csv_bytes(df)
+            period = ""
+            if "datetime" in df.columns:
+                period = f"｜期間: {df['datetime'].min()} 〜 {df['datetime'].max()}"
+            st.caption(f"{desc}｜{len(df):,} 行 / {len(csv_bytes)/1024:,.0f} KB{period}")
+            st.download_button(
+                f"CSVをダウンロード（{fname}）",
+                csv_bytes, file_name=fname, mime="text/csv", key=f"dl_{fname}",
+            )
+            st.divider()
+
+        st.caption(
+            "出典を明記してご利用ください: 交通量は"
+            "[JARTIC交通量オープンデータ](https://www.jartic-open-traffic.org/)、"
+            "通行規制は「防災情報くまもと」の"
+            "[通行規制情報](https://portal.bousai.pref.kumamoto.jp/?p=traffic)。"
+            "通行規制の経路は始点・終点座標を[OSRM](https://project-osrm.org/)で"
+            "道路網にスナップした推定値であり、元データそのものではありません。"
         )
 
 
