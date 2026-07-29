@@ -90,6 +90,52 @@ def load_regulations() -> list:
 
 
 @st.cache_data(ttl=300)
+def load_mlit_regulations() -> dict:
+    """
+    直轄国道（国が管理する国道）の規制。熊本県「防災情報くまもと」の
+    通行規制情報は県・市町村が管理する道路が対象で、国道57号のような
+    直轄国道は載らない。そのため熊本河川国道事務所の公表PDFから
+    手作業で転記したものを別ファイルで持つ。
+    """
+    path = os.path.join(DATA_DIR, "mlit_regulations.json")
+    if not os.path.exists(path):
+        return {}
+    with open(path, encoding="utf-8") as f:
+        return json.load(f)
+
+
+@st.cache_data(ttl=300)
+def regulation_archive_start() -> str:
+    """
+    通行規制のアーカイブに記録が残っている最も古い時点（first_seen の最小値）。
+
+    これより前に解除された規制は、県管理道路であってもアーカイブに存在しない。
+    本震（7/28 16:27）より後に収集を始めたため、発災直後だけ規制されて
+    すぐ解除された区間は取りこぼしている。その境目を画面に出すために使う。
+    """
+    path = os.path.join(DATA_DIR, "archive", "regulations_archive.json")
+    if not os.path.exists(path):
+        return ""
+    with open(path, encoding="utf-8") as f:
+        items = json.load(f).get("items", {})
+    seen = [v.get("first_seen") for v in items.values() if v.get("first_seen")]
+    if not seen:
+        return ""
+    return pd.Timestamp(min(seen)).strftime("%Y-%m-%d %H:%M")
+
+
+def mlit_regulations_for_point(mlit: dict, point_code) -> list:
+    """指定した観測点コードに掛かっている直轄国道の規制を返す。"""
+    if not mlit or point_code is None or pd.isna(point_code):
+        return []
+    code = str(point_code)
+    return [
+        item for item in mlit.get("items", [])
+        if code in (item.get("affected_point_codes") or [])
+    ]
+
+
+@st.cache_data(ttl=300)
 def load_station_master_cached() -> dict:
     """常時観測点コードと緯度経度の対応（fetch_and_prepare.py が生成）。"""
     return load_station_master(os.path.join(DATA_DIR, "stations.json"))
@@ -566,6 +612,8 @@ def build_base_map(
     point_summary: pd.DataFrame,
     mainshock: dict,
     regulations: list = None,
+    mlit: dict = None,
+    point_labels: dict = None,
 ) -> folium.Map:
     """
     選択状態に依存しない「ベース地図」（背景タイル・通行規制・震源）を作る。
@@ -659,6 +707,40 @@ def build_base_map(
                     ).add_to(target)
             pre_layer.add_to(fmap)
             post_layer.add_to(fmap)
+
+        # 直轄国道の規制。区間の座標が公表されていないので線は描けない。
+        # 該当する観測点の位置に印を置き、その地点に通行止めが掛かっていたことだけを示す。
+        # 区間そのものを表す図形ではないと分かるようレイヤ名にも書いておく。
+        mlit_items = (mlit or {}).get("items", [])
+        mlit_marked = 0
+        if mlit_items and not point_summary.empty:
+            mlit_layer = folium.FeatureGroup(name="直轄国道の規制（区間の線なし）")
+            for _, row in point_summary.iterrows():
+                hits = mlit_regulations_for_point(mlit, row.get("point_code"))
+                if not hits:
+                    continue
+                label = (point_labels or {}).get(row["point_id"], row["point_id"])
+                lines = "<br>".join(
+                    f"{h['route_name']}（{h['section']}）{h['content']}<br>"
+                    f"{h['start_timestamp']} 〜 {h['end_timestamp'] or '(継続中)'}"
+                    for h in hits
+                )
+                folium.Marker(
+                    location=[row["point_lat"], row["point_lon"]],
+                    icon=folium.DivIcon(html=(
+                        '<div style="font-size:18px;font-weight:900;color:#b00000;'
+                        'line-height:1;text-shadow:0 0 3px white,0 0 3px white;">▲</div>'
+                    )),
+                    tooltip=(
+                        f"<b>{label} に掛かっていた直轄国道の規制</b><br>{lines}<br>"
+                        "出典: 熊本河川国道事務所（県ポータルのデータには含まれません）"
+                    ),
+                ).add_to(mlit_layer)
+                mlit_marked += 1
+            if mlit_marked:
+                mlit_layer.add_to(fmap)
+
+        if regulations or mlit_marked:
             folium.LayerControl(collapsed=False).add_to(fmap)
 
         folium.Marker(
@@ -672,6 +754,53 @@ def build_base_map(
         ).add_to(fmap)
 
         return fmap
+
+
+def render_mlit_notice(mlit: dict, point_summary: pd.DataFrame, point_labels: dict) -> None:
+    """
+    地図に線として描けない規制（直轄国道）があることを、理由と出典つきで示す。
+
+    熊本県「防災情報くまもと」の通行規制情報は県・市町村が管理する道路が対象で、
+    国が管理する直轄国道（国道57号など）は載らない。そのため観測点の交通量が
+    0になっていても、その理由が地図から読み取れない状態になっていた。
+    """
+    items = (mlit or {}).get("items", [])
+    if not items:
+        return
+    src_name = mlit.get("source_name", "国土交通省")
+    src_url = mlit.get("source_url", "")
+    with st.expander(
+        f"⚠ 地図に線として描けない規制があります（直轄国道・{len(items)}件）", expanded=False
+    ):
+        st.markdown(
+            "熊本県「防災情報くまもと」の通行規制情報は**県・市町村が管理する道路**が対象で、"
+            "**国が管理する直轄国道（国道57号など）の規制は含まれません**。"
+            "そのため観測点の交通量が0になっていても、地図上にその原因となる規制が出てきません。"
+            f"下記は [{src_name}]({src_url}) が公表しているPDFから転記したものです。"
+            "区間の座標は公表されていないため線としては描けず、"
+            "該当する観測点の位置に **▲** の印を置いています（区間そのものを表す図形ではありません）。"
+        )
+        code_to_label = {
+            str(r["point_code"]): point_labels.get(r["point_id"], r["point_id"])
+            for _, r in point_summary.iterrows()
+            if pd.notna(r.get("point_code"))
+        }
+        for item in items:
+            affected = [
+                code_to_label.get(c, f"観測点 {c}")
+                for c in (item.get("affected_point_codes") or [])
+            ]
+            st.markdown(
+                f"**{item['route_name']}（{item['section']}"
+                f"{'・約' + str(item['length_km']) + 'km' if item.get('length_km') else ''}）**  \n"
+                f"{item['content']}｜{item['start_timestamp']} 〜 "
+                f"{item['end_timestamp'] or '(道第3報の時点で継続)'}｜{item.get('reason', '')}  \n"
+                + (f"関係する観測点: {', '.join(affected)}  \n" if affected else "")
+                + "出典: "
+                + " / ".join(f"[{r['label']}]({r['url']})" for r in item.get("reports", []))
+            )
+        if mlit.get("note"):
+            st.caption(mlit["note"])
 
 
 def build_points_feature_group(
@@ -781,6 +910,7 @@ def render_timeseries(
     observations: pd.DataFrame, selected_points, quake_at,
     other_event_times=(), point_labels: dict = None, baseline_windows=None,
     unit_label: str = "5分間値", extra_note: str = "",
+    mlit_bands=(),
 ) -> None:
     if not selected_points:
         st.info("上のプルダウンから選ぶか、地図上の丸いマーカーをクリックして観測点を選ぶと、ここに時系列が表示されます（最大2地点まで比較可）。")
@@ -825,6 +955,20 @@ def render_timeseries(
                 marker=dict(size=3),
                 name=f"{mark} 実績",
             ))
+        # 直轄国道の通行止め期間。この規制は県ポータルのデータに含まれず地図に
+        # 線として出ないため、交通量が0になっている理由が図から読めなくなる。
+        # 該当観測点を選んだときだけ、期間を帯で示す。
+        for band in mlit_bands:
+            fig.add_vrect(
+                x0=band["start"], x1=band["end"],
+                fillcolor="rgba(230,0,0,0.10)", line_width=0, layer="below",
+            )
+            fig.add_annotation(
+                x=band["start"], y=0.97, yref="paper", xanchor="left", yanchor="top",
+                text=band["label"], showarrow=False, align="left",
+                font=dict(size=9, color="#b00000"),
+                bgcolor="rgba(255,255,255,0.75)",
+            )
         for t in other_event_times:
             fig.add_vline(x=t, line_dash="dot", line_color="lightgray", line_width=1, opacity=0.7)
         fig.add_vline(x=quake_at, line_dash="dot", line_color="black", line_width=2)
@@ -883,6 +1027,7 @@ def main():
     observations = load_observations("observations_hourly.parquet")
     quake_info = load_quake_info()
     regulations = load_regulations()
+    mlit = load_mlit_regulations()
     mainshock = quake_info["mainshock"]
     quake_at = pd.Timestamp(mainshock["occurred_at"]).tz_localize(None)
     other_event_times = [
@@ -1033,15 +1178,18 @@ def main():
                     """,
                     unsafe_allow_html=True,
                 )
-                base_map = build_base_map(point_summary, mainshock, regulations)
+                base_map = build_base_map(
+                    point_summary, mainshock, regulations, mlit, point_labels
+                )
                 points_fg = build_points_feature_group(
                     point_summary, point_labels, selected_points
                 )
                 map_state = st_folium(
                     base_map, height=750, width=550,
                     feature_group_to_add=points_fg,
-                    returned_objects=["last_object_clicked"], key="quake_map_v5",
+                    returned_objects=["last_object_clicked"], key="quake_map_v6",
                 )
+                render_mlit_notice(mlit, point_summary, point_labels)
                 st.caption(
                     "通行規制データ: 「防災情報くまもと」の"
                     "[通行規制情報](https://portal.bousai.pref.kumamoto.jp/?p=traffic)ページ"
@@ -1050,6 +1198,15 @@ def main():
                     "元データには2020年7月豪雨など今回の地震と無関係な長期規制も含まれるため、"
                     "規制の開始日時が本震（16:27）以降かどうかで色分けし、"
                     "地図右上のチェックボックスで種別ごとに表示を切り替えられます。"
+                )
+                st.caption(
+                    f"**この地図に出てこない規制があります。** ①上記データは県・市町村が管理する道路が対象で、"
+                    f"国が管理する直轄国道（国道57号など）の規制は含まれません（"
+                    f"[{mlit.get('source_name', '国土交通省')}]({mlit.get('source_url', '')})"
+                    "から転記したものを上の「地図に線として描けない規制があります」に出しています）。"
+                    "②規制のアーカイブに記録が残っている最も古い時点は "
+                    f"**{regulation_archive_start() or '本震の翌日'}**（本震より後）です。"
+                    "それ以前に解除された規制は、県管理道路であっても残っていません。"
                 )
                 st.caption(
                     "観測点は色が濃いほど地震後の交通量変化（|zスコア|）が大きいことを示す（青系のグラデーション）。"
@@ -1087,12 +1244,30 @@ def main():
                     key="timeseries_view",
                 )
                 cfg = TIMESERIES_VIEWS[view]
+                # 選択中の観測点に掛かっている直轄国道の通行止めを帯で示す
+                mlit_bands = []
+                for pid in selected_points:
+                    row = point_summary[point_summary["point_id"] == pid]
+                    if row.empty:
+                        continue
+                    for item in mlit_regulations_for_point(mlit, row["point_code"].iloc[0]):
+                        start = _parse_reg_time(item.get("start_timestamp"))
+                        end = _parse_reg_time(item.get("end_timestamp")) or observations["datetime"].max()
+                        if start is None:
+                            continue
+                        mlit_bands.append({
+                            "start": start, "end": end,
+                            "label": (
+                                f"{item['route_name']}（{item['section']}）{item['content']}"
+                            ),
+                        })
                 render_timeseries(
                     load_observations(cfg["file"]),
                     selected_points, quake_at, other_event_times, point_labels,
                     quake_info.get("hourly_baseline_windows"),
                     unit_label=cfg["unit_label"],
                     extra_note=cfg["note"],
+                    mlit_bands=mlit_bands,
                 )
 
     # ------------------------------------------------------------------

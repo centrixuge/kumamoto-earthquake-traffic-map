@@ -1,0 +1,52 @@
+{
+  "source_name": "国土交通省 九州地方整備局 熊本河川国道事務所",
+  "source_url": "https://www.qsr.mlit.go.jp/kumamoto/",
+  "note": "直轄国道（国が管理する国道）の規制は、熊本県「防災情報くまもと」の通行規制情報には含まれません。そのため熊本河川国道事務所が「事務所からのお知らせ」で公表するPDFから手作業で転記しています。自動取得ではないため、ここに載っているのは転記済みのものだけです。",
+  "transcribed_at": "2026-07-29",
+  "items": [
+    {
+      "route_name": "国道57号 北側復旧道路",
+      "section": "車帰IC〜大津IC",
+      "length_km": 10,
+      "content": "全面通行止め",
+      "reason": "地震により車両通行の安全が確保できない恐れ",
+      "start_timestamp": "2026-07-28 16:27:00",
+      "end_timestamp": "2026-07-29 02:00:00",
+      "affected_point_codes": ["9310127"],
+      "reports": [
+        {
+          "label": "道第1報（2026-07-28 17:30時点）規制開始",
+          "url": "https://www.qsr.mlit.go.jp/kumamoto/newstopics_files/20260728/260728_road2-1.pdf"
+        },
+        {
+          "label": "道第2報（2026-07-28 18:30時点）迂回路決定",
+          "url": "https://www.qsr.mlit.go.jp/kumamoto/newstopics_files/20260728/260728_road2-2.pdf"
+        },
+        {
+          "label": "道第3報（2026-07-29 1:45時点）規制解除",
+          "url": "https://www.qsr.mlit.go.jp/kumamoto/newstopics_files/20260729/260729_road2-3.pdf"
+        }
+      ]
+    },
+    {
+      "route_name": "国道57号 北側復旧道路",
+      "section": "阿蘇西IC〜車帰IC",
+      "length_km": null,
+      "content": "全面通行止め（道第3報の時点で継続）",
+      "reason": "地震により車両通行の安全が確保できない恐れ",
+      "start_timestamp": "2026-07-28 16:27:00",
+      "end_timestamp": null,
+      "affected_point_codes": [],
+      "reports": [
+        {
+          "label": "道第1報（2026-07-28 17:30時点）規制開始",
+          "url": "https://www.qsr.mlit.go.jp/kumamoto/newstopics_files/20260728/260728_road2-1.pdf"
+        },
+        {
+          "label": "道第3報（2026-07-29 1:45時点）車帰IC〜大津ICのみ解除",
+          "url": "https://www.qsr.mlit.go.jp/kumamoto/newstopics_files/20260729/260729_road2-3.pdf"
+        }
+      ]
+    }
+  ]
+}
