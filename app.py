@@ -16,7 +16,6 @@ from datetime import datetime, timedelta, timezone
 import branca.element as branca_element
 import folium
 import pandas as pd
-import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
 from streamlit_folium import st_folium
@@ -370,8 +369,8 @@ def main():
     )
     st.divider()
 
-    tab_overview, tab_corr, tab_list = st.tabs(
-        ["地図・時系列", "震源距離との相関", "異常検知一覧"]
+    tab_overview, tab_list = st.tabs(
+        ["地図・時系列", "異常検知一覧"]
     )
 
     # ------------------------------------------------------------------
@@ -437,35 +436,6 @@ def main():
             with col_ts:
                 st.subheader("選択観測点の時系列（平常時帯 vs 実測）")
                 render_timeseries(observations, selected_points, quake_at)
-
-    # ------------------------------------------------------------------
-    # 相関タブ
-    # ------------------------------------------------------------------
-    with tab_corr:
-        st.subheader("震源からの距離 × 異常度")
-        if post.empty:
-            st.info("地震発生後のデータがまだありません。")
-        else:
-            corr_df = post.copy()
-            corr_df["abs_z"] = corr_df[["z_up", "z_down"]].abs().max(axis=1)
-            fig = px.scatter(
-                corr_df,
-                x="distance_km_from_epicenter",
-                y="abs_z",
-                color="is_anomaly",
-                hover_data=["point_id", "datetime"],
-                labels={
-                    "distance_km_from_epicenter": "震源からの距離 (km)",
-                    "abs_z": "|zスコア|（上り・下りの最大値）",
-                    "is_anomaly": "異常フラグ",
-                },
-                height=500,
-            )
-            st.plotly_chart(fig, use_container_width=True)
-            st.caption(
-                "震度分布データの取得が難しいため、震源からの距離を揺れの強さの簡易的な代理指標として使用。"
-                "震源に近い観測点ほど|zスコア|が大きい傾向があれば、地震による行動変容の空間的な広がりを示唆する。"
-            )
 
     # ------------------------------------------------------------------
     # 異常検知一覧タブ
