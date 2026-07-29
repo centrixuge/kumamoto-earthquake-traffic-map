@@ -4,8 +4,12 @@
 熊本地震（2026-07-28）による交通行動変容分析用のデータ取得・前処理スクリプト。
 
 実行すると以下を `data/` 配下に生成する:
-- archive/traffic_raw.parquet : これまでに取得した生データを丸ごと保持する恒久アーカイブ
+- archive/traffic_raw.parquet    : 5分間値の生データを丸ごと保持する恒久アーカイブ
                                 （JARTIC側の5分値は過去1ヶ月分しか遡れないため、削除・上書きせず追記していく）
+- archive/traffic_hourly.parquet : 1時間値の生データの恒久アーカイブ（1時間値は3ヶ月分遡れる）
+- observations_hourly.parquet    : 1時間値どうしの比較（同曜日8週分を平常時とする）
+- observations_5m_hourly_baseline.parquet
+                                : 5分間値に、1時間値ベース（同曜日8週分）の平常時を1/12して適用したもの
 - target.parquet       : 地震前後を含む対象期間の交通量データ（アーカイブから毎回再生成するビュー）
 - baseline.parquet     : 平常時（2週間前の同曜日ペア）の交通量データ（同上）
 - observations.parquet : 異常検知結果（zスコア・震源距離など）を結合した観測点×時刻のテーブル
@@ -37,31 +41,50 @@ def _now_jst() -> datetime:
 from modules.api_request_func import fetch_traffic_range
 from modules.aggregation import create_traffic_geodf
 from modules.earthquake_data import get_quake_info, get_significant_events
-from modules.anomaly import build_observation_table
+from modules.anomaly import (
+    build_observation_table, compute_baseline_stats, scale_baseline_stats,
+)
 from modules.road_regulations import fetch_regulations, build_regulation_paths
 
 ROAD_TYPE = "3"
 TYPE_NAME = "t_travospublic_measure_5m"
+HOURLY_TYPE_NAME = "t_travospublic_measure_1h"
 BBOX = (130.450, 32.400, 130.900, 32.900)  # 熊本県
 MAINSHOCK_EID = "20260728162718"
 MIN_AFTERSHOCK_INTENSITY = 5  # 震度5弱以上（INTENSITY_ORDERの数値尺度）
 
 DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
 ARCHIVE_PATH = os.path.join(DATA_DIR, "archive", "traffic_raw.parquet")
+HOURLY_ARCHIVE_PATH = os.path.join(DATA_DIR, "archive", "traffic_hourly.parquet")
 FETCH_STEP = timedelta(minutes=5)
+HOURLY_FETCH_STEP = timedelta(hours=1)
 
 TARGET_START = datetime(2026, 7, 27, 3, 0)
 # 復旧期（被災後72時間はもちろん、その後の交通パターンが平常に戻る過程まで）を
 # 動的取得の対象に含めるため、本震発生時刻からの経過期間で取得終了日時を決める。
 RECOVERY_PERIOD = timedelta(days=14)
 
+# 5分間値は過去1ヶ月しか遡れないため、これまでの平常時は直前2回の火曜だけだった。
 BASELINE_WINDOWS = [
     (datetime(2026, 7, 14, 3, 0), datetime(2026, 7, 15, 3, 0)),
     (datetime(2026, 7, 21, 3, 0), datetime(2026, 7, 22, 3, 0)),
 ]
 
+# 1時間値は過去3ヶ月遡れるので、本震と同じ曜日（火）を8週分さかのぼって
+# 平常時の平均・標準偏差の母集団にする。1日の区切りは5分間値側と揃えて03:00起点。
+HOURLY_BASELINE_WEEKS = 8
+HOURLY_BASELINE_WINDOWS = [
+    (
+        datetime(2026, 7, 21, 3, 0) - timedelta(weeks=i),
+        datetime(2026, 7, 22, 3, 0) - timedelta(weeks=i),
+    )
+    for i in range(HOURLY_BASELINE_WEEKS)
+]
 
-def _fetch_period(start_dt: datetime, end_dt: datetime, label: str) -> pd.DataFrame:
+
+def _fetch_period(
+    start_dt: datetime, end_dt: datetime, label: str, type_name: str = TYPE_NAME
+) -> pd.DataFrame:
     start_s = start_dt.strftime("%Y%m%d%H%M")
     end_s = end_dt.strftime("%Y%m%d%H%M")
     print(f"[{label}] fetching {start_s} -> {end_s}", flush=True)
@@ -69,26 +92,27 @@ def _fetch_period(start_dt: datetime, end_dt: datetime, label: str) -> pd.DataFr
         road_type=ROAD_TYPE,
         time_code_start=start_s,
         time_code_end=end_s,
-        type_name=TYPE_NAME,
+        type_name=type_name,
         bbox=BBOX,
     )
     print(f"[{label}] total features: {len(combined['features'])}", flush=True)
+    # 常設トラカンの1時間値は5分間値と同じプロパティ名なので、変換関数を共用できる。
     gdf = create_traffic_geodf(combined)
     return pd.DataFrame(gdf.drop(columns="geometry"))
 
 
-def _load_archive() -> pd.DataFrame:
-    if not os.path.exists(ARCHIVE_PATH):
+def _load_archive(path: str = ARCHIVE_PATH) -> pd.DataFrame:
+    if not os.path.exists(path):
         return pd.DataFrame()
-    df = pd.read_parquet(ARCHIVE_PATH)
+    df = pd.read_parquet(path)
     df["datetime"] = pd.to_datetime(df["datetime"])
     return df
 
 
-def _save_archive(archive: pd.DataFrame) -> pd.DataFrame:
-    os.makedirs(os.path.dirname(ARCHIVE_PATH), exist_ok=True)
+def _save_archive(archive: pd.DataFrame, path: str = ARCHIVE_PATH) -> pd.DataFrame:
+    os.makedirs(os.path.dirname(path), exist_ok=True)
     archive = archive.drop_duplicates(subset=["lon", "lat", "datetime"]).sort_values("datetime")
-    archive.to_parquet(ARCHIVE_PATH, index=False)
+    archive.to_parquet(path, index=False)
     return archive
 
 
@@ -106,26 +130,34 @@ def _slice(archive: pd.DataFrame, start_dt: datetime, end_dt: datetime) -> pd.Da
     return archive.loc[mask].reset_index(drop=True)
 
 
-def _fetch_missing_target(archive: pd.DataFrame, target_end: datetime) -> pd.DataFrame:
+def _fetch_missing_target(
+    archive: pd.DataFrame, target_end: datetime,
+    type_name: str = TYPE_NAME, step: timedelta = FETCH_STEP, label: str = "target",
+) -> pd.DataFrame:
     """アーカイブ済みのtarget範囲より先だけを新規取得する。"""
     existing = _slice(archive, TARGET_START, target_end)
     next_start = TARGET_START
     if not existing.empty:
-        next_start = existing["datetime"].max() + FETCH_STEP
+        next_start = existing["datetime"].max() + step
     if next_start > target_end:
-        print(f"[target] already up to date (archived through {existing['datetime'].max()})", flush=True)
+        print(f"[{label}] already up to date (archived through {existing['datetime'].max()})", flush=True)
         return pd.DataFrame()
-    return _fetch_period(next_start, target_end, "target")
+    return _fetch_period(next_start, target_end, label, type_name)
 
 
-def _fetch_missing_baseline(archive: pd.DataFrame) -> pd.DataFrame:
+def _fetch_missing_baseline(
+    archive: pd.DataFrame, windows=BASELINE_WINDOWS,
+    type_name: str = TYPE_NAME, label: str = "baseline",
+) -> pd.DataFrame:
     """まだアーカイブにない平常時ウィンドウだけを取得する（固定の過去データなので一度取れば十分）。"""
     new_dfs = []
-    for start_dt, end_dt in BASELINE_WINDOWS:
+    for start_dt, end_dt in windows:
         if not _slice(archive, start_dt, end_dt).empty:
-            print(f"[baseline({start_dt.date()})] already archived, skipping", flush=True)
+            print(f"[{label}({start_dt.date()})] already archived, skipping", flush=True)
             continue
-        new_dfs.append(_fetch_period(start_dt, end_dt, f"baseline({start_dt.date()})"))
+        new_dfs.append(
+            _fetch_period(start_dt, end_dt, f"{label}({start_dt.date()})", type_name)
+        )
     if not new_dfs:
         return pd.DataFrame()
     return pd.concat(new_dfs, ignore_index=True)
@@ -156,6 +188,28 @@ def main():
     target_df.to_parquet(os.path.join(DATA_DIR, "target.parquet"))
     baseline_df.to_parquet(os.path.join(DATA_DIR, "baseline.parquet"))
 
+    # --- 1時間値（参考ビュー用＋広いレンジの平常時） --------------------------
+    hourly_archive = _load_archive(HOURLY_ARCHIVE_PATH)
+    new_hourly_target = _fetch_missing_target(
+        hourly_archive, target_end,
+        type_name=HOURLY_TYPE_NAME, step=HOURLY_FETCH_STEP, label="target-1h",
+    )
+    new_hourly_baseline = _fetch_missing_baseline(
+        hourly_archive, windows=HOURLY_BASELINE_WINDOWS,
+        type_name=HOURLY_TYPE_NAME, label="baseline-1h",
+    )
+    hourly_archive = _merge_into_archive(
+        hourly_archive, new_hourly_target, new_hourly_baseline
+    )
+    hourly_archive = _save_archive(hourly_archive, HOURLY_ARCHIVE_PATH)
+
+    hourly_target_df = _slice(hourly_archive, TARGET_START, target_end)
+    hourly_baseline_df = pd.concat(
+        [_slice(hourly_archive, s, e) for s, e in HOURLY_BASELINE_WINDOWS],
+        ignore_index=True,
+    )
+    hourly_baseline_stats = compute_baseline_stats(hourly_baseline_df)
+
     # 「対象期間内の地震」は本震発生時刻から現在（もしくは復旧期の終端）までの
     # 期間で数える。TARGET_STARTは交通量データの取得開始日（本震の前日）であり、
     # 地震の集計期間とは意味が異なるため別に定義する。
@@ -176,6 +230,31 @@ def main():
     )
     observations.to_parquet(os.path.join(DATA_DIR, "observations.parquet"))
 
+    # 5分間値に、1時間値ベース（同曜日8週分）の平常時も併記できるようにする。
+    # 単位を合わせるため1/12にスケールする。
+    obs_wide_baseline = build_observation_table(
+        target_df=target_df,
+        baseline_df=baseline_df,
+        quake_occurred_at=quake_occurred_at,
+        epicenter_lat=mainshock["epicenter_lat"],
+        epicenter_lon=mainshock["epicenter_lon"],
+        baseline_stats=scale_baseline_stats(hourly_baseline_stats, 1.0 / 12.0),
+    )
+    obs_wide_baseline.to_parquet(
+        os.path.join(DATA_DIR, "observations_5m_hourly_baseline.parquet")
+    )
+
+    # 1時間値どうしの比較（統計的にはこちらが素直）。
+    observations_hourly = build_observation_table(
+        target_df=hourly_target_df,
+        baseline_df=hourly_baseline_df,
+        quake_occurred_at=quake_occurred_at,
+        epicenter_lat=mainshock["epicenter_lat"],
+        epicenter_lon=mainshock["epicenter_lon"],
+        baseline_stats=hourly_baseline_stats,
+    )
+    observations_hourly.to_parquet(os.path.join(DATA_DIR, "observations_hourly.parquet"))
+
     quake_info = {
         "mainshock": mainshock,
         "events": aftershocks,
@@ -190,6 +269,10 @@ def main():
         # 実際に使ったベースライン期間もそのまま書き出しておく。
         "baseline_windows": [
             {"start": s.isoformat(), "end": e.isoformat()} for s, e in BASELINE_WINDOWS
+        ],
+        "hourly_baseline_windows": [
+            {"start": s.isoformat(), "end": e.isoformat()}
+            for s, e in sorted(HOURLY_BASELINE_WINDOWS)
         ],
     }
     with open(os.path.join(DATA_DIR, "quake_info.json"), "w", encoding="utf-8") as f:
@@ -211,7 +294,8 @@ def main():
     n_anomaly = int(observations["is_anomaly"].sum())
     n_points = observations["point_id"].nunique()
     print(
-        f"done. archive rows={len(archive)}, observations rows={len(observations)}, "
+        f"done. archive rows={len(archive)} (5m) / {len(hourly_archive)} (1h), "
+        f"observations rows={len(observations)} (5m) / {len(observations_hourly)} (1h), "
         f"points={n_points}, anomalies flagged={n_anomaly}",
         flush=True,
     )

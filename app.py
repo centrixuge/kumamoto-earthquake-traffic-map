@@ -26,6 +26,33 @@ SELECTION_COLORS = ["red", "green"]
 # 時系列図の表示開始時刻（データ保持期間の先頭より後ろにしている）
 TIMESERIES_DISPLAY_START = pd.Timestamp("2026-07-27 12:00")
 
+# 時系列ビューの切り替え。5分間値は過去1ヶ月しか遡れず平常時が2日分しか取れないため、
+# 3ヶ月遡れる1時間値から広いレンジ（同曜日8週分）で平常時を求めた版も用意している。
+TIMESERIES_VIEWS = {
+    "5分間値（平常時は直近2日）": {
+        "file": "observations.parquet",
+        "baseline_key": "baseline_windows",
+        "unit_label": "5分間値",
+        "note": "",
+    },
+    "5分間値（平常時は1時間値8週分÷12）": {
+        "file": "observations_5m_hourly_baseline.parquet",
+        "baseline_key": "hourly_baseline_windows",
+        "unit_label": "5分間値",
+        "note": (
+            "この表示では平常時を1時間値（同曜日8週分）から求め、単位を合わせるため1/12しています。"
+            "そのため帯は「平常時の1時間あたり交通量の日々のばらつき÷12」であり、"
+            "5分間値そのもののばらつきではありません（帯は狭めに出ます）。"
+        ),
+    },
+    "1時間値（参考・平常時も1時間値8週分）": {
+        "file": "observations_hourly.parquet",
+        "baseline_key": "hourly_baseline_windows",
+        "unit_label": "1時間値",
+        "note": "実績・平常時とも1時間値どうしの比較なので、統計的にはこの表示が素直です。",
+    },
+}
+
 # 通行規制の日時はJSTの壁時計時刻（naive）で保存されている。Streamlit Cloud等の
 # UTCサーバーでdatetime.now()をそのまま使うと「終了済みか」の判定がずれるため、
 # fetch_and_prepare.py と同様にJST固定の「今」を使う。
@@ -42,8 +69,11 @@ st.set_page_config(
 
 
 @st.cache_data(ttl=300)
-def load_observations() -> pd.DataFrame:
-    df = pd.read_parquet(os.path.join(DATA_DIR, "observations.parquet"))
+def load_observations(filename: str = "observations.parquet") -> pd.DataFrame:
+    path = os.path.join(DATA_DIR, filename)
+    if not os.path.exists(path):
+        return pd.DataFrame()
+    df = pd.read_parquet(path)
     df["datetime"] = pd.to_datetime(df["datetime"])
     return df
 
@@ -333,11 +363,18 @@ def describe_baseline(baseline_windows) -> str:
             d = datetime.fromisoformat(w["start"])
         except (ValueError, KeyError, TypeError):
             continue
-        days.append(f"{d.month}/{d.day}（{weekdays[d.weekday()]}）")
+        days.append((d, f"{d.month}/{d.day}"))
     if not days:
         return "**平常時**＝地震発生前の平日同時刻の交通量（時刻帯ごとの平均）。"
+    days.sort()
+    wd = weekdays[days[0][0].weekday()]
+    if len(days) <= 3:
+        span = "・".join(f"{s}（{wd}）" for _, s in days)
+    else:
+        # 8週分などを列挙すると長いので、日数と範囲だけを示す
+        span = f"{days[0][1]}〜{days[-1][1]}の{wd}曜 {len(days)}日分"
     return (
-        f"**平常時**＝地震発生前の同じ曜日（{ '・'.join(days) }）の、同じ時刻の交通量。"
+        f"**平常時**＝地震発生前の同じ曜日（{span}）の、同じ時刻の交通量。"
         "観測点ごと・時刻（時）ごとに平均と標準偏差を求め、今回の実績と比べています。"
     )
 
@@ -345,9 +382,13 @@ def describe_baseline(baseline_windows) -> str:
 def render_timeseries(
     observations: pd.DataFrame, selected_points, quake_at,
     other_event_times=(), point_labels: dict = None, baseline_windows=None,
+    unit_label: str = "5分間値", extra_note: str = "",
 ) -> None:
     if not selected_points:
         st.info("上のプルダウンから選ぶか、地図上の丸いマーカーをクリックして観測点を選ぶと、ここに時系列が表示されます（最大2地点まで比較可）。")
+        return
+    if observations.empty:
+        st.warning("このビューのデータがまだ生成されていません。`python fetch_and_prepare.py` を実行してください。")
         return
 
     point_labels = point_labels or {}
@@ -384,7 +425,7 @@ def render_timeseries(
                 mode="lines+markers",
                 line=dict(color=color, width=1.2),
                 marker=dict(size=3),
-                name=f"{mark} 災害後（実績）",
+                name=f"{mark} 実績",
             ))
         for t in other_event_times:
             fig.add_vline(x=t, line_dash="dot", line_color="lightgray", line_width=1, opacity=0.7)
@@ -405,17 +446,18 @@ def render_timeseries(
             ),
             xaxis=dict(tickformat="%m/%d\n%H:%M", range=x_range),
         )
-        st.markdown(f"**{label}交通量（5分間値）**")
+        st.markdown(f"**{label}交通量（{unit_label}）**")
         st.plotly_chart(fig, use_container_width=True)
 
     st.markdown(describe_baseline(baseline_windows))
     st.caption(
-        "実線「災害後（実績）」＝今回の実測値（比較のため地震前日からの推移も含めて描いています）。"
+        "実線「実績」＝今回の観測実績（地震前日からの推移を含む）。"
         "点線「平常時」＝上記の平常時平均。"
         "灰色の帯「平常時±σ」（1地点選択時のみ）＝平常時の平均±標準偏差で、"
         "この帯から外れているほど平常時と違う動きをしていることを示します。"
         "黒い点線が本震の発生時刻（16:27）、薄いグレーの細い点線がその他の主要な地震"
         f"（震度5弱以上、{len(other_event_times)}件）の発生時刻。"
+        + (f" {extra_note}" if extra_note else "")
     )
 
 
@@ -626,11 +668,20 @@ def main():
                         st.rerun()
 
             with col_ts:
-                st.subheader("選択観測点の時系列（平常時 vs 災害後の実績）")
+                st.subheader("選択観測点の時系列（平常時 vs 観測実績）")
+                view = st.radio(
+                    "時系列の粒度と平常時の取り方",
+                    list(TIMESERIES_VIEWS.keys()),
+                    horizontal=True,
+                    key="timeseries_view",
+                )
+                cfg = TIMESERIES_VIEWS[view]
                 render_timeseries(
-                    observations, selected_points, quake_at,
-                    other_event_times, point_labels,
-                    quake_info.get("baseline_windows"),
+                    load_observations(cfg["file"]),
+                    selected_points, quake_at, other_event_times, point_labels,
+                    quake_info.get(cfg["baseline_key"]),
+                    unit_label=cfg["unit_label"],
+                    extra_note=cfg["note"],
                 )
 
     # ------------------------------------------------------------------

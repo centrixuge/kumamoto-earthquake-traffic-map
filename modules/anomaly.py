@@ -69,6 +69,23 @@ def _zscore(observed: pd.Series, mean: pd.Series, std: pd.Series, min_std_ratio:
     return (observed - mean) / std_floor
 
 
+def scale_baseline_stats(stats: pd.DataFrame, factor: float) -> pd.DataFrame:
+    """
+    ベースラインの平均・標準偏差を定数倍する。1時間値から求めた統計量を
+    5分間値と同じ単位で扱う（factor=1/12）ときに使う。
+    ※ 1時間値のσを1/12した値は「平常時の1時間水準の日々のばらつき」であり、
+       5分間値そのもののばらつきではない点に注意（帯は狭くなる）。
+    """
+    scaled = stats.copy()
+    for col in [
+        "baseline_mean_up", "baseline_std_up",
+        "baseline_mean_down", "baseline_std_down",
+    ]:
+        if col in scaled.columns:
+            scaled[col] = scaled[col] * factor
+    return scaled
+
+
 def build_observation_table(
     target_df: pd.DataFrame,
     baseline_df: pd.DataFrame,
@@ -76,12 +93,18 @@ def build_observation_table(
     epicenter_lat: float,
     epicenter_lon: float,
     anomaly_z_threshold: float = 2.0,
+    baseline_stats: pd.DataFrame = None,
 ) -> pd.DataFrame:
     """
     対象期間データ・ベースラインデータ・地震情報を結合し、
     観測点×時刻ごとの zスコア／異常フラグ／震源距離を含む1本のテーブルを作る。
+
+    `baseline_stats` を渡した場合はそれを平常時の統計量として使い、
+    `baseline_df` からの再計算を行わない（1時間値ベースの統計量を
+    5分間値に適用する等、母集団を差し替えたいときに使う）。
     """
-    baseline_stats = compute_baseline_stats(baseline_df)
+    if baseline_stats is None:
+        baseline_stats = compute_baseline_stats(baseline_df)
 
     df = _add_point_key(target_df)
     df = _to_numeric(df, ["traffic_up", "traffic_down"])
@@ -89,7 +112,7 @@ def build_observation_table(
     df["hour"] = df["datetime"].dt.hour
 
     merged = df.merge(
-        baseline_stats.drop(columns=["point_lon", "point_lat"]),
+        baseline_stats.drop(columns=["point_lon", "point_lat"], errors="ignore"),
         on=["point_id", "hour"],
         how="left",
     )
