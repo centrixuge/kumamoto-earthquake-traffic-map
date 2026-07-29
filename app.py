@@ -144,15 +144,21 @@ def _deterministic_branca_ids():
         branca_element.Element._generate_id = original
 
 
-def render_folium_map(
+def build_base_map(
     point_summary: pd.DataFrame,
     mainshock: dict,
-    selected_points=(),
     regulations: list = None,
 ) -> folium.Map:
     """
-    決定的idにより、選択状態が変わらない限りHTMLが完全に同一になり
-    streamlit_foliumの不要な再マウントを避けられる。
+    選択状態に依存しない「ベース地図」（背景タイル・通行規制・震源）を作る。
+
+    観測点マーカーは選択状態で見た目が変わるため、この地図には含めず
+    st_folium の feature_group_to_add で別途渡す。streamlit_folium が
+    コンポーネントの同一性判定に使うハッシュはベース地図のJSだけから
+    作られる（feature_group は含まれない）ため、こう分けておくと
+    選択のたびに地図全体が再マウント（タイル再読込・全要素再構築）されず、
+    観測点レイヤーだけが差し替わる。
+
     folium.Map.render()は副作用を持ち複数回呼ぶと壊れるため、Mapオブジェクト
     自体はキャッシュしない（毎回作り直す）。
 
@@ -205,28 +211,6 @@ def render_folium_map(
             reg_layer.add_to(fmap)
             folium.LayerControl(collapsed=False).add_to(fmap)
 
-        max_z = point_summary["max_abs_z"].max()
-        max_z = max_z if max_z and max_z > 0 else 1.0
-
-        for _, row in point_summary.iterrows():
-            frac = row["max_abs_z"] / max_z
-            is_selected = row["point_id"] in selected_points
-            sel_idx = list(selected_points).index(row["point_id"]) if is_selected else None
-            border_color = SELECTION_COLORS[sel_idx] if is_selected else "#333333"
-            folium.CircleMarker(
-                location=[row["point_lat"], row["point_lon"]],
-                radius=(14 + 12 * frac) if is_selected else (11 + 12 * frac),
-                color=border_color,
-                weight=4 if is_selected else 1,
-                fill=True,
-                fill_color=_severity_color(frac),
-                fill_opacity=0.85,
-                tooltip=(
-                    f"{row['point_id']}（クリックで時系列に表示/解除）<br>"
-                    f"最大|zスコア|: {row['max_abs_z']:.2f} / 異常件数: {int(row['n_anomaly'])}"
-                ),
-            ).add_to(fmap)
-
         folium.Marker(
             location=[mainshock["epicenter_lat"], mainshock["epicenter_lon"]],
             icon=folium.Icon(color="blue", icon="star"),
@@ -240,6 +224,51 @@ def render_folium_map(
         return fmap
 
 
+def build_points_feature_group(
+    point_summary: pd.DataFrame, point_labels: dict, selected_points=()
+) -> folium.FeatureGroup:
+    """
+    観測点マーカーだけを含むFeatureGroupを作る。選択状態で見た目が変わるのは
+    このレイヤーだけなので、st_folium の feature_group_to_add に渡すことで
+    地図全体の再マウントなしに差し替えられる。
+    """
+    max_z = point_summary["max_abs_z"].max()
+    max_z = max_z if max_z and max_z > 0 else 1.0
+
+    fg = folium.FeatureGroup(name="観測点")
+    for _, row in point_summary.iterrows():
+        frac = row["max_abs_z"] / max_z
+        is_selected = row["point_id"] in selected_points
+        sel_idx = list(selected_points).index(row["point_id"]) if is_selected else None
+        border_color = SELECTION_COLORS[sel_idx] if is_selected else "#333333"
+        label = point_labels.get(row["point_id"], row["point_id"])
+        folium.CircleMarker(
+            location=[row["point_lat"], row["point_lon"]],
+            radius=(14 + 12 * frac) if is_selected else (11 + 12 * frac),
+            color=border_color,
+            weight=4 if is_selected else 1,
+            fill=True,
+            fill_color=_severity_color(frac),
+            fill_opacity=0.85,
+            tooltip=(
+                f"{label}（クリックで時系列に表示/解除）<br>"
+                f"最大|zスコア|: {row['max_abs_z']:.2f} / 異常件数: {int(row['n_anomaly'])}"
+            ),
+        ).add_to(fg)
+    return fg
+
+
+def build_point_labels(point_summary: pd.DataFrame) -> dict:
+    """
+    観測点IDは "130.688167_32.56558" のような生の緯度経度文字列で読みにくいため、
+    異常度の大きい順に番号を振った短い表示名を作る（セレクタ・地図・グラフ凡例で共用）。
+    """
+    return {
+        row["point_id"]: f"地点{i + 1}"
+        for i, (_, row) in enumerate(point_summary.iterrows())
+    }
+
+
 def _nearest_point_id(lat, lon, point_summary: pd.DataFrame, tol_deg: float = 0.01):
     if lat is None or lon is None or point_summary.empty:
         return None
@@ -250,12 +279,15 @@ def _nearest_point_id(lat, lon, point_summary: pd.DataFrame, tol_deg: float = 0.
     return point_summary.loc[idx, "point_id"]
 
 
-def render_timeseries(observations: pd.DataFrame, selected_points, quake_at, other_event_times=()) -> None:
+def render_timeseries(
+    observations: pd.DataFrame, selected_points, quake_at,
+    other_event_times=(), point_labels: dict = None,
+) -> None:
     if not selected_points:
-        st.info("地図上のマーカーをクリックすると、その観測点の時系列がここに表示されます（最大2地点まで比較可）。")
+        st.info("上のセレクタか、地図上のマーカーをクリックして観測点を選ぶと、ここに時系列が表示されます（最大2地点まで比較可）。")
         return
 
-    marks = ["①", "②"]
+    point_labels = point_labels or {}
 
     for direction, mean_col, std_col, label in [
         ("traffic_up", "baseline_mean_up", "baseline_std_up", "上り"),
@@ -264,7 +296,7 @@ def render_timeseries(observations: pd.DataFrame, selected_points, quake_at, oth
         fig = go.Figure()
         for i, pid in enumerate(selected_points):
             color = SELECTION_COLORS[i % len(SELECTION_COLORS)]
-            mark = marks[i % len(marks)]
+            mark = point_labels.get(pid, pid)
             pdf = observations[observations["point_id"] == pid].sort_values("datetime")
             if len(selected_points) == 1:
                 fig.add_trace(go.Scatter(
@@ -279,14 +311,14 @@ def render_timeseries(observations: pd.DataFrame, selected_points, quake_at, oth
             fig.add_trace(go.Scatter(
                 x=pdf["datetime"], y=pdf[mean_col],
                 mode="lines", line=dict(color=color, dash="dot", width=1),
-                opacity=0.6, name=f"{mark}平常時平均",
+                opacity=0.6, name=f"{mark} 平常時平均",
             ))
             fig.add_trace(go.Scatter(
                 x=pdf["datetime"], y=pdf[direction],
                 mode="lines+markers",
                 line=dict(color=color, width=1.2),
                 marker=dict(size=3),
-                name=f"{mark}実測",
+                name=f"{mark} 実測",
             ))
         for t in other_event_times:
             fig.add_vline(x=t, line_dash="dot", line_color="lightgray", line_width=1, opacity=0.7)
@@ -308,10 +340,6 @@ def render_timeseries(observations: pd.DataFrame, selected_points, quake_at, oth
         st.markdown(f"**{label}交通量（5分間値）**")
         st.plotly_chart(fig, use_container_width=True)
 
-    if len(selected_points) > 1:
-        st.caption(
-            f"①: {selected_points[0]} / ②: {selected_points[1]}"
-        )
     st.caption(
         "黒い点線が本震の発生時刻（16:27）、薄いグレーの細い点線がその他の主要な地震"
         f"（震度5弱以上、{len(other_event_times)}件）の発生時刻。"
@@ -416,20 +444,37 @@ def main():
         if post.empty:
             st.info("地震発生後のデータがまだありません。")
         else:
+            point_labels = build_point_labels(point_summary)
+            coords_by_id = point_summary.set_index("point_id")[
+                ["point_lat", "point_lon"]
+            ].to_dict("index")
             selected_points = st.session_state["selected_points"]
-            labels = [
-                f":{SELECTION_COLORS[i]}[{pid}]" for i, pid in enumerate(selected_points)
-            ]
-            col_status, col_clear = st.columns([5, 1])
-            with col_status:
-                st.markdown(
-                    f"**選択中の観測点（最大{MAX_SELECTED_POINTS}地点、地図クリックで選択/入れ替え）:** "
-                    + (" / ".join(labels) if labels else "なし（地図上のマーカーをクリックしてください）")
+            sel_version = st.session_state.get("_sel_version", 0)
+
+            def _format_point(pid: str) -> str:
+                c = coords_by_id[pid]
+                return f"{point_labels[pid]}（{c['point_lat']:.3f}N, {c['point_lon']:.3f}E）"
+
+            col_select, col_clear = st.columns([5, 1])
+            with col_select:
+                picked = st.multiselect(
+                    f"観測点を選択（最大{MAX_SELECTED_POINTS}地点。こちらが確実・高速です）",
+                    options=list(point_labels.keys()),
+                    default=[p for p in selected_points if p in point_labels],
+                    max_selections=MAX_SELECTED_POINTS,
+                    format_func=_format_point,
+                    key=f"point_select_{sel_version}",
                 )
             with col_clear:
+                st.write("")
                 if st.button("選択をクリア", disabled=not selected_points):
                     st.session_state["selected_points"] = []
+                    st.session_state["_sel_version"] = sel_version + 1
                     st.rerun()
+
+            if picked != selected_points:
+                st.session_state["selected_points"] = picked
+                st.rerun()
 
             col_map, col_ts = st.columns([2, 3])
 
@@ -448,10 +493,14 @@ def main():
                     """,
                     unsafe_allow_html=True,
                 )
-                fmap = render_folium_map(point_summary, mainshock, selected_points, regulations)
+                base_map = build_base_map(point_summary, mainshock, regulations)
+                points_fg = build_points_feature_group(
+                    point_summary, point_labels, selected_points
+                )
                 map_state = st_folium(
-                    fmap, height=750, width=550,
-                    returned_objects=["last_object_clicked"], key="quake_map_v4",
+                    base_map, height=750, width=550,
+                    feature_group_to_add=points_fg,
+                    returned_objects=["last_object_clicked"], key="quake_map_v5",
                 )
                 st.caption(
                     "通行規制データ: [熊本県防災ポータル](https://portal.bousai.pref.kumamoto.jp/?p=traffic)"
@@ -460,7 +509,10 @@ def main():
                 )
                 st.caption(
                     "観測点は色が濃いほど地震後の交通量変化（|zスコア|）が大きいことを示す（青系のグラデーション）。"
-                    "青いマーカーは震源。クリックした観測点は赤/緑の枠で強調表示されます（最大2地点）。"
+                    "地点番号は異常度の大きい順。青いマーカーは震源。"
+                    "選択中の観測点は赤/緑の枠で強調表示されます（最大2地点）。"
+                    "地図のマーカークリックでも選択できますが、反映に数秒かかり、"
+                    "同じマーカーを続けてクリックしても反応しません（上のセレクタの利用を推奨）。"
                 )
 
             clicked = map_state.get("last_object_clicked") if map_state else None
@@ -478,11 +530,16 @@ def main():
                                 selected.pop(0)
                             selected.append(pid)
                         st.session_state["selected_points"] = selected
+                        # セレクタ側のウィジェット状態は古くなるので、キーを変えて作り直す
+                        st.session_state["_sel_version"] = sel_version + 1
                         st.rerun()
 
             with col_ts:
                 st.subheader("選択観測点の時系列（平常時帯 vs 実測）")
-                render_timeseries(observations, selected_points, quake_at, other_event_times)
+                render_timeseries(
+                    observations, selected_points, quake_at,
+                    other_event_times, point_labels,
+                )
 
     # ------------------------------------------------------------------
     # 異常検知一覧タブ
