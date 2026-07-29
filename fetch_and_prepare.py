@@ -43,7 +43,7 @@ JST = timezone(timedelta(hours=9))
 def _now_jst() -> datetime:
     return datetime.now(JST).replace(tzinfo=None)
 
-from modules.api_request_func import fetch_traffic_range
+from modules.api_request_func import fetch_traffic_codes, fetch_traffic_range
 from modules.aggregation import create_traffic_geodf
 from modules.earthquake_data import get_quake_info, get_significant_events
 from modules.anomaly import (
@@ -166,33 +166,74 @@ def _slice(archive: pd.DataFrame, start_dt: datetime, end_dt: datetime) -> pd.Da
     return archive.loc[mask].reset_index(drop=True)
 
 
+def _fetch_frames(frames, label: str, type_name: str = TYPE_NAME) -> pd.DataFrame:
+    """指定したコマだけを取得する（飛び飛びの欠けを埋めるため）。"""
+    codes = [pd.Timestamp(t).strftime("%Y%m%d%H%M") for t in frames]
+    print(f"[{label}] fetching {len(codes)} frames ({codes[0]} ... {codes[-1]})", flush=True)
+    combined = fetch_traffic_codes(
+        road_type=ROAD_TYPE, time_codes=codes, type_name=type_name, bbox=BBOX,
+    )
+    print(f"[{label}] total features: {len(combined['features'])}", flush=True)
+    gdf = create_traffic_geodf(combined)
+    return pd.DataFrame(gdf.drop(columns="geometry"))
+
+
+# 1回の実行で取り直すコマ数の上限。恒久的に配信されないコマが残っていても
+# リクエストが無限に増えないようにするための歯止め。
+MAX_FRAMES_PER_RUN = 900
+
+
 def _fetch_missing_target(
     archive: pd.DataFrame, target_end: datetime,
     type_name: str = TYPE_NAME, step: timedelta = FETCH_STEP, label: str = "target",
 ) -> pd.DataFrame:
-    """アーカイブ済みのtarget範囲より先だけを新規取得する。"""
-    existing = _slice(archive, TARGET_START, target_end)
-    next_start = TARGET_START
-    if not existing.empty:
-        next_start = existing["datetime"].max() + step
-    if next_start > target_end:
-        print(f"[{label}] already up to date (archived through {existing['datetime'].max()})", flush=True)
+    """
+    target範囲のうち、アーカイブに無いコマだけを取得する。
+
+    以前は「アーカイブ済みの最大時刻＋step」から取っていたが、それだと
+    何らかの理由で先の時刻のレコードが1件混ざるだけで、その手前の未取得区間が
+    毎回スキップされ、穴が永久に埋まらない（実際に時間帯パースの不具合で
+    真夜中のコマが昼以降の時刻として入り込み、7/29 12:40〜14:55 が丸ごと
+    飛ばされた）。そのため、期待されるコマの並びと突き合わせて
+    「無いコマだけ」を取りにいく。1コマ=1リクエストなので範囲取得より無駄がない。
+    """
+    existing = set(_slice(archive, TARGET_START, target_end)["datetime"]) if not archive.empty else set()
+    grid = pd.date_range(TARGET_START, target_end, freq=step)
+    missing = [t for t in grid if t not in existing]
+    if not missing:
+        print(f"[{label}] already up to date ({len(grid)} frames archived)", flush=True)
         return pd.DataFrame()
-    return _fetch_period(next_start, target_end, label, type_name)
+    if len(missing) > MAX_FRAMES_PER_RUN:
+        # 新しい方を優先して取る（古い穴は次回以降に回す）
+        skipped = len(missing) - MAX_FRAMES_PER_RUN
+        missing = missing[-MAX_FRAMES_PER_RUN:]
+        print(
+            f"[{label}] {skipped} older missing frames deferred to a later run "
+            f"(cap {MAX_FRAMES_PER_RUN})", flush=True,
+        )
+    return _fetch_frames(missing, label, type_name)
 
 
 def _fetch_missing_baseline(
     archive: pd.DataFrame, windows=BASELINE_WINDOWS,
-    type_name: str = TYPE_NAME, label: str = "baseline",
+    type_name: str = TYPE_NAME, step: timedelta = FETCH_STEP, label: str = "baseline",
 ) -> pd.DataFrame:
-    """まだアーカイブにない平常時ウィンドウだけを取得する（固定の過去データなので一度取れば十分）。"""
+    """
+    平常時ウィンドウのうち、アーカイブに無いコマだけを取得する。
+
+    以前は「ウィンドウ内に1件でもあればスキップ」だったため、途中に穴が
+    空いたまま埋まらなかった。ウィンドウごとに期待されるコマと突き合わせる。
+    """
+    existing = set(archive["datetime"]) if not archive.empty else set()
     new_dfs = []
     for start_dt, end_dt in windows:
-        if not _slice(archive, start_dt, end_dt).empty:
+        grid = pd.date_range(start_dt, end_dt, freq=step)
+        missing = [t for t in grid if t not in existing]
+        if not missing:
             print(f"[{label}({start_dt.date()})] already archived, skipping", flush=True)
             continue
         new_dfs.append(
-            _fetch_period(start_dt, end_dt, f"{label}({start_dt.date()})", type_name)
+            _fetch_frames(missing, f"{label}({start_dt.date()})", type_name)
         )
     if not new_dfs:
         return pd.DataFrame()
@@ -237,7 +278,7 @@ def main():
     )
     new_hourly_baseline = _fetch_missing_baseline(
         hourly_archive, windows=hourly_baseline_windows,
-        type_name=HOURLY_TYPE_NAME, label="baseline-1h",
+        type_name=HOURLY_TYPE_NAME, step=HOURLY_FETCH_STEP, label="baseline-1h",
     )
     hourly_archive = _merge_into_archive(
         hourly_archive, new_hourly_target, new_hourly_baseline

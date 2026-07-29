@@ -3,6 +3,23 @@ from datetime import datetime
 from shapely.geometry import Point
 from typing import Optional, Tuple, Dict, Any, List
 
+
+def parse_observation_datetime(prop: Dict[str, Any]) -> datetime:
+    """
+    「観測年月日」と「時間帯」から観測時刻を作る。
+
+    「時間帯」はHHMM形式だが、APIはゼロ埋めせず整数として返してくる
+    （00:05 -> 5、00:20 -> 20、01:00 -> 100、12:35 -> 1235）。
+    そのため「0〜23なら時(hour)」と解釈すると真夜中の4コマが
+    00:05 -> 05:00 / 00:10 -> 10:00 / 00:15 -> 15:00 / 00:20 -> 20:00
+    と昼以降の時刻にすり替わってしまう（5分間値・1時間値の両方で確認済み。
+    1時間値はHHMMが必ず100の倍数なので実害は00:00のみで、そこは結果が一致する）。
+    必ず4桁ゼロ埋めのHHMMとして扱う。
+    """
+    time_band = int(prop["時間帯"])
+    return datetime.strptime(f"{prop['観測年月日']}{time_band:04d}", "%Y%m%d%H%M")
+
+
 def create_traffic_geodf(
     data: Dict[str, Any]
 ) -> gpd.GeoDataFrame:
@@ -32,14 +49,7 @@ def create_traffic_geodf(
         prop = feature["properties"]
         coords = feature["geometry"]["coordinates"][0]
 
-        # 日時のパース（時間帯: 300/2000 または 3/20 の両方に対応）
-        time_band = int(prop["時間帯"])
-        if 0 <= time_band <= 23:
-            time_band *= 100
-        dt = datetime.strptime(
-            f"{prop['観測年月日']}{time_band:04d}",
-            "%Y%m%d%H%M"
-        )
+        dt = parse_observation_datetime(prop)
 
         # 各交通量値（None を許容）
         up_small = prop.get('上り・小型交通量')
@@ -134,14 +144,7 @@ def create_traffic_geodf_img(
         prop = feature["properties"]
         coords = feature["geometry"]["coordinates"][0]
 
-        # 日時のパース（時間帯: 300/2000 または 3/20 の両方に対応）
-        time_band = int(prop["時間帯"])
-        if 0 <= time_band <= 23:
-            time_band *= 100
-        dt = datetime.strptime(
-            f"{prop['観測年月日']}{time_band:04d}",
-            "%Y%m%d%H%M"
-        )
+        dt = parse_observation_datetime(prop)
 
         # 各交通量値（None を許容）
         up_small = prop.get('上り・小型交通量（集計値）')
@@ -224,14 +227,7 @@ def create_traffic_geodf_img_hour(
         prop = feature["properties"]
         coords = feature["geometry"]["coordinates"][0]
 
-        # 日時のパース（時間帯: 300/2000 または 3/20 の両方に対応）
-        time_band = int(prop["時間帯"])
-        if 0 <= time_band <= 23:
-            time_band *= 100
-        dt = datetime.strptime(
-            f"{prop['観測年月日']}{time_band:04d}",
-            "%Y%m%d%H%M"
-        )
+        dt = parse_observation_datetime(prop)
 
         # 各交通量値（None を許容）
         up_small = prop.get('上り・小型交通量')

@@ -38,6 +38,34 @@ def fetch_traffic(
     resp.raise_for_status()
     return resp.json()
 
+def fetch_traffic_codes(
+    road_type: str,
+    time_codes,
+    type_name: str = "t_travospublic_measure_5m",
+    bbox: Optional[Tuple[float, float, float, float]] = None
+) -> Dict[str, Any]:
+    """
+    指定した時間コードだけをフェッチして、全 features をまとめた GeoJSON dict を返す。
+
+    fetch_traffic_range が連続した範囲を取るのに対し、こちらは「アーカイブに
+    無いコマだけ」のように飛び飛びのコマを取りたいときに使う。1コマ=1リクエスト
+    なのはどちらも同じなので、欠けているコマ数だけのリクエストで済む。
+
+    Parameters
+    ----------
+    time_codes : Iterable[str]
+        時間コード (YYYYMMDDhhmm) の並び
+    """
+    all_features = []
+    for tc in time_codes:
+        data = fetch_traffic(road_type, str(tc), type_name, bbox)
+        feats = data.get("features", [])
+        print(f"[{tc}] fetched {len(feats)} features")
+        if feats:
+            all_features.extend(feats)
+    return {"type": "FeatureCollection", "features": all_features}
+
+
 def fetch_traffic_range(
     road_type: str,
     time_code_start: str,
