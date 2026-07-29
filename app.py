@@ -203,7 +203,7 @@ _OBSERVATION_COLUMNS = [
     ("z_down", "無次元", "下りのzスコア（同上）"),
     ("is_post_quake", "真偽値", "本震（2026-07-28 16:27）以降の時刻かどうか"),
     ("is_anomaly", "真偽値", "異常と判定したか。is_post_quakeがTrueかつ|z_up|または|z_down|が2以上"),
-    ("distance_km_from_epicenter", "km", "観測点と本震の震源との大圏距離。揺れの強さの代理指標として使用"),
+    ("distance_km_from_epicenter", "km", "観測点と本震の震源との大圏距離（参考値。異常検知の判定には使っていない）"),
 ]
 
 _REGULATION_COLUMNS = [
