@@ -250,7 +250,7 @@ def _nearest_point_id(lat, lon, point_summary: pd.DataFrame, tol_deg: float = 0.
     return point_summary.loc[idx, "point_id"]
 
 
-def render_timeseries(observations: pd.DataFrame, selected_points, quake_at) -> None:
+def render_timeseries(observations: pd.DataFrame, selected_points, quake_at, other_event_times=()) -> None:
     if not selected_points:
         st.info("地図上のマーカーをクリックすると、その観測点の時系列がここに表示されます（最大2地点まで比較可）。")
         return
@@ -288,6 +288,8 @@ def render_timeseries(observations: pd.DataFrame, selected_points, quake_at) -> 
                 marker=dict(size=3),
                 name=f"{mark}実測",
             ))
+        for t in other_event_times:
+            fig.add_vline(x=t, line_dash="dot", line_color="lightgray", line_width=1, opacity=0.7)
         fig.add_vline(x=quake_at, line_dash="dot", line_color="black", line_width=2)
         fig.add_annotation(
             x=quake_at, y=1, yref="paper", yanchor="bottom",
@@ -311,8 +313,9 @@ def render_timeseries(observations: pd.DataFrame, selected_points, quake_at) -> 
             f"①: {selected_points[0]} / ②: {selected_points[1]}"
         )
     st.caption(
-        "黒い点線が地震発生時刻（16:27）。灰色の帯（1地点選択時のみ）が平常時の平均±標準偏差、"
-        "点線が平常時平均、実線が実測値。"
+        "黒い点線が本震の発生時刻（16:27）、薄いグレーの細い点線がその他の主要な地震"
+        f"（震度5弱以上、{len(other_event_times)}件）の発生時刻。"
+        "灰色の帯（1地点選択時のみ）が平常時の平均±標準偏差、点線が平常時平均、実線が実測値。"
     )
 
 
@@ -340,6 +343,11 @@ def main():
     regulations = load_regulations()
     mainshock = quake_info["mainshock"]
     quake_at = pd.Timestamp(mainshock["occurred_at"]).tz_localize(None)
+    other_event_times = [
+        pd.Timestamp(e["occurred_at"]).tz_localize(None)
+        for e in quake_info.get("events", [])
+        if e.get("eid") != mainshock.get("eid")
+    ]
 
     post = observations[observations["is_post_quake"]]
     point_summary = build_point_summary(post)
@@ -446,7 +454,7 @@ def main():
 
             with col_ts:
                 st.subheader("選択観測点の時系列（平常時帯 vs 実測）")
-                render_timeseries(observations, selected_points, quake_at)
+                render_timeseries(observations, selected_points, quake_at, other_event_times)
 
     # ------------------------------------------------------------------
     # 異常検知一覧タブ
