@@ -7,6 +7,7 @@
 読み込んで表示するだけのビュー層。GDAL依存のgeopandas/shapelyはここでは使わない
 （Streamlit Community Cloud等の軽量環境でも動かせるようにするため）。
 """
+import io
 import itertools
 import json
 import os
@@ -236,12 +237,14 @@ _REGULATION_HISTORY_COLUMNS = [
     ("length_km", "km", "その時点の規制区間延長"),
 ]
 
+# (CSVファイル名, Excelのシート名, データセット名, 列定義)
+# シート名はExcelの制約（31文字以内・ : \ / ? * [ ] を含まない）に収まるよう短くしている。
 DATA_DICTIONARY = [
-    ("kumamoto_traffic_5min_archive.csv", "5分間交通量（アーカイブ全期間）", _TRAFFIC_COLUMNS),
-    ("kumamoto_traffic_hourly_archive.csv", "1時間交通量（アーカイブ全期間）", _TRAFFIC_COLUMNS),
-    ("kumamoto_road_regulations_archive.csv", "通行規制 一覧", _REGULATION_COLUMNS),
-    ("kumamoto_road_regulations_history.csv", "通行規制 状態変化の履歴", _REGULATION_HISTORY_COLUMNS),
-    ("kumamoto_observations_hourly.csv", "異常検知の入力データ（1時間値）", _OBSERVATION_COLUMNS),
+    ("kumamoto_traffic_5min_archive.csv", "5分間交通量", "5分間交通量（アーカイブ全期間）", _TRAFFIC_COLUMNS),
+    ("kumamoto_traffic_hourly_archive.csv", "1時間交通量", "1時間交通量（アーカイブ全期間）", _TRAFFIC_COLUMNS),
+    ("kumamoto_road_regulations_archive.csv", "通行規制_一覧", "通行規制 一覧", _REGULATION_COLUMNS),
+    ("kumamoto_road_regulations_history.csv", "通行規制_履歴", "通行規制 状態変化の履歴", _REGULATION_HISTORY_COLUMNS),
+    ("kumamoto_observations_hourly.csv", "異常検知_入力データ", "異常検知の入力データ（1時間値）", _OBSERVATION_COLUMNS),
 ]
 
 
@@ -257,7 +260,7 @@ def build_data_dictionary(actual_columns: dict) -> tuple:
     """
     rows = []
     only_in_dict, only_in_csv = {}, {}
-    for fname, dataset, columns in DATA_DICTIONARY:
+    for fname, _sheet, dataset, columns in DATA_DICTIONARY:
         documented = [c for c, _, _ in columns]
         actual = actual_columns.get(fname)
         if actual is not None:
@@ -309,6 +312,99 @@ def build_data_dictionary(actual_columns: dict) -> tuple:
             "データ側に新しい列が増えて、定義書の更新が追いついていない状態です。"
         )
     return pd.DataFrame(rows), notes
+
+
+def _plain_text(text: str) -> str:
+    """備考文のMarkdown記法（**強調**・`コード`）を落としてExcelに書ける素の文にする。"""
+    return text.replace("**", "").replace("`", "")
+
+
+# 列定義シートのヘッダ。Excelで人が読む資料なので日本語にする。
+_DICT_SHEET_HEADERS = [
+    ("列番号", 8),
+    ("列名", 30),
+    ("単位・型", 18),
+    ("説明", 90),
+    ("配布中CSVに存在", 16),
+]
+
+
+@st.cache_data(ttl=300)
+def to_dictionary_xlsx_bytes(dict_df: pd.DataFrame, notes: tuple) -> bytes:
+    """
+    列定義書をExcelブックにする。1シート＝1データセット（＝1CSVファイル）とし、
+    先頭に全体の目次と備考をまとめた「はじめに」シートを置く。
+    """
+    from openpyxl import Workbook
+    from openpyxl.styles import Alignment, Font, PatternFill
+    from openpyxl.utils import get_column_letter
+
+    header_font = Font(bold=True)
+    header_fill = PatternFill("solid", fgColor="DDEBF7")
+    wrap_top = Alignment(vertical="top", wrap_text=True)
+    top = Alignment(vertical="top")
+
+    wb = Workbook()
+    intro = wb.active
+    intro.title = "はじめに"
+
+    intro["A1"] = "熊本地震・交通行動変容ダッシュボード CSV列定義書"
+    intro["A1"].font = Font(bold=True, size=14)
+    intro["A2"] = f"作成日時: {_now_jst():%Y-%m-%d %H:%M} (JST)"
+    intro["A3"] = "公開URL: https://kumamoto-earthquake-traffic-map.streamlit.app/"
+    intro["A4"] = "データセットごとにシートを分けています。下の表のシート名から移動してください。"
+
+    row = 6
+    for i, label in enumerate(["シート名", "CSVファイル名", "データセット", "列数"]):
+        cell = intro.cell(row=row, column=i + 1, value=label)
+        cell.font = header_font
+        cell.fill = header_fill
+    for fname, sheet, dataset, columns in DATA_DICTIONARY:
+        row += 1
+        intro.cell(row=row, column=1, value=sheet)
+        intro.cell(row=row, column=2, value=fname)
+        intro.cell(row=row, column=3, value=dataset)
+        intro.cell(row=row, column=4, value=len(columns))
+
+    if notes:
+        row += 2
+        cell = intro.cell(row=row, column=1, value="備考")
+        cell.font = header_font
+        for note in notes:
+            row += 1
+            c = intro.cell(row=row, column=1, value=_plain_text(note))
+            c.alignment = wrap_top
+    for col, width in zip("ABCD", (22, 42, 34, 8)):
+        intro.column_dimensions[col].width = width
+
+    for fname, sheet, dataset, _columns in DATA_DICTIONARY:
+        ws = wb.create_sheet(sheet)
+        ws["A1"] = dataset
+        ws["A1"].font = Font(bold=True, size=12)
+        ws["A2"] = f"CSVファイル名: {fname}"
+        for i, (label, width) in enumerate(_DICT_SHEET_HEADERS):
+            cell = ws.cell(row=4, column=i + 1, value=label)
+            cell.font = header_font
+            cell.fill = header_fill
+            ws.column_dimensions[get_column_letter(i + 1)].width = width
+
+        sub = dict_df[dict_df["csv_file"] == fname]
+        for offset, (_, r) in enumerate(sub.iterrows()):
+            out = 5 + offset
+            in_csv = r["in_actual_csv"]
+            values = [
+                r["column_order"], r["column"], r["unit_or_type"], r["description"],
+                "-" if in_csv is None else ("○" if in_csv else "×（次回生成時に追加）"),
+            ]
+            for i, v in enumerate(values):
+                c = ws.cell(row=out, column=i + 1, value=v)
+                c.alignment = wrap_top if i == 3 else top
+        # ヘッダ行を固定して、列数の多いデータセットでもスクロールしやすくする
+        ws.freeze_panes = "A5"
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
 
 
 @st.cache_data(ttl=300)
@@ -998,21 +1094,32 @@ def main():
         dict_df, dict_notes = build_data_dictionary(actual_columns)
         st.markdown("**CSVの列定義書（各列の意味・単位）**")
         st.caption(
-            f"上記すべてのCSVについて、列の並び順・単位・意味をまとめた表です（{len(dict_df)} 行）。"
+            f"上記すべてのCSVについて、列の並び順・単位・意味をまとめたExcelブックです"
+            f"（データセットごとにシートを分けた全{len(DATA_DICTIONARY)}シート＋目次「はじめに」／計{len(dict_df)}列の定義）。"
             "データを受け取った人が中身を解釈できるよう、CSVと一緒に配布してください。"
         )
         st.download_button(
-            "列定義書をダウンロード（kumamoto_data_dictionary.csv）",
-            to_csv_bytes(dict_df),
-            file_name="kumamoto_data_dictionary.csv",
-            mime="text/csv", key="dl_dictionary",
+            "列定義書をダウンロード（kumamoto_data_dictionary.xlsx）",
+            to_dictionary_xlsx_bytes(dict_df, tuple(dict_notes)),
+            file_name="kumamoto_data_dictionary.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            key="dl_dictionary",
         )
         # 定義書と実データのずれは異常ではなく一時的に起こりうるものなので、
         # 警告色ではなく理由の分かる備考として出す。
         for note in dict_notes:
             st.caption(note)
         with st.expander("列定義書をこの画面で見る"):
-            st.dataframe(dict_df, use_container_width=True, hide_index=True, height=420)
+            # Excelのシート分けと同じ区切りで見られるようにタブにする
+            dict_tabs = st.tabs([sheet for _, sheet, _, _ in DATA_DICTIONARY])
+            for tab, (fname, _sheet, dataset, _cols) in zip(dict_tabs, DATA_DICTIONARY):
+                with tab:
+                    st.caption(f"{dataset}｜`{fname}`")
+                    sub = dict_df[dict_df["csv_file"] == fname]
+                    st.dataframe(
+                        sub.drop(columns=["csv_file", "dataset"]),
+                        use_container_width=True, hide_index=True,
+                    )
         st.divider()
 
         for title, df, fname, desc in downloads:
