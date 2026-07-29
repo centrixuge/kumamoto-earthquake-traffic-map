@@ -517,6 +517,15 @@ def build_point_summary(post: pd.DataFrame, observations: pd.DataFrame = None) -
 FULL_CLOSURE_CONTENTS = {"全面通行止め", "車両通行止め"}
 
 
+def _point_radius(max_abs_z, max_z: float, selected: bool = False) -> float:
+    """
+    観測点マーカーの半径。異常度に比例させる。欠測（NaN）は最小サイズ。
+    ▲の表示位置を丸の外側に置くためにも使うので、計算を1か所にまとめている。
+    """
+    frac = 0.0 if pd.isna(max_abs_z) else max_abs_z / max_z
+    return (14 if selected else 11) + 12 * frac
+
+
 def _severity_color(frac: float) -> str:
     """
     0(平常)〜1(最大異常)のfracを寒色系（薄い水色〜濃い紺）の16進カラーに変換する。
@@ -715,6 +724,11 @@ def build_base_map(
         mlit_marked = 0
         if mlit_items and not point_summary.empty:
             mlit_layer = folium.FeatureGroup(name="直轄国道の規制（区間の線なし）")
+            # 観測点の丸は異常度に応じて大きさが変わるので、▲を置く高さも
+            # その半径から決める（固定値だと大きい丸に重なってしまう）。
+            max_z_for_radius = point_summary["max_abs_z"].max()
+            if not (pd.notna(max_z_for_radius) and max_z_for_radius > 0):
+                max_z_for_radius = 1.0
             for _, row in point_summary.iterrows():
                 hits = mlit_regulations_for_point(mlit, row.get("point_code"))
                 if not hits:
@@ -727,12 +741,19 @@ def build_base_map(
                 )
                 folium.Marker(
                     location=[row["point_lat"], row["point_lon"]],
-                    icon=folium.DivIcon(html=(
-                        '<div style="font-size:18px;font-weight:900;color:#b00000;'
-                        'line-height:1;text-shadow:0 0 3px white,0 0 3px white;">▲</div>'
-                    )),
+                    icon=folium.DivIcon(
+                        html=(
+                            '<div style="font-size:18px;font-weight:900;color:#b00000;'
+                            'line-height:1;text-shadow:0 0 3px white,0 0 3px white;">▲</div>'
+                        ),
+                        # 観測点の丸の真上に重ねると観測点の属性のように見えてしまうので、
+                        # 丸の外側（上）にずらして「規制を指す印」だと分かるようにする。
+                        # 選択時は枠が太く半径も+3されるため、その分も見込んでおく。
+                        icon_size=(18, 18),
+                        icon_anchor=(9, 18 + _point_radius(row["max_abs_z"], max_z_for_radius) + 6),
+                    ),
                     tooltip=(
-                        f"<b>{label} に掛かっていた直轄国道の規制</b><br>{lines}<br>"
+                        f"<b>直轄国道の規制</b>（{label} に掛かっていたもの）<br>{lines}<br>"
                         "出典: 熊本河川国道事務所（県ポータルのデータには含まれません）"
                     ),
                 ).add_to(mlit_layer)
@@ -850,7 +871,7 @@ def build_points_feature_group(
             )
         folium.CircleMarker(
             location=[row["point_lat"], row["point_lon"]],
-            radius=(14 + 12 * frac) if is_selected else (11 + 12 * frac),
+            radius=_point_radius(row["max_abs_z"], max_z, is_selected),
             color=border_color,
             weight=4 if is_selected else (2 if no_data else 1),
             dash_array="4,3" if no_data else None,
@@ -1180,17 +1201,17 @@ def main():
                         'background:#f0f0f0;border:2px dashed #777;vertical-align:middle;"></span>'
                         f' 灰色・破線は地震後が欠測で異常度を計算できない（{n_no_data}点）</div>'
                     )
-                # 直轄国道の規制が掛かる観測点には▲を重ねているので、それも書く
-                n_mlit_marks = sum(
-                    1 for _, r in point_summary.iterrows()
-                    if mlit_regulations_for_point(mlit, r.get("point_code"))
+                # ▲は「規制」を指す印なので、観測点の凡例ではなく規制の凡例に置く。
+                # （観測点の丸の近くに描かれるため、観測点の属性と誤解されやすい）
+                n_mlit_shown = sum(
+                    1 for item in (mlit or {}).get("items", [])
+                    if item.get("affected_point_codes")
                 )
-                if n_mlit_marks:
-                    point_legend += (
-                        '<div><span style="display:inline-block;color:#b00000;font-weight:900;'
-                        'vertical-align:middle;">▲</span>'
-                        f' 地図に線を描けない規制（直轄国道）が掛かる観測点（{n_mlit_marks}点）</div>'
-                    )
+                mlit_legend = (
+                    '<div style="width:100%;"><span style="color:#b00000;font-weight:900;">▲</span>'
+                    f' 直轄国道の規制（区間の座標がなく線を描けないもの・{n_mlit_shown}件）。'
+                    '掛かっていた観測点の<b>すぐ上</b>に表示</div>'
+                ) if n_mlit_shown else ""
                 st.markdown(
                     f"""
                     <div style="display:flex; flex-wrap:wrap; gap:6px 14px; align-items:center; font-size:0.85rem; margin:0 0 6px 0;">
@@ -1199,6 +1220,7 @@ def main():
                             <b>×</b> 全面/車両通行止め</div>
                         <div><span style="display:inline-block;width:22px;height:4px;background:#e67e22;vertical-align:middle;"></span>
                             片側交互通行止めなど</div>
+                        {mlit_legend}
                         <div style="width:100%; margin-top:2px;"><b>地震前からの規制（{n_pre}件・工事や過去の災害など）</b></div>
                         <div><span style="display:inline-block;width:22px;height:3px;background:#5b7c99;opacity:0.55;vertical-align:middle;"></span>
                             今回の地震とは無関係</div>
