@@ -26,7 +26,7 @@
 | --- | --- | --- |
 | 常設トラカン5分間交通量 | [JARTIC 交通量オープンデータ](https://www.jartic-open-traffic.org/) | [WFS APIの仕様書(PDF)](https://www.jartic-open-traffic.org/action_method.pdf)に基づき取得。認証・APIキー不要 |
 | 地震情報（震源・マグニチュード・市町村別最大震度） | 気象庁が公開している防災情報JSON (`https://www.jma.go.jp/bosai/quake/data/list.json`) | 公式なAPI仕様として文書化されたものではなく、気象庁ウェブサイトの表示に使われている公開JSONを利用（多くの防災アプリ・サイトで実利用されている形式） |
-| 道路通行規制情報（区間・時間帯・規制理由） | [熊本県防災ポータル](https://portal.bousai.pref.kumamoto.jp/) の公開JSON (`https://portal.bousai.pref.kumamoto.jp/data/traffic/traffic.json`) | 認証不要。始点・終点の座標のみのため、[OSRM](https://project-osrm.org/) の公開デモサーバーで実際の道路網に沿った経路にスナップして地図に表示 |
+| 道路通行規制情報（区間・時間帯・規制理由） | 熊本県「[防災情報くまもと](https://portal.bousai.pref.kumamoto.jp/)」の[通行規制情報](https://portal.bousai.pref.kumamoto.jp/?p=traffic)ページが使う公開JSON (`https://portal.bousai.pref.kumamoto.jp/data/traffic/traffic.json`) | 認証不要。始点・終点の座標のみのため、[OSRM](https://project-osrm.org/) の公開デモサーバーで実際の道路網に沿った経路にスナップして地図に表示 |
 
 ## 手法・注意点
 
@@ -57,7 +57,7 @@ fetch_and_prepare.py   … オフラインのデータ取得・前処理（geopa
   ├─ modules/aggregation.py      … GeoJSON→GeoDataFrame変換
   ├─ modules/earthquake_data.py  … 気象庁地震情報の取得
   ├─ modules/anomaly.py          … 平常時ベースラインとのzスコア計算
-  └─ modules/road_regulations.py … 熊本県防災ポータルの通行規制情報取得＋OSRM道路スナップ
+  └─ modules/road_regulations.py … 「防災情報くまもと」の通行規制情報取得＋OSRM道路スナップ
        ↓ 追記
 data/archive/traffic_raw.parquet  … 恒久アーカイブ（削除・上書きなし）
        ↓ 切り出して生成

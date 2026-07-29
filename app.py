@@ -181,7 +181,7 @@ def build_base_map(
 
         if regulations:
             now = _now_jst()
-            reg_layer = folium.FeatureGroup(name="通行規制情報（熊本県防災ポータル）")
+            reg_layer = folium.FeatureGroup(name="通行規制情報（防災情報くまもと）")
             for reg in regulations:
                 style = _regulation_style(reg, now)
                 ended = _regulation_is_ended(reg, now)
@@ -364,7 +364,7 @@ def main():
     st.caption(
         "[JARTIC交通量オープンデータ](https://www.jartic-open-traffic.org/)（常設トラカン5分値）"
         "と気象庁の地震情報を重ね合わせた簡易異常検知。"
-        "熊本県の道路通行規制情報（熊本県防災ポータル）も合わせて表示しています。"
+        "熊本県の道路通行規制情報（「防災情報くまもと」）も合わせて表示しています。"
     )
 
     data_missing = not os.path.exists(os.path.join(DATA_DIR, "observations.parquet"))
@@ -511,7 +511,8 @@ def main():
                     returned_objects=["last_object_clicked"], key="quake_map_v5",
                 )
                 st.caption(
-                    "通行規制データ: [熊本県防災ポータル](https://portal.bousai.pref.kumamoto.jp/?p=traffic)"
+                    "通行規制データ: 「防災情報くまもと」の"
+                    "[通行規制情報](https://portal.bousai.pref.kumamoto.jp/?p=traffic)ページ"
                     "（[熊本市防災情報ポータル](https://city-kumamoto.my.salesforce-sites.com/)からもリンクあり）。"
                     "始点・終点座標をOSRMで道路網にスナップして表示しています。"
                 )

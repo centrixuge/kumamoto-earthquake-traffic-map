@@ -1,5 +1,5 @@
 """
-熊本県防災ポータルが公開している道路通行規制情報を取得し、
+熊本県の「防災情報くまもと」が公開している道路通行規制情報を取得し、
 OSRMの公開ルーティングAPIで実際の道路網に沿った経路にスナップするモジュール。
 
 出典: https://portal.bousai.pref.kumamoto.jp/ （認証不要の公開JSONエンドポイント）
@@ -15,7 +15,7 @@ OSRM_ROUTE_URL = "https://router.project-osrm.org/route/v1/driving/{lng1},{lat1}
 
 
 def fetch_regulations(timeout: int = 30) -> List[Dict[str, Any]]:
-    """熊本県防災ポータルから通行規制情報の一覧を取得する。"""
+    """「防災情報くまもと」の通行規制情報ページのデータから一覧を取得する。"""
     resp = requests.get(
         TRAFFIC_JSON_URL,
         headers={"User-Agent": "Mozilla/5.0"},

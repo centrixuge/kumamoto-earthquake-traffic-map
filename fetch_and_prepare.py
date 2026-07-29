@@ -10,7 +10,7 @@
 - baseline.parquet     : 平常時（2週間前の同曜日ペア）の交通量データ（同上）
 - observations.parquet : 異常検知結果（zスコア・震源距離など）を結合した観測点×時刻のテーブル
 - quake_info.json      : 本震・主要余震（M4.0以上）の震源・震度情報
-- regulations.json     : 熊本県防災ポータルの道路通行規制情報（OSRMで道路網にスナップ済み）
+- regulations.json     : 「防災情報くまもと」の道路通行規制情報（OSRMで道路網にスナップ済み）
 
 Streamlitアプリ（app.py）はtarget/baseline/observations/quake_info/regulationsだけを
 読み込むため、GDAL依存のgeopandas/shapelyはこのスクリプト側でのみ使用する。
