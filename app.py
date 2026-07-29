@@ -248,19 +248,25 @@ DATA_DICTIONARY = [
 def build_data_dictionary(actual_columns: dict) -> tuple:
     """
     列定義書を1枚の表にする。あわせて、実際のCSVの列と定義が食い違っていないかを
-    検査して警告文を返す（定義書だけが古くなるのを防ぐため）。
+    検査し、その内容を「読んで意味が分かる備考文」として返す。
+
+    食い違いは異常ではなく、次の仕組みで一時的に起こりうる:
+      - 列定義書はアプリのコード内にあり、デプロイした時点で最新になる
+      - CSVの中身は「最後にデータを生成した時点」のもの（6時間ごとの自動実行 or 手動実行）
+    そのため列を追加した直後は、次のデータ生成までの間だけ両者がずれる。
     """
-    rows, warnings = [], []
+    rows = []
+    only_in_dict, only_in_csv = {}, {}
     for fname, dataset, columns in DATA_DICTIONARY:
         documented = [c for c, _, _ in columns]
         actual = actual_columns.get(fname)
         if actual is not None:
-            missing = [c for c in actual if c not in documented]
             stale = [c for c in documented if c not in actual]
-            if missing:
-                warnings.append(f"{fname}: 定義書に未記載の列があります → {', '.join(missing)}")
+            extra = [c for c in actual if c not in documented]
             if stale:
-                warnings.append(f"{fname}: 定義書にあるが実データに無い列があります → {', '.join(stale)}")
+                only_in_dict[fname] = stale
+            if extra:
+                only_in_csv[fname] = extra
         for order, (col, unit, desc) in enumerate(columns, start=1):
             rows.append({
                 "csv_file": fname,
@@ -271,7 +277,38 @@ def build_data_dictionary(actual_columns: dict) -> tuple:
                 "description": desc,
                 "in_actual_csv": (col in actual) if actual is not None else None,
             })
-    return pd.DataFrame(rows), warnings
+
+    notes = []
+    if only_in_dict:
+        detail = "、".join(
+            f"`{f}` の {', '.join(f'`{c}`' for c in cols)}"
+            for f, cols in only_in_dict.items()
+        )
+        notes.append(
+            f"**備考: 定義書に載っているのに、いま配布中のCSVにまだ入っていない列があります**（{detail}）。"
+            "エラーではありません。列定義書はアプリのコードに書かれていてデプロイと同時に新しくなる一方、"
+            "CSVの中身は「最後にデータを生成した時点」のものなので、列を増やした直後は"
+            "次のデータ生成（6時間ごとの自動実行、または `python fetch_and_prepare.py`）が走るまでの間だけ"
+            "両者がずれます。定義書の `in_actual_csv` 列が `False` になっている列がそれです。"
+        )
+        if any("point_code" in cols for cols in only_in_dict.values()):
+            notes.append(
+                "**`point_code` について**: この列は観測点マスタ（`data/stations.json`：常時観測点コードと"
+                "緯度経度の対応表）を使って付けています。マスタが用意される前に生成されたデータには"
+                "この列自体が存在しないため、いったん定義書だけに載る状態になります。"
+                "次のデータ生成でマスタから付与され、CSVにも入ります。"
+                "それまでは `lon` / `lat` の組が観測点の識別子として使えます。"
+            )
+    if only_in_csv:
+        detail = "、".join(
+            f"`{f}` の {', '.join(f'`{c}`' for c in cols)}"
+            for f, cols in only_in_csv.items()
+        )
+        notes.append(
+            f"**備考: CSVに入っているのに、定義書でまだ説明していない列があります**（{detail}）。"
+            "データ側に新しい列が増えて、定義書の更新が追いついていない状態です。"
+        )
+    return pd.DataFrame(rows), notes
 
 
 @st.cache_data(ttl=300)
@@ -958,7 +995,7 @@ def main():
             for _, df, fname, _ in downloads
             if df is not None and not df.empty
         }
-        dict_df, dict_warnings = build_data_dictionary(actual_columns)
+        dict_df, dict_notes = build_data_dictionary(actual_columns)
         st.markdown("**CSVの列定義書（各列の意味・単位）**")
         st.caption(
             f"上記すべてのCSVについて、列の並び順・単位・意味をまとめた表です（{len(dict_df)} 行）。"
@@ -970,9 +1007,10 @@ def main():
             file_name="kumamoto_data_dictionary.csv",
             mime="text/csv", key="dl_dictionary",
         )
-        for w in dict_warnings:
-            # 列定義書と実データがずれたら黙って配らず、画面に出す
-            st.warning(f"列定義書と実データの不一致: {w}")
+        # 定義書と実データのずれは異常ではなく一時的に起こりうるものなので、
+        # 警告色ではなく理由の分かる備考として出す。
+        for note in dict_notes:
+            st.caption(note)
         with st.expander("列定義書をこの画面で見る"):
             st.dataframe(dict_df, use_container_width=True, hide_index=True, height=420)
         st.divider()
