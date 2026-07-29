@@ -934,7 +934,8 @@ def main():
                 st.session_state["selected_points"] = picked
                 st.rerun()
 
-            col_map, col_ts = st.columns([2, 3])
+            # 地図と時系列が近すぎて見分けづらいので、列の間隔を広く取る
+            col_map, col_ts = st.columns([2, 3], gap="large")
 
             with col_map:
                 st.subheader("観測点別の異常度 × 通行規制")
