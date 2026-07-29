@@ -717,51 +717,79 @@ def build_base_map(
             pre_layer.add_to(fmap)
             post_layer.add_to(fmap)
 
-        # 直轄国道の規制。区間の座標が公表されていないので線は描けない。
-        # 該当する観測点の位置に印を置き、その地点に通行止めが掛かっていたことだけを示す。
-        # 区間そのものを表す図形ではないと分かるようレイヤ名にも書いておく。
+        # 直轄国道の規制。PDFは区間を「○○IC〜○○IC」と名前で示すだけで座標が無いが、
+        # 実在する道路区間なので端点のIC座標から線形を復元してある
+        # （scripts/build_mlit_paths.py が path として書き込む）。
+        # 線形を作れなかった規制（キロポストで示された地点など）は、
+        # 掛かっていた観測点が分かる場合だけ▲を置いてフォールバックする。
         mlit_items = (mlit or {}).get("items", [])
-        mlit_marked = 0
-        if mlit_items and not point_summary.empty:
-            mlit_layer = folium.FeatureGroup(name="直轄国道の規制（区間の線なし）")
-            # 観測点の丸は異常度に応じて大きさが変わるので、▲を置く高さも
-            # その半径から決める（固定値だと大きい丸に重なってしまう）。
-            max_z_for_radius = point_summary["max_abs_z"].max()
-            if not (pd.notna(max_z_for_radius) and max_z_for_radius > 0):
-                max_z_for_radius = 1.0
-            for _, row in point_summary.iterrows():
-                hits = mlit_regulations_for_point(mlit, row.get("point_code"))
-                if not hits:
+        mlit_drawn = 0
+        if mlit_items:
+            mlit_layer = folium.FeatureGroup(name="直轄国道の規制")
+            for item in mlit_items:
+                path = item.get("path")
+                if not path:
                     continue
-                label = (point_labels or {}).get(row["point_id"], row["point_id"])
-                lines = "<br>".join(
-                    f"{h['route_name']}（{h['section']}）{h['content']}<br>"
-                    f"{h['start_timestamp']} 〜 {h['end_timestamp'] or '(継続中)'}"
-                    for h in hits
-                )
-                folium.Marker(
-                    location=[row["point_lat"], row["point_lon"]],
-                    icon=folium.DivIcon(
-                        html=(
-                            '<div style="font-size:18px;font-weight:900;color:#b00000;'
-                            'line-height:1;text-shadow:0 0 3px white,0 0 3px white;">▲</div>'
-                        ),
-                        # 観測点の丸の真上に重ねると観測点の属性のように見えてしまうので、
-                        # 丸の外側（上）にずらして「規制を指す印」だと分かるようにする。
-                        # 選択時は枠が太く半径も+3されるため、その分も見込んでおく。
-                        icon_size=(18, 18),
-                        icon_anchor=(9, 18 + _point_radius(row["max_abs_z"], max_z_for_radius) + 6),
-                    ),
+                ended = bool(item.get("end_timestamp"))
+                full = item.get("content") in FULL_CLOSURE_CONTENTS
+                folium.PolyLine(
+                    locations=path,
+                    color="#e60000" if full else "#e67e22",
+                    weight=6 if full else 5,
+                    opacity=0.5 if ended else 0.95,
+                    dash_array="6,8" if ended else None,
                     tooltip=(
-                        f"<b>直轄国道の規制</b>（{label} に掛かっていたもの）<br>{lines}<br>"
-                        "出典: 熊本河川国道事務所（県ポータルのデータには含まれません）"
+                        f"<b>直轄国道の規制</b>（区間の線はOSMのIC座標から復元）<br>"
+                        f"{item['route_name']}（{item['section']}）<br>"
+                        f"<b>{item['content']}／{'解除済み' if ended else '規制中'}</b><br>"
+                        f"{item['start_timestamp']} 〜 {item['end_timestamp'] or '(継続中)'}<br>"
+                        f"出典: 熊本河川国道事務所（県ポータルのデータには含まれません）"
                     ),
                 ).add_to(mlit_layer)
-                mlit_marked += 1
-            if mlit_marked:
+                mlit_drawn += 1
+
+            # 線形が無い規制のフォールバック（掛かっていた観測点の上に▲）
+            if not point_summary.empty:
+                max_z_for_radius = point_summary["max_abs_z"].max()
+                if not (pd.notna(max_z_for_radius) and max_z_for_radius > 0):
+                    max_z_for_radius = 1.0
+                for _, row in point_summary.iterrows():
+                    hits = [
+                        h for h in mlit_regulations_for_point(mlit, row.get("point_code"))
+                        if not h.get("path")
+                    ]
+                    if not hits:
+                        continue
+                    label = (point_labels or {}).get(row["point_id"], row["point_id"])
+                    lines = "<br>".join(
+                        f"{h['route_name']}（{h['section']}）{h['content']}<br>"
+                        f"{h['start_timestamp']} 〜 {h['end_timestamp'] or '(継続中)'}"
+                        for h in hits
+                    )
+                    folium.Marker(
+                        location=[row["point_lat"], row["point_lon"]],
+                        icon=folium.DivIcon(
+                            html=(
+                                '<div style="font-size:18px;font-weight:900;color:#b00000;'
+                                'line-height:1;text-shadow:0 0 3px white,0 0 3px white;">▲</div>'
+                            ),
+                            # 観測点の丸に重ねると観測点の属性のように見えるので外側（上）に置く。
+                            # 選択時は半径が+3されるためその分も見込む。
+                            icon_size=(18, 18),
+                            icon_anchor=(9, 18 + _point_radius(row["max_abs_z"], max_z_for_radius) + 6),
+                        ),
+                        tooltip=(
+                            f"<b>直轄国道の規制</b>（区間の線形が作れないため位置のみ）<br>"
+                            f"{lines}<br>{label} に掛かっていたもの<br>"
+                            "出典: 熊本河川国道事務所（県ポータルのデータには含まれません）"
+                        ),
+                    ).add_to(mlit_layer)
+                    mlit_drawn += 1
+
+            if mlit_drawn:
                 mlit_layer.add_to(fmap)
 
-        if regulations or mlit_marked:
+        if regulations or mlit_drawn:
             folium.LayerControl(collapsed=False).add_to(fmap)
 
         folium.Marker(
@@ -790,16 +818,20 @@ def render_mlit_notice(mlit: dict, point_summary: pd.DataFrame, point_labels: di
         return
     src_name = mlit.get("source_name", "国土交通省")
     src_url = mlit.get("source_url", "")
+    n_line = sum(1 for i in items if i.get("path"))
     with st.expander(
-        f"⚠ 地図に線として描けない規制があります（直轄国道・{len(items)}件）", expanded=False
+        f"⚠ 県のデータに含まれない規制があります（直轄国道・{len(items)}件）", expanded=False
     ):
         st.markdown(
             "熊本県「防災情報くまもと」の通行規制情報は**県・市町村が管理する道路**が対象で、"
             "**国が管理する直轄国道（国道57号など）の規制は含まれません**。"
             "そのため観測点の交通量が0になっていても、地図上にその原因となる規制が出てきません。"
             f"下記は [{src_name}]({src_url}) が公表しているPDFから転記したものです。"
-            "区間の座標は公表されていないため線としては描けず、"
-            "該当する観測点の位置に **▲** の印を置いています（区間そのものを表す図形ではありません）。"
+            f"PDFは区間を「○○IC〜○○IC」と名前で示すだけで座標がありませんが、"
+            f"実在する道路区間なので、端点のICの座標（OpenStreetMap）から"
+            f"道路網に沿った線形を復元して地図に描いています（{n_line}件）。"
+            "キロポストで示された地点のように線形を作れないものは、"
+            "掛かっていた観測点が分かる場合だけその**すぐ上**に **▲** を置いています。"
         )
         code_to_label = {
             str(r["point_code"]): point_labels.get(r["point_id"], r["point_id"])
@@ -825,6 +857,8 @@ def render_mlit_notice(mlit: dict, point_summary: pd.DataFrame, point_labels: di
             )
             # 観測点と規制の対応づけは推測で行わない。根拠（または裏付けが取れな
             # かったこと）をそのまま出して、誤った因果の読み取りを防ぐ。
+            if item.get("path_source"):
+                st.caption(f"区間の線形: {item['path_source']}")
             if item.get("match_basis"):
                 st.caption(f"観測点との対応づけ: {item['match_basis']}")
             st.markdown("---")
@@ -1201,17 +1235,27 @@ def main():
                         'background:#f0f0f0;border:2px dashed #777;vertical-align:middle;"></span>'
                         f' 灰色・破線は地震後が欠測で異常度を計算できない（{n_no_data}点）</div>'
                     )
-                # ▲は「規制」を指す印なので、観測点の凡例ではなく規制の凡例に置く。
-                # （観測点の丸の近くに描かれるため、観測点の属性と誤解されやすい）
-                n_mlit_shown = sum(
-                    1 for item in (mlit or {}).get("items", [])
-                    if item.get("affected_point_codes")
+                # 直轄国道の規制。線形を復元できたものと、できずに位置だけ示すものを分けて書く
+                _mlit_items = (mlit or {}).get("items", [])
+                n_mlit_line = sum(1 for i in _mlit_items if i.get("path"))
+                n_mlit_point = sum(
+                    1 for i in _mlit_items
+                    if not i.get("path") and i.get("affected_point_codes")
                 )
-                mlit_legend = (
-                    '<div style="width:100%;"><span style="color:#b00000;font-weight:900;">▲</span>'
-                    f' 直轄国道の規制（区間の座標がなく線を描けないもの・{n_mlit_shown}件）。'
-                    '掛かっていた観測点の<b>すぐ上</b>に表示</div>'
-                ) if n_mlit_shown else ""
+                mlit_legend = ""
+                if n_mlit_line:
+                    mlit_legend += (
+                        '<div style="width:100%;"><span style="display:inline-block;width:22px;'
+                        'height:0;border-top:5px dashed #e60000;vertical-align:middle;"></span>'
+                        f' 直轄国道の規制（{n_mlit_line}件・別レイヤ）。'
+                        '区間はOSMのIC座標から復元</div>'
+                    )
+                if n_mlit_point:
+                    mlit_legend += (
+                        '<div style="width:100%;"><span style="color:#b00000;font-weight:900;">▲</span>'
+                        f' 直轄国道の規制のうち区間の線形が作れないもの（{n_mlit_point}件）。'
+                        '掛かっていた観測点の<b>すぐ上</b>に表示</div>'
+                    )
                 st.markdown(
                     f"""
                     <div style="display:flex; flex-wrap:wrap; gap:6px 14px; align-items:center; font-size:0.85rem; margin:0 0 6px 0;">
@@ -1256,7 +1300,7 @@ def main():
                     f"**この地図に出てこない規制があります。** ①上記データは県・市町村が管理する道路が対象で、"
                     f"国が管理する直轄国道（国道57号など）の規制は含まれません（"
                     f"[{mlit.get('source_name', '国土交通省')}]({mlit.get('source_url', '')})"
-                    "から転記したものを上の「地図に線として描けない規制があります」に出しています）。"
+                    "から転記したものを別レイヤで描き、上の「県のデータに含まれない規制があります」に一覧を出しています）。"
                     "②規制のアーカイブに記録が残っている最も古い時点は "
                     f"**{regulation_archive_start() or '本震の翌日'}**（本震より後）です。"
                     "それ以前に解除された規制は、県管理道路であっても残っていません。"
