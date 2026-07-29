@@ -575,14 +575,25 @@ def build_base_map(
         folium.TileLayer(
             "OpenStreetMap", name="OpenStreetMap", opacity=0.55, control=False,
         ).add_to(fmap)
-        # 地図の列は幅が限られるので、レイヤ一覧は小さめの文字で1行に収める。
-        # ラベル側に white-space:normal を当てるとチェックボックスとテキストが
-        # 別の行に割れて「切れている」ように見えるので、折り返しはさせない。
+        # st_folium(width=550) は地図divに width:550px を焼き込む。iframe側は
+        # CSSで100%にしているため、列が550pxより狭くなると地図だけが
+        # iframeからあふれ、右端に貼り付くレイヤ一覧が画面外にはみ出す。
+        # 列幅はブラウザの表示倍率で変わる（100%は90%より狭い）ので、
+        # 地図div自体をiframe幅に追従させる。
+        #
+        # あわせてレイヤ一覧の幅にも上限を掛ける。%指定は親が leaflet-top/right の
+        # 隅要素になって地図幅に対して解決しないため、iframeのビューポート幅である
+        # vw を使う（iframe幅＝地図幅）。折り返しはラベルのテキスト部分
+        # （一番内側のspan）だけに許す。labelや外側のspanに white-space:normal を
+        # 当てると、チェックボックスとテキストの間で改行され切れて見えてしまう。
         fmap.get_root().header.add_child(folium.Element(
             "<style>"
-            ".leaflet-control-layers{font-size:12px;}"
-            ".leaflet-control-layers label,"
-            ".leaflet-control-layers label span{white-space:nowrap;}"
+            "#map_div{width:100% !important;}"
+            ".leaflet-control-layers{font-size:12px;max-width:calc(100vw - 28px);}"
+            ".leaflet-control-layers-overlays label,"
+            ".leaflet-control-layers-overlays label>span{white-space:nowrap;}"
+            ".leaflet-control-layers-overlays label>span>span"
+            "{white-space:normal;overflow-wrap:anywhere;}"
             "</style>"
         ))
 
@@ -596,10 +607,8 @@ def build_base_map(
             now = _now_jst()
             quake_at = datetime.fromisoformat(mainshock["occurred_at"]).replace(tzinfo=None)
             # 地震前からの規制を先に描いて、地震起因の規制が上に重なるようにする。
-            # ラベルは短くする（分類の意味は地図上部の凡例で説明しているため、
-            # ここで繰り返すとレイヤ一覧が地図幅を超えてしまう）。
-            post_layer = folium.FeatureGroup(name="地震後の規制")
-            pre_layer = folium.FeatureGroup(name="地震前の規制")
+            post_layer = folium.FeatureGroup(name="通行規制：今回の地震以降に開始")
+            pre_layer = folium.FeatureGroup(name="通行規制：地震前からの規制（工事・過去の災害等）")
             for reg in regulations:
                 is_post = _regulation_is_post_quake(reg, quake_at)
                 style = _regulation_style(reg, now, quake_at)
