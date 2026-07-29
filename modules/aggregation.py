@@ -62,6 +62,9 @@ def create_traffic_geodf(
         )
 
         rows.append({
+            # JARTICの「常時観測点コード」。観測点を一意に識別する公式のIDなので、
+            # lon/latの文字列連結ではなくこれを観測点の識別子として使う。
+            "point_code": prop.get("常時観測点コード"),
             "lon": coords[0],
             "lat": coords[1],
             "datetime": dt,
@@ -81,7 +84,7 @@ def create_traffic_geodf(
     if not rows:
         return gpd.GeoDataFrame(
             columns=[
-                "lon", "lat", "datetime", "traffic_up", "traffic_down",
+                "point_code", "lon", "lat", "datetime", "traffic_up", "traffic_down",
                 "traffic_up_small", "traffic_up_large", "traffic_up_unidentified",
                 "traffic_down_small", "traffic_down_large", "traffic_down_unidentified",
                 "geometry",

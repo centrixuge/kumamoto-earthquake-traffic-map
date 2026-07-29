@@ -54,6 +54,10 @@ from modules.road_regulations import (
     regulation_key,
 )
 from modules.holidays import fetch_holidays
+from modules.stations import (
+    build_station_master, merge_station_master, load_station_master,
+    save_station_master,
+)
 
 ROAD_TYPE = "3"
 TYPE_NAME = "t_travospublic_measure_5m"
@@ -66,6 +70,7 @@ DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
 ARCHIVE_PATH = os.path.join(DATA_DIR, "archive", "traffic_raw.parquet")
 HOURLY_ARCHIVE_PATH = os.path.join(DATA_DIR, "archive", "traffic_hourly.parquet")
 REGULATIONS_ARCHIVE_PATH = os.path.join(DATA_DIR, "archive", "regulations_archive.json")
+STATIONS_PATH = os.path.join(DATA_DIR, "stations.json")
 FETCH_STEP = timedelta(minutes=5)
 HOURLY_FETCH_STEP = timedelta(hours=1)
 
@@ -246,6 +251,20 @@ def main():
     )
     hourly_baseline_stats = compute_baseline_stats(hourly_baseline_df)
 
+    # --- 観測点マスタ（常時観測点コードと緯度経度の対応） ----------------------
+    # アーカイブにはコード列を持たない時期のデータが含まれるため、座標から
+    # コードを引けるマスタを別に保持し、集計時に付け直す。
+    station_master = load_station_master(STATIONS_PATH)
+    for df in (new_target_df, new_baseline_df, new_hourly_target, new_hourly_baseline):
+        station_master = merge_station_master(station_master, build_station_master(df))
+    if not station_master:
+        # 今回の実行で新規取得が無かった場合は、1時点だけ取得してマスタを作る
+        probe_at = datetime(2026, 7, 28, 16, 0)
+        probe = _fetch_period(probe_at, probe_at, "stations-probe", HOURLY_TYPE_NAME)
+        station_master = build_station_master(probe)
+    save_station_master(station_master, STATIONS_PATH)
+    print(f"[stations] {len(station_master)} observation points in master", flush=True)
+
     # 「対象期間内の地震」は本震発生時刻から現在（もしくは復旧期の終端）までの
     # 期間で数える。TARGET_STARTは交通量データの取得開始日（本震の前日）であり、
     # 地震の集計期間とは意味が異なるため別に定義する。
@@ -266,6 +285,7 @@ def main():
         epicenter_lat=mainshock["epicenter_lat"],
         epicenter_lon=mainshock["epicenter_lon"],
         baseline_stats=scale_baseline_stats(hourly_baseline_stats, 1.0 / 12.0),
+        station_master=station_master,
     )
     observations.to_parquet(os.path.join(DATA_DIR, "observations.parquet"))
 
@@ -279,6 +299,7 @@ def main():
         epicenter_lat=mainshock["epicenter_lat"],
         epicenter_lon=mainshock["epicenter_lon"],
         baseline_stats=hourly_baseline_stats,
+        station_master=station_master,
     )
     observations_hourly.to_parquet(os.path.join(DATA_DIR, "observations_hourly.parquet"))
 

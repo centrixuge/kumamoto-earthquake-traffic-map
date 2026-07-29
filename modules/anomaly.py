@@ -11,6 +11,7 @@ import numpy as np
 import pandas as pd
 
 from .earthquake_data import haversine_km
+from .stations import attach_point_code
 
 POINT_DECIMALS = 6  # 観測点を緯度経度で識別する際の丸め桁数
 
@@ -94,6 +95,7 @@ def build_observation_table(
     epicenter_lon: float,
     anomaly_z_threshold: float = 2.0,
     baseline_stats: pd.DataFrame = None,
+    station_master: dict = None,
 ) -> pd.DataFrame:
     """
     対象期間データ・ベースラインデータ・地震情報を結合し、
@@ -130,8 +132,11 @@ def build_observation_table(
         axis=1,
     )
 
+    # JARTICの常時観測点コードを付ける（観測点を指す公式のID）
+    merged = attach_point_code(merged, station_master or {})
+
     cols = [
-        "point_id", "point_lon", "point_lat", "datetime", "hour",
+        "point_code", "point_id", "point_lon", "point_lat", "datetime", "hour",
         "traffic_up", "traffic_down",
         "baseline_mean_up", "baseline_std_up",
         "baseline_mean_down", "baseline_std_down",
@@ -139,6 +144,7 @@ def build_observation_table(
         "is_post_quake", "is_anomaly",
         "distance_km_from_epicenter",
     ]
+    cols = [c for c in cols if c in merged.columns]
     return merged[cols].sort_values(["point_id", "datetime"]).reset_index(drop=True)
 
 

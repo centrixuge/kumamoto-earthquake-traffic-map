@@ -20,6 +20,8 @@ import plotly.graph_objects as go
 import streamlit as st
 from streamlit_folium import st_folium
 
+from modules.stations import attach_point_code, load_station_master
+
 DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
 MAX_SELECTED_POINTS = 2
 SELECTION_COLORS = ["red", "green"]
@@ -87,14 +89,26 @@ def load_regulations() -> list:
 
 
 @st.cache_data(ttl=300)
+def load_station_master_cached() -> dict:
+    """常時観測点コードと緯度経度の対応（fetch_and_prepare.py が生成）。"""
+    return load_station_master(os.path.join(DATA_DIR, "stations.json"))
+
+
+@st.cache_data(ttl=300)
 def load_traffic_archive(filename: str) -> pd.DataFrame:
-    """交通量の恒久アーカイブ（5分値／1時間値）をそのまま読む。"""
+    """
+    交通量の恒久アーカイブ（5分値／1時間値）を読む。
+    アーカイブにはコード列を持たない時期のデータも含まれるので、
+    観測点マスタからJARTICの常時観測点コードを付け直して先頭列に置く。
+    """
     path = os.path.join(DATA_DIR, "archive", filename)
     if not os.path.exists(path):
         return pd.DataFrame()
     df = pd.read_parquet(path)
     df["datetime"] = pd.to_datetime(df["datetime"])
-    return df.sort_values(["datetime", "lon", "lat"]).reset_index(drop=True)
+    df = attach_point_code(df, load_station_master_cached())
+    cols = ["point_code"] + [c for c in df.columns if c != "point_code"]
+    return df[cols].sort_values(["datetime", "point_code"]).reset_index(drop=True)
 
 
 @st.cache_data(ttl=300)
@@ -158,12 +172,19 @@ def to_csv_bytes(df: pd.DataFrame) -> bytes:
 def build_point_summary(post: pd.DataFrame) -> pd.DataFrame:
     if post.empty:
         return pd.DataFrame(columns=[
-            "point_id", "point_lon", "point_lat", "max_abs_z", "n_anomaly", "distance_km",
+            "point_id", "point_code", "point_lon", "point_lat",
+            "max_abs_z", "n_anomaly", "distance_km",
         ])
     summary = (
         post.groupby(["point_id", "point_lon", "point_lat"])
         .apply(
             lambda g: pd.Series({
+                # 常時観測点コードは観測点ごとに一意なので、先頭の値をそのまま採る
+                "point_code": (
+                    g["point_code"].dropna().iloc[0]
+                    if "point_code" in g.columns and g["point_code"].notna().any()
+                    else None
+                ),
                 "max_abs_z": max(g["z_up"].abs().max(), g["z_down"].abs().max()),
                 "n_anomaly": int(g["is_anomaly"].sum()),
                 "distance_km": g["distance_km_from_epicenter"].iloc[0],
@@ -392,13 +413,17 @@ def build_points_feature_group(
 
 def build_point_labels(point_summary: pd.DataFrame) -> dict:
     """
-    観測点IDは "130.688167_32.56558" のような生の緯度経度文字列で読みにくいため、
-    異常度の大きい順に番号を振った短い表示名を作る（セレクタ・地図・グラフ凡例で共用）。
+    観測点の表示名を作る（セレクタ・地図・グラフ凡例で共用）。
+    JARTICの「常時観測点コード」が観測点の公式なIDなので、それをそのまま使う。
+    マスタから引けなかった観測点だけ、緯度経度の連番にフォールバックする。
     """
-    return {
-        row["point_id"]: f"地点{i + 1}"
-        for i, (_, row) in enumerate(point_summary.iterrows())
-    }
+    labels = {}
+    for i, (_, row) in enumerate(point_summary.iterrows()):
+        code = row.get("point_code")
+        labels[row["point_id"]] = (
+            f"観測点 {code}" if code and pd.notna(code) else f"地点{i + 1}（コード不明）"
+        )
+    return labels
 
 
 def _nearest_point_id(lat, lon, point_summary: pd.DataFrame, tol_deg: float = 0.01):
@@ -759,10 +784,11 @@ def main():
             "|zスコア| >= 2 を異常としています。地図の色分けもこの判定に基づきます。"
         )
         display_cols = [
-            "point_id", "datetime", "traffic_up", "traffic_down",
+            "point_code", "point_id", "datetime", "traffic_up", "traffic_down",
             "baseline_mean_up", "baseline_mean_down", "z_up", "z_down",
             "distance_km_from_epicenter",
         ]
+        display_cols = [c for c in display_cols if c in anomalies.columns]
         st.dataframe(anomalies[display_cols], use_container_width=True, height=500)
         st.download_button(
             "CSVダウンロード",
