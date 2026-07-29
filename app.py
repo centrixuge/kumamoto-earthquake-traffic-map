@@ -311,12 +311,12 @@ def render_timeseries(
                 fig.add_trace(go.Scatter(
                     x=pdf["datetime"], y=pdf[mean_col] - pdf[std_col],
                     mode="lines", line=dict(width=0), fill="tonexty",
-                    fillcolor="rgba(100,100,100,0.2)", name="平常時 平均±std",
+                    fillcolor="rgba(100,100,100,0.2)", name="平常時±σ",
                 ))
             fig.add_trace(go.Scatter(
                 x=pdf["datetime"], y=pdf[mean_col],
                 mode="lines", line=dict(color=color, dash="dot", width=1),
-                opacity=0.6, name=f"{mark} 平常時平均",
+                opacity=0.6, name=f"{mark} 平常時",
             ))
             fig.add_trace(go.Scatter(
                 x=pdf["datetime"], y=pdf[direction],
@@ -334,10 +334,12 @@ def render_timeseries(
             font=dict(size=11, color="black"),
         )
         fig.update_layout(
-            height=380,
-            margin=dict(l=10, r=10, t=30, b=10),
+            height=400,
+            # 凡例はグラフ下に置く。上部だとplotlyのモードバー（カメラ・ズーム等の
+            # アイコン）と重なり、幅の狭いモバイルでは折り返して読めなくなるため。
+            margin=dict(l=10, r=10, t=30, b=70),
             legend=dict(
-                orientation="h", yanchor="bottom", y=1.02,
+                orientation="h", yanchor="top", y=-0.28,
                 xanchor="left", x=0, font=dict(size=10),
             ),
             xaxis=dict(tickformat="%m/%d\n%H:%M", range=x_range),
@@ -348,7 +350,8 @@ def render_timeseries(
     st.caption(
         "黒い点線が本震の発生時刻（16:27）、薄いグレーの細い点線がその他の主要な地震"
         f"（震度5弱以上、{len(other_event_times)}件）の発生時刻。"
-        "灰色の帯（1地点選択時のみ）が平常時の平均±標準偏差、点線が平常時平均、実線が実測値。"
+        "灰色の帯（1地点選択時のみ、凡例では「平常時±σ」）が平常時の平均±標準偏差、"
+        "点線が平常時平均、実線が実測値。"
     )
 
 
