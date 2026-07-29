@@ -23,6 +23,8 @@ from streamlit_folium import st_folium
 DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
 MAX_SELECTED_POINTS = 2
 SELECTION_COLORS = ["red", "green"]
+# 時系列図の表示開始時刻（データ保持期間の先頭より後ろにしている）
+TIMESERIES_DISPLAY_START = pd.Timestamp("2026-07-27 12:00")
 
 # 通行規制の日時はJSTの壁時計時刻（naive）で保存されている。Streamlit Cloud等の
 # UTCサーバーでdatetime.now()をそのまま使うと「終了済みか」の判定がずれるため、
@@ -288,6 +290,9 @@ def render_timeseries(
         return
 
     point_labels = point_labels or {}
+    # 地震前日の深夜〜早朝は情報が薄いので、表示は7/27 12:00から始める
+    # （データ自体はTARGET_START=7/27 03:00から保持している）。
+    x_range = [TIMESERIES_DISPLAY_START, observations["datetime"].max()]
 
     for direction, mean_col, std_col, label in [
         ("traffic_up", "baseline_mean_up", "baseline_std_up", "上り"),
@@ -335,7 +340,7 @@ def render_timeseries(
                 orientation="h", yanchor="bottom", y=1.02,
                 xanchor="left", x=0, font=dict(size=10),
             ),
-            xaxis=dict(tickformat="%m/%d\n%H:%M"),
+            xaxis=dict(tickformat="%m/%d\n%H:%M", range=x_range),
         )
         st.markdown(f"**{label}交通量（5分間値）**")
         st.plotly_chart(fig, use_container_width=True)
