@@ -33,16 +33,37 @@ def fetch_earthquake_list(timeout: int = 30) -> List[Dict[str, Any]]:
     return resp.json()
 
 
+def _to_decimal_degrees(raw: str, is_longitude: bool) -> float:
+    """
+    JMAの座標値を10進度に変換する。通常の続報（例: "震源・震度情報"）は
+    "130.7" のような10進度だが、「顕著な地震の震源要素更新のお知らせ」等では
+    "13040.7"（130度40.7分）のような度分（DDMM.m）形式で来ることがある。
+    整数部の桁数（緯度は2桁、経度は3桁を超えるかどうか）で自動判別する。
+    """
+    value = float(raw)
+    int_len = len(str(int(abs(value))))
+    threshold = 4 if is_longitude else 3
+    if int_len < threshold:
+        return value
+    sign = -1.0 if value < 0 else 1.0
+    abs_value = abs(value)
+    minutes = abs_value % 100
+    degrees = (abs_value - minutes) / 100
+    return sign * (degrees + minutes / 60.0)
+
+
 def parse_epicenter(cod: str) -> Tuple[float, float, float]:
     """
-    JMAの'cod'フィールド（例: "+32.6+130.7-10000/"）をパースして
-    (lat, lon, depth_m) を返す。
+    JMAの'cod'フィールド（例: "+32.6+130.7-10000/" や度分形式の
+    "+3237.5+13040.7-16000/"）をパースして (lat, lon, depth_m) を返す。
     """
     m = re.match(r"([+-]\d+\.?\d*)([+-]\d+\.?\d*)([+-]\d+)", cod)
     if not m:
         raise ValueError(f"Unexpected cod format: {cod!r}")
-    lat, lon, depth = m.groups()
-    return float(lat), float(lon), float(depth)
+    lat_raw, lon_raw, depth = m.groups()
+    lat = _to_decimal_degrees(lat_raw, is_longitude=False)
+    lon = _to_decimal_degrees(lon_raw, is_longitude=True)
+    return lat, lon, float(depth)
 
 
 def intensity_to_numeric(maxi: Optional[str]) -> Optional[int]:
@@ -60,6 +81,30 @@ def haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     dlambda = math.radians(lon2 - lon1)
     a = math.sin(dphi / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dlambda / 2) ** 2
     return 2 * r * math.asin(math.sqrt(a))
+
+
+def _merge_revisions(events: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+    """
+    同一eid（地震ID）について複数回配信される続報をeidごとにマージする。
+
+    JMAは大きな地震の後、「顕著な地震の震源要素更新のお知らせ」のような、
+    震度情報（maxi/int）を含まない後続レポートを別途配信することがある。
+    単純に一覧の先頭（最新）や末尾（最古）の1件だけを採用すると、
+    そのレポートには載っていない最大震度などの項目が欠落してしまう。
+    そのため配信時刻の古い順に重ね書きし、各フィールドについて
+    「それまでに得られた最後の非空の値」を採用する。
+    """
+    ordered = sorted(events, key=lambda e: e.get("rdt") or e.get("ctt") or "")
+    merged: Dict[str, Dict[str, Any]] = {}
+    for event in ordered:
+        eid = event.get("eid")
+        if eid is None:
+            continue
+        current = merged.setdefault(eid, {})
+        for k, v in event.items():
+            if v:
+                current[k] = v
+    return merged
 
 
 def _build_quake_info(event: Dict[str, Any]) -> Dict[str, Any]:
@@ -92,26 +137,29 @@ def _build_quake_info(event: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def get_quake_info(eid: str, events: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
-    """指定したeidの地震について、震源・震度情報を取得する。"""
+    """指定したeidの地震について、震源・震度情報を取得する（複数回の続報をマージ済み）。"""
     if events is None:
         events = fetch_earthquake_list()
-    for event in events:
-        if event.get("eid") == eid:
-            return _build_quake_info(event)
-    raise ValueError(f"eid {eid} not found in JMA list.json")
+    merged = _merge_revisions(events)
+    if eid not in merged:
+        raise ValueError(f"eid {eid} not found in JMA list.json")
+    return _build_quake_info(merged[eid])
 
 
 def get_significant_events(
     bbox: Tuple[float, float, float, float],
     start_dt: datetime,
     end_dt: datetime,
-    min_magnitude: float = 4.0,
+    min_intensity: Optional[int] = None,
+    min_magnitude: Optional[float] = None,
     bbox_margin_deg: float = 1.0,
 ) -> List[Dict[str, Any]]:
     """
-    指定した bbox・期間内で発生した、マグニチュード min_magnitude 以上の地震
-    （本震＋主要な余震）を取得する。同一eidが複数回更新されている場合は
-    最初に見つかったものを採用する。
+    指定した bbox・期間内で発生した地震（本震＋主要な余震）を取得する。
+    `min_intensity`（INTENSITY_ORDERの数値尺度、例: 5=震度5弱）を指定すると
+    最大震度で絞り込み、`min_magnitude` を指定するとマグニチュードで絞り込む。
+    両方指定した場合は min_intensity を優先する。同一eidの複数続報は
+    マージ済みの値を使うため、震度情報を含まない後続レポートに引きずられない。
 
     Parameters
     ----------
@@ -119,23 +167,26 @@ def get_significant_events(
     start_dt, end_dt : タイムゾーンなしの datetime（ローカル時刻=JST想定）
     """
     events = fetch_earthquake_list()
+    merged = _merge_revisions(events)
     min_x, min_y, max_x, max_y = bbox
 
-    seen_eids = set()
     results = []
-    for event in events:
-        eid = event.get("eid")
-        if eid is None or eid in seen_eids:
-            continue
-
-        mag_raw = event.get("mag")
-        if mag_raw in (None, ""):
-            continue
-        try:
-            mag = float(mag_raw)
-        except ValueError:
-            continue
-        if mag < min_magnitude:
+    for event in merged.values():
+        if min_intensity is not None:
+            maxi_num = intensity_to_numeric(event.get("maxi"))
+            if maxi_num is None or maxi_num < min_intensity:
+                continue
+        elif min_magnitude is not None:
+            mag_raw = event.get("mag")
+            if mag_raw in (None, ""):
+                continue
+            try:
+                mag = float(mag_raw)
+            except ValueError:
+                continue
+            if mag < min_magnitude:
+                continue
+        else:
             continue
 
         at_raw = event.get("at")
@@ -156,7 +207,6 @@ def get_significant_events(
                 and min_y - bbox_margin_deg <= lat <= max_y + bbox_margin_deg):
             continue
 
-        seen_eids.add(eid)
         results.append(_build_quake_info(event))
 
     results.sort(key=lambda e: e["occurred_at"])

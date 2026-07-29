@@ -350,15 +350,24 @@ def main():
             [point_summary["point_id"].iloc[0]] if not point_summary.empty else []
         )
 
+    INTENSITY_LABELS = {1: "1", 2: "2", 3: "3", 4: "4", 5: "5弱", 6: "5強", 7: "6弱", 8: "6強", 9: "7"}
     n_events = len(quake_info.get("events", []))
+    min_intensity_label = INTENSITY_LABELS.get(quake_info.get("events_min_intensity"), "?")
+    period_start = quake_info.get("events_period_start", "?")
+    period_end = quake_info.get("events_period_end", "?")
+
     info_cols = st.columns(6)
     info_cols[0].metric("マグニチュード", f"M{mainshock['magnitude']}")
-    info_cols[1].metric("最大震度", mainshock["max_intensity"])
+    info_cols[1].metric("最大震度", mainshock["max_intensity"] or "?")
     info_cols[2].metric("震源の深さ", f"{mainshock['depth_km']:.0f} km")
-    info_cols[3].metric("対象期間内の地震(M4.0+)", f"{n_events}件")
+    info_cols[3].metric(f"地震件数(震度{min_intensity_label}+)", f"{n_events}件")
     info_cols[4].write(f"**発生時刻**\n\n{mainshock['occurred_at']}")
     info_cols[5].write(f"**震源地**\n\n{mainshock['epicenter_name']}")
-    st.caption(f"データ生成時刻: {quake_info.get('generated_at', '不明')}")
+    st.caption(
+        f"対象期間: 本震発生（{period_start}）〜 {period_end}"
+        f"（本震から復旧期の終端、または現在時刻のいずれか早い方まで）。"
+        f"データ生成時刻: {quake_info.get('generated_at', '不明')}"
+    )
     st.divider()
 
     tab_overview, tab_corr, tab_list = st.tabs(
@@ -397,9 +406,13 @@ def main():
                     returned_objects=["last_object_clicked"], key="quake_map_v4",
                 )
                 st.caption(
+                    "通行規制データ: [熊本県防災ポータル](https://portal.bousai.pref.kumamoto.jp/?p=traffic)"
+                    "（[熊本市防災情報ポータル](https://city-kumamoto.my.salesforce-sites.com/)からもリンクあり）"
+                )
+                st.caption(
                     "観測点は色が濃いほど地震後の交通量変化（|zスコア|）が大きいことを示す（青系のグラデーション）。"
                     "青いマーカーは震源。クリックした観測点は赤/緑の枠で強調表示されます（最大2地点）。"
-                    "通行規制（熊本県防災ポータル、OSRMで道路網にスナップ）: "
+                    "通行規制（OSRMで道路網にスナップ）: "
                     "赤＋×＝全面/車両通行止め、オレンジ＝片側交互通行止め、"
                     "グレーの破線＝発災後に開始・終了済みの規制。"
                 )

@@ -44,7 +44,7 @@ ROAD_TYPE = "3"
 TYPE_NAME = "t_travospublic_measure_5m"
 BBOX = (130.450, 32.400, 130.900, 32.900)  # 熊本県
 MAINSHOCK_EID = "20260728162718"
-MIN_AFTERSHOCK_MAGNITUDE = 4.0
+MIN_AFTERSHOCK_INTENSITY = 5  # 震度5弱以上（INTENSITY_ORDERの数値尺度）
 
 DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
 ARCHIVE_PATH = os.path.join(DATA_DIR, "archive", "traffic_raw.parquet")
@@ -156,11 +156,15 @@ def main():
     target_df.to_parquet(os.path.join(DATA_DIR, "target.parquet"))
     baseline_df.to_parquet(os.path.join(DATA_DIR, "baseline.parquet"))
 
+    # 「対象期間内の地震」は本震発生時刻から現在（もしくは復旧期の終端）までの
+    # 期間で数える。TARGET_STARTは交通量データの取得開始日（本震の前日）であり、
+    # 地震の集計期間とは意味が異なるため別に定義する。
+    events_period_start = quake_occurred_at.to_pydatetime()
     aftershocks = get_significant_events(
         bbox=BBOX,
-        start_dt=TARGET_START,
+        start_dt=events_period_start,
         end_dt=target_end,
-        min_magnitude=MIN_AFTERSHOCK_MAGNITUDE,
+        min_intensity=MIN_AFTERSHOCK_INTENSITY,
     )
 
     observations = build_observation_table(
@@ -175,6 +179,9 @@ def main():
     quake_info = {
         "mainshock": mainshock,
         "events": aftershocks,
+        "events_min_intensity": MIN_AFTERSHOCK_INTENSITY,
+        "events_period_start": events_period_start.isoformat(),
+        "events_period_end": target_end.isoformat(),
         "generated_at": now.isoformat(),
         "target_start": TARGET_START.isoformat(),
         "target_end": target_end.isoformat(),
