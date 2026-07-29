@@ -10,9 +10,10 @@
 - baseline.parquet     : 平常時（2週間前の同曜日ペア）の交通量データ（同上）
 - observations.parquet : 異常検知結果（zスコア・震源距離など）を結合した観測点×時刻のテーブル
 - quake_info.json      : 本震・主要余震（M4.0以上）の震源・震度情報
+- regulations.json     : 熊本県防災ポータルの道路通行規制情報（OSRMで道路網にスナップ済み）
 
-Streamlitアプリ（app.py）はtarget/baseline/observations/quake_infoだけを読み込むため、
-GDAL依存のgeopandas/shapelyはこのスクリプト側でのみ使用する。
+Streamlitアプリ（app.py）はtarget/baseline/observations/quake_info/regulationsだけを
+読み込むため、GDAL依存のgeopandas/shapelyはこのスクリプト側でのみ使用する。
 """
 import json
 import os
@@ -37,6 +38,7 @@ from modules.api_request_func import fetch_traffic_range
 from modules.aggregation import create_traffic_geodf
 from modules.earthquake_data import get_quake_info, get_significant_events
 from modules.anomaly import build_observation_table
+from modules.road_regulations import fetch_regulations, build_regulation_paths
 
 ROAD_TYPE = "3"
 TYPE_NAME = "t_travospublic_measure_5m"
@@ -180,6 +182,19 @@ def main():
     }
     with open(os.path.join(DATA_DIR, "quake_info.json"), "w", encoding="utf-8") as f:
         json.dump(quake_info, f, ensure_ascii=False, indent=2)
+
+    try:
+        reg_items = fetch_regulations()
+        regulations = build_regulation_paths(reg_items)
+    except Exception as e:  # noqa: BLE001 - 規制情報の取得失敗でパイプライン全体は止めない
+        print(f"[regulations] fetch failed, skipping: {e}", flush=True)
+        regulations = []
+    with open(os.path.join(DATA_DIR, "regulations.json"), "w", encoding="utf-8") as f:
+        json.dump(
+            {"generated_at": now.isoformat(), "items": regulations},
+            f, ensure_ascii=False, indent=2,
+        )
+    print(f"[regulations] saved {len(regulations)} entries", flush=True)
 
     n_anomaly = int(observations["is_anomaly"].sum())
     n_points = observations["point_id"].nunique()

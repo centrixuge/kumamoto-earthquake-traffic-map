@@ -44,6 +44,15 @@ def load_quake_info() -> dict:
 
 
 @st.cache_data(ttl=300)
+def load_regulations() -> list:
+    path = os.path.join(DATA_DIR, "regulations.json")
+    if not os.path.exists(path):
+        return []
+    with open(path, encoding="utf-8") as f:
+        return json.load(f).get("items", [])
+
+
+@st.cache_data(ttl=300)
 def build_point_summary(post: pd.DataFrame) -> pd.DataFrame:
     if post.empty:
         return pd.DataFrame(columns=[
@@ -62,6 +71,18 @@ def build_point_summary(post: pd.DataFrame) -> pd.DataFrame:
         .reset_index()
     )
     return summary.sort_values("max_abs_z", ascending=False).reset_index(drop=True)
+
+
+REGULATION_COLORS = {
+    "全面通行止め": "#c0392b",
+    "車両通行止め": "#c0392b",
+    "片側交互通行止め": "#e67e22",
+    "解除": "#7f8c8d",
+}
+
+
+def _regulation_color(content: str) -> str:
+    return REGULATION_COLORS.get(content, "#7f8c8d")
 
 
 def _severity_color(frac: float) -> str:
@@ -99,6 +120,7 @@ def render_folium_map(
     point_summary: pd.DataFrame,
     mainshock: dict,
     selected_points=(),
+    regulations: list = None,
 ) -> folium.Map:
     """
     決定的idにより、選択状態が変わらない限りHTMLが完全に同一になり
@@ -118,6 +140,29 @@ def render_folium_map(
             [point_summary["point_lat"].max(), point_summary["point_lon"].max()],
         ]
         fmap.fit_bounds(bounds, padding=(40, 40))
+
+        if regulations:
+            reg_layer = folium.FeatureGroup(name="通行規制情報（熊本県防災ポータル）")
+            for reg in regulations:
+                period = reg["start_timestamp"] or "?"
+                if reg["end_timestamp"]:
+                    period += f" 〜 {reg['end_timestamp']}"
+                else:
+                    period += " 〜 (継続中)"
+                folium.PolyLine(
+                    locations=reg["path"],
+                    color=_regulation_color(reg["content"]),
+                    weight=5,
+                    opacity=0.8,
+                    tooltip=(
+                        f"{reg['route_name']}（{reg['region']}）<br>"
+                        f"{reg['content']}｜{reg['reason_type']}"
+                        f"{('・' + reg['reason_detail']) if reg['reason_detail'] else ''}<br>"
+                        f"{period}"
+                    ),
+                ).add_to(reg_layer)
+            reg_layer.add_to(fmap)
+            folium.LayerControl(collapsed=False).add_to(fmap)
 
         max_z = point_summary["max_abs_z"].max()
         max_z = max_z if max_z and max_z > 0 else 1.0
@@ -251,6 +296,7 @@ def main():
 
     observations = load_observations()
     quake_info = load_quake_info()
+    regulations = load_regulations()
     mainshock = quake_info["mainshock"]
     quake_at = pd.Timestamp(mainshock["occurred_at"]).tz_localize(None)
 
@@ -303,14 +349,15 @@ def main():
 
             with col_map:
                 st.subheader("観測点別 異常度")
-                fmap = render_folium_map(point_summary, mainshock, selected_points)
+                fmap = render_folium_map(point_summary, mainshock, selected_points, regulations)
                 map_state = st_folium(
                     fmap, height=750, width=550,
-                    returned_objects=["last_object_clicked"], key="quake_map_v3",
+                    returned_objects=["last_object_clicked"], key="quake_map_v4",
                 )
                 st.caption(
                     "色・大きさが大きいほど地震後の交通量変化（|zスコア|）が大きい観測点。青いマーカーは震源。"
                     "クリックした観測点は赤/緑の枠で強調表示されます（最大2地点）。"
+                    "赤・オレンジの線は熊本県防災ポータルの通行規制情報（OSRMで道路網にスナップ）。"
                 )
 
             clicked = map_state.get("last_object_clicked") if map_state else None
