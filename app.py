@@ -424,11 +424,19 @@ def to_dictionary_xlsx_bytes(dict_df: pd.DataFrame, notes: tuple) -> bytes:
 
 
 @st.cache_data(ttl=300)
-def build_point_summary(post: pd.DataFrame) -> pd.DataFrame:
+def build_point_summary(post: pd.DataFrame, observations: pd.DataFrame = None) -> pd.DataFrame:
+    """
+    観測点ごとの異常度をまとめる。
+
+    地震後の交通量が全て欠測の観測点は max_abs_z が NaN になる（zスコアが
+    定義できない）。これは「異常なし」ではなく「地震後のデータがない」という
+    別の状態なので、地図側で区別して描けるよう last_observed_at（最後に値が
+    あった時刻）も持たせる。実際に地震発生と同時に配信が止まった観測点がある。
+    """
     if post.empty:
         return pd.DataFrame(columns=[
             "point_id", "point_code", "point_lon", "point_lat",
-            "max_abs_z", "n_anomaly", "distance_km",
+            "max_abs_z", "n_anomaly", "distance_km", "last_observed_at",
         ])
     summary = (
         post.groupby(["point_id", "point_lon", "point_lat"])
@@ -448,6 +456,15 @@ def build_point_summary(post: pd.DataFrame) -> pd.DataFrame:
         )
         .reset_index()
     )
+
+    # 最後に値があった時刻は地震前も含めて見る必要があるので observations 全体から求める
+    src = observations if observations is not None and not observations.empty else post
+    has_value = src["traffic_up"].notna() | src["traffic_down"].notna()
+    last_seen = (
+        src.loc[has_value].groupby("point_id")["datetime"].max().rename("last_observed_at")
+    )
+    summary = summary.merge(last_seen, on="point_id", how="left")
+
     return summary.sort_values("max_abs_z", ascending=False).reset_index(drop=True)
 
 
@@ -666,27 +683,42 @@ def build_points_feature_group(
     地図全体の再マウントなしに差し替えられる。
     """
     max_z = point_summary["max_abs_z"].max()
-    max_z = max_z if max_z and max_z > 0 else 1.0
+    max_z = max_z if pd.notna(max_z) and max_z > 0 else 1.0
 
     fg = folium.FeatureGroup(name="観測点")
     for _, row in point_summary.iterrows():
-        frac = row["max_abs_z"] / max_z
+        # 地震後が全て欠測だと zスコアが定義できず max_abs_z が NaN になる。
+        # そのまま半径の計算に入れると NaN になってマーカーが描画されず、
+        # 観測点が地図から消えてしまう（「異常なし」と区別できない）。
+        # 欠測は欠測として、灰色・破線の枠で別に描く。
+        no_data = pd.isna(row["max_abs_z"])
+        frac = 0.0 if no_data else row["max_abs_z"] / max_z
         is_selected = row["point_id"] in selected_points
         sel_idx = list(selected_points).index(row["point_id"]) if is_selected else None
-        border_color = SELECTION_COLORS[sel_idx] if is_selected else "#333333"
+        border_color = SELECTION_COLORS[sel_idx] if is_selected else ("#777777" if no_data else "#333333")
         label = point_labels.get(row["point_id"], row["point_id"])
+        if no_data:
+            last_at = row.get("last_observed_at")
+            # 地図・異常判定は1時間値ベースなので、時刻も1時間値のものだと明示する
+            detail = (
+                f"地震後のデータがありません（欠測）<br>"
+                f"最後に値があった時刻（1時間値）: {last_at:%Y-%m-%d %H:%M}"
+                if pd.notna(last_at) else "地震後のデータがありません（欠測）"
+            )
+        else:
+            detail = (
+                f"最大|zスコア|: {row['max_abs_z']:.2f} / 異常件数: {int(row['n_anomaly'])}"
+            )
         folium.CircleMarker(
             location=[row["point_lat"], row["point_lon"]],
             radius=(14 + 12 * frac) if is_selected else (11 + 12 * frac),
             color=border_color,
-            weight=4 if is_selected else 1,
+            weight=4 if is_selected else (2 if no_data else 1),
+            dash_array="4,3" if no_data else None,
             fill=True,
-            fill_color=_severity_color(frac),
-            fill_opacity=0.85,
-            tooltip=(
-                f"{label}（クリックで時系列に表示/解除）<br>"
-                f"最大|zスコア|: {row['max_abs_z']:.2f} / 異常件数: {int(row['n_anomaly'])}"
-            ),
+            fill_color="#f0f0f0" if no_data else _severity_color(frac),
+            fill_opacity=0.6 if no_data else 0.85,
+            tooltip=f"{label}（クリックで時系列に表示/解除）<br>{detail}",
         ).add_to(fg)
     return fg
 
@@ -860,7 +892,7 @@ def main():
     ]
 
     post = observations[observations["is_post_quake"]]
-    point_summary = build_point_summary(post)
+    point_summary = build_point_summary(post, observations)
 
     if "selected_points" not in st.session_state:
         st.session_state["selected_points"] = (
@@ -974,6 +1006,15 @@ def main():
                     if not _regulation_is_post_quake(r, quake_at)
                     and not _regulation_is_ended(r, _now_jst())
                 )
+                # 地震後が全て欠測の観測点があるときだけ、その凡例を出す
+                n_no_data = int(point_summary["max_abs_z"].isna().sum())
+                no_data_legend = (
+                    '<div style="width:100%; margin-top:2px;">'
+                    f'<b>観測点（{n_no_data}点は地震後のデータなし）</b></div>'
+                    '<div><span style="display:inline-block;width:13px;height:13px;border-radius:50%;'
+                    'background:#f0f0f0;border:2px dashed #777;vertical-align:middle;"></span>'
+                    ' 灰色・破線は欠測で異常度が計算できない観測点</div>'
+                ) if n_no_data else ""
                 st.markdown(
                     f"""
                     <div style="display:flex; flex-wrap:wrap; gap:6px 14px; align-items:center; font-size:0.85rem; margin:0 0 6px 0;">
@@ -987,6 +1028,7 @@ def main():
                             今回の地震とは無関係</div>
                         <div><span style="display:inline-block;width:22px;height:0;border-top:3px dashed #95a5a6;vertical-align:middle;"></span>
                             破線はいずれも解除済み</div>
+                        {no_data_legend}
                     </div>
                     """,
                     unsafe_allow_html=True,
