@@ -10309,10 +10309,351 @@
           "maxi_numeric": 1
         }
       ]
+    },
+    {
+      "eid": "20260729043801",
+      "occurred_at": "2026-07-29T04:38:00+09:00",
+      "epicenter_name": "熊本県熊本地方",
+      "epicenter_lat": 32.6,
+      "epicenter_lon": 130.7,
+      "depth_km": 0.0,
+      "magnitude": 4.1,
+      "max_intensity": "3",
+      "max_intensity_numeric": 3,
+      "municipalities": [
+        {
+          "code": "4310400",
+          "maxi": "3",
+          "maxi_numeric": 3
+        },
+        {
+          "code": "4320200",
+          "maxi": "3",
+          "maxi_numeric": 3
+        },
+        {
+          "code": "4321100",
+          "maxi": "3",
+          "maxi_numeric": 3
+        },
+        {
+          "code": "4321300",
+          "maxi": "3",
+          "maxi_numeric": 3
+        },
+        {
+          "code": "4344400",
+          "maxi": "3",
+          "maxi_numeric": 3
+        },
+        {
+          "code": "4310300",
+          "maxi": "2",
+          "maxi_numeric": 2
+        },
+        {
+          "code": "4320600",
+          "maxi": "2",
+          "maxi_numeric": 2
+        },
+        {
+          "code": "4334800",
+          "maxi": "2",
+          "maxi_numeric": 2
+        },
+        {
+          "code": "4344300",
+          "maxi": "2",
+          "maxi_numeric": 2
+        },
+        {
+          "code": "4310100",
+          "maxi": "1",
+          "maxi_numeric": 1
+        },
+        {
+          "code": "4310200",
+          "maxi": "1",
+          "maxi_numeric": 1
+        },
+        {
+          "code": "4310500",
+          "maxi": "1",
+          "maxi_numeric": 1
+        },
+        {
+          "code": "4320800",
+          "maxi": "1",
+          "maxi_numeric": 1
+        },
+        {
+          "code": "4321000",
+          "maxi": "1",
+          "maxi_numeric": 1
+        },
+        {
+          "code": "4340300",
+          "maxi": "1",
+          "maxi_numeric": 1
+        },
+        {
+          "code": "4343200",
+          "maxi": "1",
+          "maxi_numeric": 1
+        },
+        {
+          "code": "4344100",
+          "maxi": "1",
+          "maxi_numeric": 1
+        },
+        {
+          "code": "4344200",
+          "maxi": "1",
+          "maxi_numeric": 1
+        },
+        {
+          "code": "4344700",
+          "maxi": "1",
+          "maxi_numeric": 1
+        },
+        {
+          "code": "4321200",
+          "maxi": "2",
+          "maxi_numeric": 2
+        },
+        {
+          "code": "4321500",
+          "maxi": "1",
+          "maxi_numeric": 1
+        },
+        {
+          "code": "4348200",
+          "maxi": "1",
+          "maxi_numeric": 1
+        },
+        {
+          "code": "4342800",
+          "maxi": "1",
+          "maxi_numeric": 1
+        },
+        {
+          "code": "4320300",
+          "maxi": "1",
+          "maxi_numeric": 1
+        },
+        {
+          "code": "4350700",
+          "maxi": "1",
+          "maxi_numeric": 1
+        },
+        {
+          "code": "4351100",
+          "maxi": "1",
+          "maxi_numeric": 1
+        },
+        {
+          "code": "4351300",
+          "maxi": "1",
+          "maxi_numeric": 1
+        },
+        {
+          "code": "4020200",
+          "maxi": "1",
+          "maxi_numeric": 1
+        },
+        {
+          "code": "4022900",
+          "maxi": "1",
+          "maxi_numeric": 1
+        },
+        {
+          "code": "4120100",
+          "maxi": "1",
+          "maxi_numeric": 1
+        },
+        {
+          "code": "4220201",
+          "maxi": "1",
+          "maxi_numeric": 1
+        },
+        {
+          "code": "4220100",
+          "maxi": "1",
+          "maxi_numeric": 1
+        },
+        {
+          "code": "4220300",
+          "maxi": "1",
+          "maxi_numeric": 1
+        },
+        {
+          "code": "4221300",
+          "maxi": "1",
+          "maxi_numeric": 1
+        },
+        {
+          "code": "4221400",
+          "maxi": "1",
+          "maxi_numeric": 1
+        },
+        {
+          "code": "4520800",
+          "maxi": "1",
+          "maxi_numeric": 1
+        },
+        {
+          "code": "4543100",
+          "maxi": "1",
+          "maxi_numeric": 1
+        },
+        {
+          "code": "4520500",
+          "maxi": "1",
+          "maxi_numeric": 1
+        },
+        {
+          "code": "4621800",
+          "maxi": "1",
+          "maxi_numeric": 1
+        },
+        {
+          "code": "4640400",
+          "maxi": "1",
+          "maxi_numeric": 1
+        }
+      ]
+    },
+    {
+      "eid": "20260729054918",
+      "occurred_at": "2026-07-29T05:49:00+09:00",
+      "epicenter_name": "熊本県熊本地方",
+      "epicenter_lat": 32.6,
+      "epicenter_lon": 130.7,
+      "depth_km": 0.0,
+      "magnitude": 4.1,
+      "max_intensity": "4",
+      "max_intensity_numeric": 4,
+      "municipalities": [
+        {
+          "code": "4321300",
+          "maxi": "4",
+          "maxi_numeric": 4
+        },
+        {
+          "code": "4334800",
+          "maxi": "3",
+          "maxi_numeric": 3
+        },
+        {
+          "code": "4344400",
+          "maxi": "3",
+          "maxi_numeric": 3
+        },
+        {
+          "code": "4310400",
+          "maxi": "2",
+          "maxi_numeric": 2
+        },
+        {
+          "code": "4320200",
+          "maxi": "2",
+          "maxi_numeric": 2
+        },
+        {
+          "code": "4321100",
+          "maxi": "2",
+          "maxi_numeric": 2
+        },
+        {
+          "code": "4310300",
+          "maxi": "1",
+          "maxi_numeric": 1
+        },
+        {
+          "code": "4344100",
+          "maxi": "1",
+          "maxi_numeric": 1
+        },
+        {
+          "code": "4344300",
+          "maxi": "1",
+          "maxi_numeric": 1
+        },
+        {
+          "code": "4344700",
+          "maxi": "1",
+          "maxi_numeric": 1
+        },
+        {
+          "code": "4320300",
+          "maxi": "1",
+          "maxi_numeric": 1
+        },
+        {
+          "code": "4350500",
+          "maxi": "1",
+          "maxi_numeric": 1
+        },
+        {
+          "code": "4351100",
+          "maxi": "1",
+          "maxi_numeric": 1
+        },
+        {
+          "code": "4351400",
+          "maxi": "1",
+          "maxi_numeric": 1
+        },
+        {
+          "code": "4321200",
+          "maxi": "1",
+          "maxi_numeric": 1
+        },
+        {
+          "code": "4348200",
+          "maxi": "1",
+          "maxi_numeric": 1
+        },
+        {
+          "code": "4221300",
+          "maxi": "1",
+          "maxi_numeric": 1
+        },
+        {
+          "code": "4520800",
+          "maxi": "1",
+          "maxi_numeric": 1
+        },
+        {
+          "code": "4542100",
+          "maxi": "1",
+          "maxi_numeric": 1
+        },
+        {
+          "code": "4543000",
+          "maxi": "1",
+          "maxi_numeric": 1
+        },
+        {
+          "code": "4543100",
+          "maxi": "1",
+          "maxi_numeric": 1
+        },
+        {
+          "code": "4520500",
+          "maxi": "1",
+          "maxi_numeric": 1
+        },
+        {
+          "code": "4621800",
+          "maxi": "1",
+          "maxi_numeric": 1
+        }
+      ]
     }
   ],
-  "generated_at": "2026-07-29T04:04:31.274029",
+  "generated_at": "2026-07-29T10:24:05.422252",
   "target_start": "2026-07-27T03:00:00",
-  "target_end": "2026-07-29T04:04:31.274029",
+  "target_end": "2026-07-29T10:24:05.422252",
   "target_end_cap": "2026-08-11T16:27:00"
 }
