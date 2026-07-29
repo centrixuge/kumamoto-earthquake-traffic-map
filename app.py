@@ -575,13 +575,14 @@ def build_base_map(
         folium.TileLayer(
             "OpenStreetMap", name="OpenStreetMap", opacity=0.55, control=False,
         ).add_to(fmap)
-        # 地図の列は幅が限られるので、レイヤ一覧が地図の外にはみ出さないよう
-        # 幅に上限を付け、長いラベルは折り返す。
+        # 地図の列は幅が限られるので、レイヤ一覧は小さめの文字で1行に収める。
+        # ラベル側に white-space:normal を当てるとチェックボックスとテキストが
+        # 別の行に割れて「切れている」ように見えるので、折り返しはさせない。
         fmap.get_root().header.add_child(folium.Element(
             "<style>"
-            ".leaflet-control-layers{max-width:calc(100% - 24px);font-size:12px;}"
-            ".leaflet-control-layers-list{white-space:normal;}"
-            ".leaflet-control-layers label span{white-space:normal;overflow-wrap:anywhere;}"
+            ".leaflet-control-layers{font-size:12px;}"
+            ".leaflet-control-layers label,"
+            ".leaflet-control-layers label span{white-space:nowrap;}"
             "</style>"
         ))
 
@@ -597,8 +598,8 @@ def build_base_map(
             # 地震前からの規制を先に描いて、地震起因の規制が上に重なるようにする。
             # ラベルは短くする（分類の意味は地図上部の凡例で説明しているため、
             # ここで繰り返すとレイヤ一覧が地図幅を超えてしまう）。
-            post_layer = folium.FeatureGroup(name="規制：地震以降に開始")
-            pre_layer = folium.FeatureGroup(name="規制：地震前から")
+            post_layer = folium.FeatureGroup(name="地震後の規制")
+            pre_layer = folium.FeatureGroup(name="地震前の規制")
             for reg in regulations:
                 is_post = _regulation_is_post_quake(reg, quake_at)
                 style = _regulation_style(reg, now, quake_at)
