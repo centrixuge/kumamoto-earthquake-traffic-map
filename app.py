@@ -99,29 +99,61 @@ def _severity_color(frac: float) -> str:
     return "#{:02x}{:02x}{:02x}".format(*rgb)
 
 
+def _parse_reg_time(value) -> datetime:
+    if not value:
+        return None
+    try:
+        return datetime.strptime(value, "%Y-%m-%d %H:%M:%S")
+    except ValueError:
+        return None
+
+
 def _regulation_is_ended(reg: dict, now: datetime) -> bool:
-    """規制が発災後に開始・終了済み（既に解除済み）かどうかを判定する。"""
+    """規制が既に解除済みかどうかを判定する。"""
     if reg.get("content") == "解除":
         return True
-    end_ts = reg.get("end_timestamp")
-    if not end_ts:
-        return False
-    try:
-        end_dt = datetime.strptime(end_ts, "%Y-%m-%d %H:%M:%S")
-    except ValueError:
+    end_dt = _parse_reg_time(reg.get("end_timestamp"))
+    if end_dt is None:
         return False
     return end_dt < now
 
 
-def _regulation_style(reg: dict, now: datetime) -> dict:
-    """規制の状態（継続中/終了済み）と内容に応じて線の色・破線・×マーカーの要否を決める。"""
-    if _regulation_is_ended(reg, now):
-        return {"color": "#95a5a6", "dash_array": "6,8", "show_x": False}
+def _regulation_is_post_quake(reg: dict, quake_at: datetime) -> bool:
+    """
+    規制の開始日時が本震発生以降かどうか。データには2020年7月豪雨のように
+    今回の地震と無関係な長期規制も多数含まれるため、これで切り分ける。
+    開始日時が読めないものは、地震起因と誤認させない側（=発災前）に寄せる。
+    """
+    start_dt = _parse_reg_time(reg.get("start_timestamp"))
+    if start_dt is None:
+        return False
+    return start_dt >= quake_at
+
+
+def _regulation_style(reg: dict, now: datetime, quake_at: datetime) -> dict:
+    """
+    線のスタイルを決める。色＝規制の区分、破線＝解除済み、で意味を分けている。
+      赤     : 今回の地震以降に始まった全面/車両通行止め（最重要。×印つき）
+      橙     : 今回の地震以降に始まったその他の規制（片側交互通行止めなど）
+      青灰色 : 地震前から続く規制（工事・過去の災害など。今回の地震とは無関係）
+    """
+    ended = _regulation_is_ended(reg, now)
+    dash = "6,8" if ended else None
+
+    if not _regulation_is_post_quake(reg, quake_at):
+        return {
+            "color": "#5b7c99", "dash_array": dash, "show_x": False,
+            "weight": 3, "opacity": 0.35 if ended else 0.55,
+        }
     if reg.get("content") in FULL_CLOSURE_CONTENTS:
-        return {"color": "#e60000", "dash_array": None, "show_x": True}
-    if reg.get("content") == "片側交互通行止め":
-        return {"color": "#e67e22", "dash_array": None, "show_x": False}
-    return {"color": "#95a5a6", "dash_array": "6,8", "show_x": False}
+        return {
+            "color": "#e60000", "dash_array": dash, "show_x": not ended,
+            "weight": 6, "opacity": 0.5 if ended else 0.95,
+        }
+    return {
+        "color": "#e67e22", "dash_array": dash, "show_x": False,
+        "weight": 5, "opacity": 0.5 if ended else 0.9,
+    }
 
 
 @contextmanager
@@ -181,26 +213,32 @@ def build_base_map(
 
         if regulations:
             now = _now_jst()
-            reg_layer = folium.FeatureGroup(name="通行規制情報（防災情報くまもと）")
+            quake_at = datetime.fromisoformat(mainshock["occurred_at"]).replace(tzinfo=None)
+            # 地震前からの規制を先に描いて、地震起因の規制が上に重なるようにする。
+            post_layer = folium.FeatureGroup(name="通行規制：今回の地震以降に開始")
+            pre_layer = folium.FeatureGroup(name="通行規制：地震前からの規制（工事・過去の災害等）")
             for reg in regulations:
-                style = _regulation_style(reg, now)
+                is_post = _regulation_is_post_quake(reg, quake_at)
+                style = _regulation_style(reg, now, quake_at)
                 ended = _regulation_is_ended(reg, now)
                 period = reg["start_timestamp"] or "?"
                 period += f" 〜 {reg['end_timestamp']}" if ended and reg["end_timestamp"] else " 〜 (継続中)"
-                status_label = "解除済み" if ended else "規制中"
+                target = post_layer if is_post else pre_layer
                 folium.PolyLine(
                     locations=reg["path"],
                     color=style["color"],
-                    weight=5,
-                    opacity=0.5 if ended else 0.85,
+                    weight=style["weight"],
+                    opacity=style["opacity"],
                     dash_array=style["dash_array"],
                     tooltip=(
-                        f"{reg['route_name']}（{reg['region']}）｜{status_label}<br>"
+                        f"{reg['route_name']}（{reg['region']}）<br>"
+                        f"<b>{'今回の地震以降に開始' if is_post else '地震前からの規制'}"
+                        f"／{'解除済み' if ended else '規制中'}</b><br>"
                         f"{reg['content']}｜{reg['reason_type']}"
                         f"{('・' + reg['reason_detail']) if reg['reason_detail'] else ''}<br>"
                         f"{period}"
                     ),
-                ).add_to(reg_layer)
+                ).add_to(target)
                 if style["show_x"]:
                     mid = reg["path"][len(reg["path"]) // 2]
                     folium.Marker(
@@ -209,8 +247,9 @@ def build_base_map(
                             '<div style="font-size:22px;font-weight:900;color:#e60000;'
                             'line-height:1;text-shadow:0 0 2px white,0 0 2px white;">×</div>'
                         )),
-                    ).add_to(reg_layer)
-            reg_layer.add_to(fmap)
+                    ).add_to(target)
+            pre_layer.add_to(fmap)
+            post_layer.add_to(fmap)
             folium.LayerControl(collapsed=False).add_to(fmap)
 
         folium.Marker(
@@ -514,15 +553,29 @@ def main():
 
             with col_map:
                 st.subheader("観測点別 異常度")
+                n_post = sum(
+                    1 for r in regulations
+                    if _regulation_is_post_quake(r, quake_at)
+                    and not _regulation_is_ended(r, _now_jst())
+                )
+                n_pre = sum(
+                    1 for r in regulations
+                    if not _regulation_is_post_quake(r, quake_at)
+                    and not _regulation_is_ended(r, _now_jst())
+                )
                 st.markdown(
-                    """
-                    <div style="display:flex; flex-wrap:wrap; gap:14px; align-items:center; font-size:0.85rem; margin:0 0 6px 0;">
-                        <div><span style="display:inline-block;width:22px;height:4px;background:#e60000;vertical-align:middle;"></span>
-                            <b>×</b> 全面/車両通行止め（現行）</div>
+                    f"""
+                    <div style="display:flex; flex-wrap:wrap; gap:6px 14px; align-items:center; font-size:0.85rem; margin:0 0 6px 0;">
+                        <div style="width:100%;"><b>今回の地震以降に始まった規制（{n_post}件）</b></div>
+                        <div><span style="display:inline-block;width:22px;height:5px;background:#e60000;vertical-align:middle;"></span>
+                            <b>×</b> 全面/車両通行止め</div>
                         <div><span style="display:inline-block;width:22px;height:4px;background:#e67e22;vertical-align:middle;"></span>
-                            片側交互通行止め（現行）</div>
+                            片側交互通行止めなど</div>
+                        <div style="width:100%; margin-top:2px;"><b>地震前からの規制（{n_pre}件・工事や過去の災害など）</b></div>
+                        <div><span style="display:inline-block;width:22px;height:3px;background:#5b7c99;opacity:0.55;vertical-align:middle;"></span>
+                            今回の地震とは無関係</div>
                         <div><span style="display:inline-block;width:22px;height:0;border-top:3px dashed #95a5a6;vertical-align:middle;"></span>
-                            発災後に開始・終了済みの規制</div>
+                            破線はいずれも解除済み</div>
                     </div>
                     """,
                     unsafe_allow_html=True,
@@ -541,6 +594,9 @@ def main():
                     "[通行規制情報](https://portal.bousai.pref.kumamoto.jp/?p=traffic)ページ"
                     "（[熊本市防災情報ポータル](https://city-kumamoto.my.salesforce-sites.com/)からもリンクあり）。"
                     "始点・終点座標をOSRMで道路網にスナップして表示しています。"
+                    "元データには2020年7月豪雨など今回の地震と無関係な長期規制も含まれるため、"
+                    "規制の開始日時が本震（16:27）以降かどうかで色分けし、"
+                    "地図右上のチェックボックスで種別ごとに表示を切り替えられます。"
                 )
                 st.caption(
                     "観測点は色が濃いほど地震後の交通量変化（|zスコア|）が大きいことを示す（青系のグラデーション）。"
