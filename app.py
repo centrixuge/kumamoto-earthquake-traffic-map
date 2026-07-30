@@ -1441,6 +1441,46 @@ def main():
             ),
         ]
 
+        # --- データセット一覧（表形式）---
+        # 以前は列定義書を先に置いていたが、「上記すべてのCSV」と書いても
+        # その時点でどんなCSVがあるか示されていなかった。先に一覧を出す。
+        sheet_of = {fname: sheet for fname, sheet, _, _ in DATA_DICTIONARY}
+        col_w = [2.4, 3.8, 1.9, 1.7]
+        head = st.columns(col_w)
+        for col, label in zip(head, ["データセット", "内容", "規模", "ダウンロード"]):
+            col.markdown(f"<div style='font-weight:600;font-size:0.85rem;'>{label}</div>",
+                         unsafe_allow_html=True)
+        st.markdown(
+            "<hr style='margin:2px 0 6px 0;border:none;border-top:1px solid #ccc;'>",
+            unsafe_allow_html=True,
+        )
+        for title, df, fname, desc in downloads:
+            c1, c2, c3, c4 = st.columns(col_w)
+            with c1:
+                st.markdown(f"**{title}**")
+                st.caption(f"`{fname}`  \n列定義書のシート: **{sheet_of.get(fname, '—')}**")
+            c2.caption(desc)
+            if df is None or df.empty:
+                c3.caption("まだデータがありません")
+                c4.button("CSV", disabled=True, key=f"dl_{fname}_disabled")
+            else:
+                csv_bytes = to_csv_bytes(df)
+                scale = f"{len(df):,} 行 / {len(csv_bytes) / 1024:,.0f} KB"
+                if "datetime" in df.columns:
+                    scale += (
+                        f"  \n期間: {df['datetime'].min():%Y-%m-%d %H:%M}"
+                        f" 〜 {df['datetime'].max():%Y-%m-%d %H:%M}"
+                    )
+                c3.caption(scale)
+                c4.download_button(
+                    "CSV", csv_bytes, file_name=fname, mime="text/csv",
+                    key=f"dl_{fname}", use_container_width=True,
+                )
+            st.markdown(
+                "<hr style='margin:4px 0;border:none;border-top:1px solid #eee;'>",
+                unsafe_allow_html=True,
+            )
+
         # --- 列定義書（データディクショナリ） ---
         actual_columns = {
             fname: list(df.columns)
@@ -1450,8 +1490,9 @@ def main():
         dict_df, dict_notes = build_data_dictionary(actual_columns)
         st.markdown("**CSVの列定義書（各列の意味・単位）**")
         st.caption(
-            f"上記すべてのCSVについて、列の並び順・単位・意味をまとめたExcelブックです"
-            f"（データセットごとにシートを分けた全{len(DATA_DICTIONARY)}シート＋目次「はじめに」／計{len(dict_df)}列の定義）。"
+            f"上の表の{len(DATA_DICTIONARY)}つのCSVについて、列の並び順・単位・意味をまとめたExcelブックです"
+            f"（1シート＝1データセットの全{len(DATA_DICTIONARY)}シート＋目次「はじめに」／計{len(dict_df)}列の定義）。"
+            "シート名は上の表の「列定義書のシート」と対応します。"
             "データを受け取った人が中身を解釈できるよう、CSVと一緒に配布してください。"
         )
         st.download_button(
@@ -1483,22 +1524,6 @@ def main():
                         use_container_width=True, hide_index=True,
                     )
         st.divider()
-
-        for title, df, fname, desc in downloads:
-            st.markdown(f"**{title}**")
-            if df is None or df.empty:
-                st.caption(f"{desc}（まだデータがありません）")
-                continue
-            csv_bytes = to_csv_bytes(df)
-            period = ""
-            if "datetime" in df.columns:
-                period = f"｜期間: {df['datetime'].min()} 〜 {df['datetime'].max()}"
-            st.caption(f"{desc}｜{len(df):,} 行 / {len(csv_bytes)/1024:,.0f} KB{period}")
-            st.download_button(
-                f"CSVをダウンロード（{fname}）",
-                csv_bytes, file_name=fname, mime="text/csv", key=f"dl_{fname}",
-            )
-            st.divider()
 
         st.caption(
             "出典を明記してご利用ください: 交通量は"
