@@ -663,6 +663,9 @@ def build_base_map(
         fmap.get_root().header.add_child(folium.Element(
             "<style>"
             "#map_div{width:100% !important;}"
+            # 通行止めの×は目印だけなのでクリックを透過させ、下にある
+            # 観測点マーカーを確実にクリックできるようにする。
+            ".reg-x-mark{pointer-events:none !important;}"
             ".leaflet-control-layers{font-size:12px;max-width:calc(100vw - 28px);}"
             ".leaflet-control-layers-overlays label,"
             ".leaflet-control-layers-overlays label>span{white-space:nowrap;}"
@@ -709,10 +712,18 @@ def build_base_map(
                     mid = reg["path"][len(reg["path"]) // 2]
                     folium.Marker(
                         location=mid,
-                        icon=folium.DivIcon(html=(
-                            '<div style="font-size:22px;font-weight:900;color:#e60000;'
-                            'line-height:1;text-shadow:0 0 2px white,0 0 2px white;">×</div>'
-                        )),
+                        # ×はただの目印で、ツールチップもポップアップも持たない。
+                        # マーカーはmarkerPane(z600)にあり観測点の円(overlayPane z400)より
+                        # 上に来るため、そのままだと観測点クリックを横取りしてしまう
+                        # （クリックが×に当たると、その座標が返るだけで観測点が選ばれない）。
+                        # クリックを透過させるクラスを付ける。
+                        icon=folium.DivIcon(
+                            html=(
+                                '<div style="font-size:22px;font-weight:900;color:#e60000;'
+                                'line-height:1;text-shadow:0 0 2px white,0 0 2px white;">×</div>'
+                            ),
+                            class_name="reg-x-mark",
+                        ),
                     ).add_to(target)
             pre_layer.add_to(fmap)
             post_layer.add_to(fmap)
@@ -1330,7 +1341,12 @@ def main():
                 map_state = st_folium(
                     base_map, height=750, width=550,
                     feature_group_to_add=points_fg,
-                    returned_objects=["last_object_clicked"], key="quake_map_v6",
+                    # last_object_clicked だけだと、クリックが通行規制の線や×に
+                    # 当たったときにその座標が返ってきて観測点が選べない。
+                    # 地図そのもののクリック位置(last_clicked)も受け取って、
+                    # どちらかが観測点の近くならその観測点を選ぶようにする。
+                    returned_objects=["last_object_clicked", "last_clicked"],
+                    key="quake_map_v7",
                 )
                 render_mlit_notice(mlit, point_summary, point_labels)
                 st.caption(
@@ -1355,17 +1371,46 @@ def main():
                     "観測点は色が濃いほど地震後の交通量変化（|zスコア|）が大きいことを示す（青系のグラデーション）。"
                     "地点番号は異常度の大きい順。青いマーカーは震源。"
                     "選択中の観測点は赤/緑の枠で強調表示されます（最大2地点）。"
-                    "地図のマーカークリックでも選択できますが、反映に数秒かかり、"
-                    "同じマーカーを続けてクリックしても反応しません（上のセレクタの利用を推奨）。"
+                    "地図のマーカークリックでも選択できます（反映に1〜2秒かかります）。"
+                    "マーカーの上でなくても、近くをクリックすれば最も近い観測点が選ばれます。"
+                    "すぐに切り替えたいときは上のプルダウンが速いです。"
                 )
 
-            clicked = map_state.get("last_object_clicked") if map_state else None
-            if clicked:
-                coords = (round(clicked["lat"], 6), round(clicked["lng"], 6))
-                if coords != st.session_state.get("_last_click_coords"):
-                    st.session_state["_last_click_coords"] = coords
-                    pid = _nearest_point_id(clicked["lat"], clicked["lng"], point_summary)
-                    if pid is not None:
+            # クリック位置の候補を2つ見る。
+            #   last_object_clicked … クリックが当たった図形の座標。観測点マーカーに
+            #                         当たれば正確だが、通行規制の線や×に当たると
+            #                         そちらの座標になる
+            #   last_clicked        … 地図そのものをクリックした座標。図形に当たっても
+            #                         地図のclickイベントは発生するので、横取りされた
+            #                         ときの受け皿になる
+            # 観測点に近い方を採用する。どちらも遠ければ「観測点以外を押した」と扱う。
+            candidates = []
+            if map_state:
+                for key in ("last_object_clicked", "last_clicked"):
+                    c = map_state.get(key)
+                    if c and c.get("lat") is not None and c.get("lng") is not None:
+                        candidates.append((key, float(c["lat"]), float(c["lng"])))
+            best = None
+            for key, lat, lng in candidates:
+                pid = _nearest_point_id(lat, lng, point_summary)
+                if pid is None:
+                    continue
+                row = point_summary[point_summary["point_id"] == pid].iloc[0]
+                d = ((row["point_lat"] - lat) ** 2 + (row["point_lon"] - lng) ** 2) ** 0.5
+                if best is None or d < best[0]:
+                    best = (d, pid, key, lat, lng)
+
+            if candidates:
+                # 同じ図形を続けてクリックしても last_object_clicked は変わらないが、
+                # last_clicked はピクセル単位で変わるので、両方を鍵にすると
+                # 「同じマーカーを2回押しても反応しない」も起きにくくなる。
+                fingerprint = tuple(
+                    (key, round(lat, 6), round(lng, 6)) for key, lat, lng in candidates
+                )
+                if fingerprint != st.session_state.get("_last_click_fingerprint"):
+                    st.session_state["_last_click_fingerprint"] = fingerprint
+                    if best is not None:
+                        pid = best[1]
                         selected = list(st.session_state["selected_points"])
                         if pid in selected:
                             selected.remove(pid)
@@ -1374,9 +1419,18 @@ def main():
                                 selected.pop(0)
                             selected.append(pid)
                         st.session_state["selected_points"] = selected
+                        st.session_state["_click_miss"] = None
                         # セレクタ側のウィジェット状態は古くなるので、キーを変えて作り直す
                         st.session_state["_sel_version"] = sel_version + 1
                         st.rerun()
+                    else:
+                        # 押しても何も起きない状態を黙って放置しないで理由を出す
+                        st.session_state["_click_miss"] = (
+                            "観測点から離れた場所がクリックされたため、選択は変わっていません。"
+                            "丸いマーカーの上でクリックするか、上のプルダウンから選んでください。"
+                        )
+            if st.session_state.get("_click_miss"):
+                st.caption(f"⚠ {st.session_state['_click_miss']}")
 
             with col_ts:
                 st.subheader("選択観測点の時系列（平常時 vs 観測実績）")
