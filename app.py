@@ -1053,14 +1053,16 @@ def render_timeseries(
         # 線として出ないため、交通量が0になっている理由が図から読めなくなる。
         # 該当観測点を選んだときだけ、期間を帯で示す。
         for band in mlit_bands:
+            # 帯は灰色にする。選択中の観測点は赤/緑で描いているので、帯を赤系にすると
+            # 緑で選ばれた地点の通行止めが赤帯の上に乗って読みづらくなる。
             fig.add_vrect(
                 x0=band["start"], x1=band["end"],
-                fillcolor="rgba(230,0,0,0.10)", line_width=0, layer="below",
+                fillcolor="rgba(110,115,120,0.16)", line_width=0, layer="below",
             )
             fig.add_annotation(
                 x=band["start"], y=0.97, yref="paper", xanchor="left", yanchor="top",
                 text=band["label"], showarrow=False, align="left",
-                font=dict(size=9, color="#b00000"),
+                font=dict(size=9, color="#4a4f55"),
                 bgcolor="rgba(255,255,255,0.75)",
             )
         for t in other_event_times:
@@ -1111,6 +1113,15 @@ def main():
         ".dash-title { font-size:1.55rem; font-weight:700; line-height:1.3; margin:0 0 2px 0; }"
         ".dash-lead  { font-size:0.92rem; line-height:1.5; margin:0 0 6px 0; }"
         ".dash-src   { font-size:0.78rem; color:#5b6570; line-height:1.5; margin:0; }"
+        # 粒度のラジオを画面に貼り付けておく。地図上で観測点を選び直すたびに
+        # スクロール位置がラジオより下になり、粒度を変えるのに戻る必要があったため。
+        # スクロールしているのは section.main（overflow:auto）なので、その中で
+        # sticky が効く。標準ヘッダー（高さ60px・position:fixed）に隠れないよう
+        # top を少し下げる。
+        '[data-testid="stRadio"]{position:sticky;top:3.8rem;z-index:5;'
+        "padding:4px 0 6px 0;background-color:var(--background-color,#ffffff);}"
+        "@media (prefers-color-scheme: dark){"
+        '[data-testid="stRadio"]{background-color:var(--background-color,#0e1117);}}'
         "</style>",
         unsafe_allow_html=True,
     )
