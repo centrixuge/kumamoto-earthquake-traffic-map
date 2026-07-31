@@ -1070,14 +1070,26 @@ def render_timeseries(
 
 def main():
     st.markdown(
-        '<style>iframe[title="streamlit_folium.st_folium"] { width: 100% !important; }</style>',
+        "<style>"
+        'iframe[title="streamlit_folium.st_folium"] { width: 100% !important; }'
+        # 本題（地図・時系列・異常検知）が早く視界に入るよう、上部の余白を詰める
+        ".stMainBlockContainer, .block-container { padding-top: 2.2rem !important; }"
+        # 見出しは既定だと大きすぎて、それだけで1画面を使ってしまう
+        ".dash-title { font-size:1.55rem; font-weight:700; line-height:1.3; margin:0 0 2px 0; }"
+        ".dash-lead  { font-size:0.92rem; line-height:1.5; margin:0 0 6px 0; }"
+        ".dash-src   { font-size:0.78rem; color:#5b6570; line-height:1.5; margin:0; }"
+        "</style>",
         unsafe_allow_html=True,
     )
-    st.title("熊本地震（2026-07-28）交通行動変容ダッシュボード")
-    st.caption(
-        "[JARTIC交通量オープンデータ](https://www.jartic-open-traffic.org/)（常設トラカン5分値）"
-        "と気象庁の地震情報を重ね合わせた簡易異常検知。"
-        "熊本県の道路通行規制情報（「防災情報くまもと」）も合わせて表示しています。"
+    st.markdown(
+        '<div class="dash-title">熊本地震（2026-07-28）交通行動変容ダッシュボード</div>'
+        '<div class="dash-lead">'
+        '<b><a href="https://www.jartic-open-traffic.org/" target="_blank">'
+        'JARTIC 交通量オープンデータ</a></b> の常設トラカン交通量（5分間値・1時間値）を主データに、'
+        '平常時と比べて交通量がどれだけ外れたかを観測点ごとに可視化しています。'
+        '地震情報と通行規制を重ね合わせ、変化の背景を追えるようにしています。'
+        "</div>",
+        unsafe_allow_html=True,
     )
 
     data_missing = not os.path.exists(os.path.join(DATA_DIR, "observations.parquet"))
@@ -1115,47 +1127,71 @@ def main():
     period_start = quake_info.get("events_period_start", "?")
     period_end = quake_info.get("events_period_end", "?")
 
-    info_cols = st.columns(6)
+    # 交通量データが主題なので、地震の諸元だけでなくデータの規模も並べる。
+    # 震源の深さ・発生時刻・震源地は下の地震一覧に入っているので出さない。
+    raw_5min = load_traffic_archive("traffic_raw.parquet")
+    info_cols = st.columns(5)
     info_cols[0].metric("マグニチュード", f"M{mainshock['magnitude']}")
     info_cols[1].metric("最大震度", mainshock["max_intensity"] or "?")
-    info_cols[2].metric("震源の深さ", f"{mainshock['depth_km']:.0f} km")
-    info_cols[3].metric(f"地震件数(震度{min_intensity_label}+)", f"{n_events}件")
-    info_cols[4].write(f"**発生時刻**\n\n{mainshock['occurred_at']}")
-    info_cols[5].write(f"**震源地**\n\n{mainshock['epicenter_name']}")
-    st.caption(
-        f"対象期間: 本震発生（{period_start}）〜 {period_end}"
-        f"（本震から復旧期の終端、または現在時刻のいずれか早い方まで）。"
-        f"データ生成時刻: {quake_info.get('generated_at', '不明')}"
+    info_cols[2].metric("常時観測点", f"{len(point_summary)} 点")
+    info_cols[3].metric(
+        "取得済み5分間値",
+        f"{len(raw_5min):,} 件" if not raw_5min.empty else "—",
+    )
+    info_cols[4].metric("検知した異常", f"{int(observations['is_anomaly'].sum())} 件")
+
+    archive_period = ""
+    if not raw_5min.empty and "datetime" in raw_5min.columns:
+        archive_period = (
+            f"交通量アーカイブ: {raw_5min['datetime'].min():%Y-%m-%d %H:%M}"
+            f" 〜 {raw_5min['datetime'].max():%Y-%m-%d %H:%M}　｜　"
+        )
+    st.markdown(
+        '<div class="dash-src">'
+        f"{archive_period}"
+        f"異常検知の対象期間: 本震（{period_start}）〜 {period_end}"
+        f"（本震+2週間または現在時刻の早い方）　｜　"
+        f"データ生成: {quake_info.get('generated_at', '不明')}<br>"
+        "データ源: "
+        '<a href="https://www.jartic-open-traffic.org/" target="_blank">JARTIC 交通量オープンデータ</a>'
+        ' ／ <a href="https://www.jma.go.jp/jma/menu/20260728_kumamoto_jishin.html" target="_blank">気象庁</a>'
+        ' ／ <a href="https://portal.bousai.pref.kumamoto.jp/?p=traffic" target="_blank">防災情報くまもと（通行規制情報）</a>'
+        ' ／ <a href="https://www.qsr.mlit.go.jp/kumamoto/" target="_blank">熊本河川国道事務所（直轄国道の規制）</a>'
+        "</div>",
+        unsafe_allow_html=True,
     )
 
     MAXI_DISPLAY = {
         "1": "1", "2": "2", "3": "3", "4": "4",
         "5-": "5弱", "5+": "5強", "6-": "6弱", "6+": "6強", "7": "7",
     }
-    st.markdown(f"##### 最大震度{min_intensity_label}以上を観測した地震の発生状況")
-    events_rows = []
-    for e in quake_info.get("events", []):
-        dt = datetime.fromisoformat(e["occurred_at"])
-        events_rows.append({
-            "発生時刻": dt.strftime("%Y年%m月%d日%H時%M分"),
-            "震央地名": e["epicenter_name"],
-            "マグニチュード": e["magnitude"],
-            "最大震度": MAXI_DISPLAY.get(e["max_intensity"], e["max_intensity"] or "-"),
-            "震度": f"https://www.jma.go.jp/bosai/map.html#&contents=estimated_intensity_map&id={dt.strftime('%Y%m%d%H%M')}",
-        })
-    st.dataframe(
-        pd.DataFrame(events_rows),
-        hide_index=True,
-        use_container_width=True,
-        column_config={
-            "震度": st.column_config.LinkColumn("震度", display_text="推計震度分布図"),
-        },
-    )
-    st.caption(
-        "出典: [気象庁](https://www.jma.go.jp/jma/menu/20260728_kumamoto_jishin.html)。"
-        "推計震度分布図は地震発生直後に発表されたもの（発表がない地震ではリンク先に情報がない場合があります）。"
-    )
-    st.divider()
+    # 地震一覧は参照用なので折りたたむ（開いたままだと本題が画面の下に押し出される）
+    with st.expander(
+        f"最大震度{min_intensity_label}以上を観測した地震の一覧（{n_events}件）"
+        f"・震源の深さ {mainshock['depth_km']:.0f}km／震源地 {mainshock['epicenter_name']}"
+    ):
+        events_rows = []
+        for e in quake_info.get("events", []):
+            dt = datetime.fromisoformat(e["occurred_at"])
+            events_rows.append({
+                "発生時刻": dt.strftime("%Y年%m月%d日%H時%M分"),
+                "震央地名": e["epicenter_name"],
+                "マグニチュード": e["magnitude"],
+                "最大震度": MAXI_DISPLAY.get(e["max_intensity"], e["max_intensity"] or "-"),
+                "震度": f"https://www.jma.go.jp/bosai/map.html#&contents=estimated_intensity_map&id={dt.strftime('%Y%m%d%H%M')}",
+            })
+        st.dataframe(
+            pd.DataFrame(events_rows),
+            hide_index=True,
+            use_container_width=True,
+            column_config={
+                "震度": st.column_config.LinkColumn("震度", display_text="推計震度分布図"),
+            },
+        )
+        st.caption(
+            "出典: [気象庁](https://www.jma.go.jp/jma/menu/20260728_kumamoto_jishin.html)。"
+            "推計震度分布図は地震発生直後に発表されたもの（発表がない地震ではリンク先に情報がない場合があります）。"
+        )
 
     tab_overview, tab_list, tab_dl = st.tabs(
         ["地図・時系列", "異常検知一覧", "データダウンロード"]
