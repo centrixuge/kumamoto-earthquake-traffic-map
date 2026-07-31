@@ -670,10 +670,13 @@ def build_base_map(
             # 通行止めの×は目印だけなのでクリックを透過させ、下にある
             # 観測点マーカーを確実にクリックできるようにする。
             ".reg-x-mark{pointer-events:none !important;}"
-            # ツールチップは既定だと横に伸びて地図の外まではみ出す。
-            # 幅の上限を付けて折り返し、文字も小さくする。
-            ".leaflet-tooltip{max-width:230px;white-space:normal;"
-            "font-size:11px;line-height:1.45;padding:4px 7px;}"
+            # ツールチップは既定（white-space:nowrap）だと横に伸びて地図の外まで
+            # はみ出す。かといって max-width だけを付けると、絶対配置の
+            # 幅が「その位置から地図の端までの残り幅」に縮められ、
+            # 地図の端に近い規制では数文字ごとに折り返す細長い箱になる。
+            # width:max-content で内容なりの幅を確保し、その上で上限を掛ける。
+            ".leaflet-tooltip{width:max-content;max-width:260px;"
+            "white-space:normal;font-size:11.5px;line-height:1.5;padding:5px 8px;}"
             ".leaflet-control-layers{font-size:12px;max-width:calc(100vw - 28px);}"
             ".leaflet-control-layers-overlays label,"
             ".leaflet-control-layers-overlays label>span{white-space:nowrap;}"
