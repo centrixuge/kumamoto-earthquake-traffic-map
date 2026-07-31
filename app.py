@@ -1073,11 +1073,16 @@ def render_timeseries(
             text="地震発生 16:27", showarrow=False,
             font=dict(size=11, color="black"),
         )
+        # 上下2図を並べると縦に長くなり、観測点を比べるたびにスクロールが
+        # 必要になるため1図の高さを抑える（400 -> 290）。凡例は2図で同じ内容
+        # なので上の図だけに出し、下の図はその分の余白も詰める。
+        show_legend = label == "上り"
         fig.update_layout(
-            height=400,
+            height=290,
             # 凡例はグラフ下に置く。上部だとplotlyのモードバー（カメラ・ズーム等の
             # アイコン）と重なり、幅の狭いモバイルでは折り返して読めなくなるため。
-            margin=dict(l=10, r=10, t=30, b=70),
+            margin=dict(l=10, r=10, t=26, b=62 if show_legend else 24),
+            showlegend=show_legend,
             legend=dict(
                 orientation="h", yanchor="top", y=-0.28,
                 xanchor="left", x=0, font=dict(size=10),
@@ -1113,15 +1118,27 @@ def main():
         ".dash-title { font-size:1.55rem; font-weight:700; line-height:1.3; margin:0 0 2px 0; }"
         ".dash-lead  { font-size:0.92rem; line-height:1.5; margin:0 0 6px 0; }"
         ".dash-src   { font-size:0.78rem; color:#5b6570; line-height:1.5; margin:0; }"
-        # 粒度のラジオを画面に貼り付けておく。地図上で観測点を選び直すたびに
-        # スクロール位置がラジオより下になり、粒度を変えるのに戻る必要があったため。
-        # スクロールしているのは section.main（overflow:auto）なので、その中で
-        # sticky が効く。標準ヘッダー（高さ60px・position:fixed）に隠れないよう
-        # top を少し下げる。
-        '[data-testid="stRadio"]{position:sticky;top:3.8rem;z-index:5;'
-        "padding:4px 0 6px 0;background-color:var(--background-color,#ffffff);}"
+        # 観測点の選択と粒度の操作行を画面上部に貼り付ける。地図で観測点を
+        # 選び直すたびにスクロールで戻る必要があったため。
+        # sticky はウィジェット本体ではなく、それを包む element-container ではなく
+        # さらに外側の「行」に掛ける必要がある。ウィジェット直下の
+        # element-container は中身と同じ高さで、sticky が動く余地が無いため
+        # （実測: どちらも 737px で一致し、貼り付いても位置が変わらない）。
+        # スクロールしているのは section.main（overflow:auto）なので、
+        # その中で sticky が効く。標準ヘッダー（position:fixed・高さ60px）に
+        # 隠れないよう top を下げる。
+        '[data-testid="stHorizontalBlock"]:has([data-testid="stMultiSelect"])'
+        "{position:sticky;top:3.9rem;z-index:20;"
+        "background-color:var(--background-color,#ffffff);"
+        "padding:6px 2px 4px 2px;border-bottom:1px solid rgba(130,130,130,0.25);}"
         "@media (prefers-color-scheme: dark){"
-        '[data-testid="stRadio"]{background-color:var(--background-color,#0e1117);}}'
+        '[data-testid="stHorizontalBlock"]:has([data-testid="stMultiSelect"])'
+        "{background-color:var(--background-color,#0e1117);}}"
+        # 画面が狭いと列が縦に積まれて操作行が高くなり、貼り付けると
+        # 画面の大半を占めてしまうので、その場合は貼り付けない。
+        "@media (max-width: 900px){"
+        '[data-testid="stHorizontalBlock"]:has([data-testid="stMultiSelect"])'
+        "{position:static;border-bottom:none;}}"
         "</style>",
         unsafe_allow_html=True,
     )
@@ -1260,7 +1277,10 @@ def main():
                 c = coords_by_id[pid]
                 return f"{point_labels[pid]}（{c['point_lat']:.3f}N, {c['point_lon']:.3f}E）"
 
-            col_select, col_clear = st.columns([5, 1])
+            # 観測点の選択と粒度の切り替えを1行にまとめる。観測点を比べるときに
+            # 何度も触るのはこの2つなので、同じ行に置いてまとめて画面に貼り付ける
+            # （下のCSSで sticky）。粒度ラジオが地図より前に作られる点も維持する。
+            col_select, col_view, col_clear = st.columns([3, 2, 1])
             with col_select:
                 picked = st.multiselect(
                     f"観測点の選び方：このプルダウンから選ぶか、地図上の丸いマーカーをクリック"
@@ -1271,6 +1291,18 @@ def main():
                     format_func=_format_point,
                     key=f"point_select_{sel_version}",
                 )
+            with col_view:
+                view_names = list(TIMESERIES_VIEWS.keys())
+                saved_view = st.session_state.get("_timeseries_view_choice", view_names[0])
+                view = st.radio(
+                    "時系列の粒度と平常時の取り方",
+                    view_names,
+                    index=view_names.index(saved_view) if saved_view in view_names else 0,
+                    horizontal=True,
+                    key="timeseries_view",
+                )
+                st.session_state["_timeseries_view_choice"] = view
+                cfg = TIMESERIES_VIEWS[view]
             with col_clear:
                 st.write("")
                 if st.button("選択をクリア", disabled=not selected_points):
@@ -1298,17 +1330,6 @@ def main():
             # 状態が落ちても index で復元できるようにする。
             with col_ts:
                 st.subheader("選択観測点の時系列（平常時 vs 観測実績）")
-                view_names = list(TIMESERIES_VIEWS.keys())
-                saved_view = st.session_state.get("_timeseries_view_choice", view_names[0])
-                view = st.radio(
-                    "時系列の粒度と平常時の取り方",
-                    view_names,
-                    index=view_names.index(saved_view) if saved_view in view_names else 0,
-                    horizontal=True,
-                    key="timeseries_view",
-                )
-                st.session_state["_timeseries_view_choice"] = view
-                cfg = TIMESERIES_VIEWS[view]
 
             with col_map:
                 st.subheader("観測点別の異常度 × 通行規制")
@@ -1388,7 +1409,8 @@ def main():
                     point_summary, point_labels, selected_points
                 )
                 map_state = st_folium(
-                    base_map, height=750, width=550,
+                    # 縦を詰めて右側の2図と高さを近づける（750 -> 620）
+                    base_map, height=620, width=550,
                     feature_group_to_add=points_fg,
                     # 座標ではなく「何をクリックしたか」で判定する。
                     #   last_object_clicked_tooltip … クリックされた図形のツールチップ本文。
