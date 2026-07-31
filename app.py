@@ -1072,8 +1072,12 @@ def main():
     st.markdown(
         "<style>"
         'iframe[title="streamlit_folium.st_folium"] { width: 100% !important; }'
-        # 本題（地図・時系列・異常検知）が早く視界に入るよう、上部の余白を詰める
-        ".stMainBlockContainer, .block-container { padding-top: 2.2rem !important; }"
+        # 本題（地図・時系列・異常検知）が早く視界に入るよう、上部の余白を詰める。
+        # ただしStreamlit標準のヘッダー（Deploy/共有/メニュー）は position:fixed の
+        # 高さ60pxで、本文の余白がそれより小さいとタイトルがヘッダーに潜って欠ける。
+        # ヘッダー自体を低くするとツールバーのボタン（下端が固定で52px）がはみ出すため、
+        # ヘッダーには触れず、その高さを必ず上回る余白にする（既定の6remよりは詰める）。
+        ".stMainBlockContainer, .block-container { padding-top: 4.2rem !important; }"
         # 見出しは既定だと大きすぎて、それだけで1画面を使ってしまう
         ".dash-title { font-size:1.55rem; font-weight:700; line-height:1.3; margin:0 0 2px 0; }"
         ".dash-lead  { font-size:0.92rem; line-height:1.5; margin:0 0 6px 0; }"
