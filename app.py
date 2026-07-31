@@ -51,7 +51,31 @@ TIMESERIES_VIEWS = {
         "unit_label": "1時間値",
         "note": "実績・平常時とも1時間値どうしの比較で、異常検知の判定もこの粒度で行っています。",
     },
+    "車種別（1時間値）": {
+        "file": "observations_hourly.parquet",
+        "unit_label": "1時間値",
+        "series": "vehicle",
+        "note": (
+            "小型車と大型車を分けて表示します。大型車は小型車の1割程度しかないため、"
+            "同じ軸に重ねると潰れてしまうので図を分けています（縦軸の目盛りが図ごとに違う点に注意）。"
+            "異常検知の判定は車種を合計した1時間値で行っており、この図の判定は変わりません。"
+            "APIは車種判別不能の台数も返しますが、アーカイブ全期間で1台しかないため扱っていません。"
+        ),
+    },
 }
+
+# 時系列図に描く系列。既定は上り・下りの合計、「車種別」は小型・大型に分ける。
+# 大型車は小型車の1割程度なので、同じ軸に載せず図を分ける。
+SERIES_TOTAL = [
+    ("traffic_up", "上り"),
+    ("traffic_down", "下り"),
+]
+SERIES_VEHICLE = [
+    ("traffic_up_small", "上り・小型車"),
+    ("traffic_up_large", "上り・大型車"),
+    ("traffic_down_small", "下り・小型車"),
+    ("traffic_down_large", "下り・大型車"),
+]
 
 # 通行規制の日時はJSTの壁時計時刻（naive）で保存されている。Streamlit Cloud等の
 # UTCサーバーでdatetime.now()をそのまま使うと「終了済みか」の判定がずれるため、
@@ -244,13 +268,25 @@ _OBSERVATION_COLUMNS = [
     ("datetime", "日時（JST）", "観測時刻（1時間値なので毎時0分）"),
     ("daytype", "文字列", "日区分（月/火/水/木/金/土/日祝）。03:00起点の日付で判定し、祝日は曜日によらず日祝に入れる。平常時は同じ日区分どうしで比べる"),
     ("hour", "0〜23", "時刻の「時」。平常時の平均・標準偏差は日区分×この単位で求めている"),
-    ("traffic_up", "台/時", "上り方向の実績交通量"),
-    ("traffic_down", "台/時", "下り方向の実績交通量"),
+    ("traffic_up", "台/時", "上り方向の実績交通量（小型＋大型）"),
+    ("traffic_down", "台/時", "下り方向の実績交通量（小型＋大型）"),
+    ("traffic_up_small", "台/時", "上り・小型車の実績交通量"),
+    ("traffic_up_large", "台/時", "上り・大型車の実績交通量"),
+    ("traffic_down_small", "台/時", "下り・小型車の実績交通量"),
+    ("traffic_down_large", "台/時", "下り・大型車の実績交通量"),
     ("baseline_mean_up", "台/時", "平常時（同じ日区分の8日分）の上り交通量の平均"),
     ("baseline_std_up", "台/時", "同じ母集団での上り交通量の標準偏差"),
     ("baseline_mean_down", "台/時", "平常時の下り交通量の平均"),
     ("baseline_std_down", "台/時", "平常時の下り交通量の標準偏差"),
-    ("z_up", "無次元", "上りのzスコア =（実績 − 平常時平均）÷ 標準偏差。標準偏差が0や極小のときは下限でクリップ"),
+    ("baseline_mean_up_small", "台/時", "平常時の上り・小型車の平均"),
+    ("baseline_std_up_small", "台/時", "同じ母集団での上り・小型車の標準偏差"),
+    ("baseline_mean_up_large", "台/時", "平常時の上り・大型車の平均"),
+    ("baseline_std_up_large", "台/時", "同じ母集団での上り・大型車の標準偏差"),
+    ("baseline_mean_down_small", "台/時", "平常時の下り・小型車の平均"),
+    ("baseline_std_down_small", "台/時", "同じ母集団での下り・小型車の標準偏差"),
+    ("baseline_mean_down_large", "台/時", "平常時の下り・大型車の平均"),
+    ("baseline_std_down_large", "台/時", "同じ母集団での下り・大型車の標準偏差"),
+    ("z_up", "無次元", "上りのzスコア =（実績 − 平常時平均）÷ 標準偏差。車種を合計した値で計算する。標準偏差が0や極小のときは下限でクリップ"),
     ("z_down", "無次元", "下りのzスコア（同上）"),
     ("is_post_quake", "真偽値", "本震（2026-07-28 16:27）以降の時刻かどうか"),
     ("is_anomaly", "真偽値", "異常と判定したか。is_post_quakeがTrueかつ|z_up|または|z_down|が2以上"),
@@ -1021,7 +1057,7 @@ def render_timeseries(
     observations: pd.DataFrame, selected_points, quake_at,
     other_event_times=(), point_labels: dict = None, baseline_windows=None,
     unit_label: str = "5分間値", extra_note: str = "",
-    mlit_bands=(), baseline_daytypes: dict = None,
+    mlit_bands=(), baseline_daytypes: dict = None, series_mode: str = "total",
 ) -> None:
     if not selected_points:
         st.info("上のプルダウンから選ぶか、地図上の丸いマーカーをクリックして観測点を選ぶと、ここに時系列が表示されます（最大2地点まで比較可）。")
@@ -1035,10 +1071,18 @@ def render_timeseries(
     # （データ自体はTARGET_START=7/27 03:00から保持している）。
     x_range = [TIMESERIES_DISPLAY_START, observations["datetime"].max()]
 
-    for direction, mean_col, std_col, label in [
-        ("traffic_up", "baseline_mean_up", "baseline_std_up", "上り"),
-        ("traffic_down", "baseline_mean_down", "baseline_std_down", "下り"),
-    ]:
+    series = SERIES_VEHICLE if series_mode == "vehicle" else SERIES_TOTAL
+    # 車種別は図が4枚になるので1枚あたりを低くする
+    chart_height = 210 if series_mode == "vehicle" else 290
+    for direction, label in series:
+        suffix = direction[len("traffic_"):]
+        mean_col, std_col = f"baseline_mean_{suffix}", f"baseline_std_{suffix}"
+        if direction not in observations.columns or mean_col not in observations.columns:
+            st.info(
+                f"「{label}」の列がデータにありません。"
+                "`python fetch_and_prepare.py` を実行してデータを作り直してください。"
+            )
+            continue
         fig = go.Figure()
         for i, pid in enumerate(selected_points):
             color = SELECTION_COLORS[i % len(SELECTION_COLORS)]
@@ -1093,9 +1137,9 @@ def render_timeseries(
         # 上下2図を並べると縦に長くなり、観測点を比べるたびにスクロールが
         # 必要になるため1図の高さを抑える（400 -> 290）。凡例は2図で同じ内容
         # なので上の図だけに出し、下の図はその分の余白も詰める。
-        show_legend = label == "上り"
+        show_legend = label == series[0][1]
         fig.update_layout(
-            height=290,
+            height=chart_height,
             # 凡例はグラフ下に置く。上部だとplotlyのモードバー（カメラ・ズーム等の
             # アイコン）と重なり、幅の狭いモバイルでは折り返して読めなくなるため。
             margin=dict(l=10, r=10, t=26, b=62 if show_legend else 24),
@@ -1106,7 +1150,9 @@ def render_timeseries(
             ),
             xaxis=dict(tickformat="%m/%d\n%H:%M", range=x_range),
         )
-        st.markdown(f"**{label}交通量（{unit_label}）**")
+        title = (f"{label}（{unit_label}）" if series_mode == "vehicle"
+                 else f"{label}交通量（{unit_label}）")
+        st.markdown(f"**{title}**")
         st.plotly_chart(fig, use_container_width=True)
 
     st.markdown(describe_baseline(baseline_windows, baseline_daytypes))
@@ -1518,6 +1564,7 @@ def main():
                     extra_note=cfg["note"],
                     mlit_bands=mlit_bands,
                     baseline_daytypes=quake_info.get("hourly_baseline_daytypes"),
+                    series_mode=cfg.get("series", "total"),
                 )
 
     # ------------------------------------------------------------------

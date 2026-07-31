@@ -21,6 +21,19 @@ from .stations import attach_point_code
 
 POINT_DECIMALS = 6  # 観測点を緯度経度で識別する際の丸め桁数
 
+# 平常時を求める対象の系列。合計に加えて車種別（小型・大型）も持たせる。
+# 判別不能はアーカイブ全期間で1台しかなく、系列として持つ意味がないので扱わない。
+TRAFFIC_SERIES = [
+    "traffic_up", "traffic_down",
+    "traffic_up_small", "traffic_up_large",
+    "traffic_down_small", "traffic_down_large",
+]
+
+
+def _baseline_col(series: str, kind: str) -> str:
+    """traffic_up_small -> baseline_mean_up_small のように列名を作る。"""
+    return f"baseline_{kind}_{series[len('traffic_'):]}"
+
 
 def _add_point_key(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
@@ -59,18 +72,20 @@ def compute_baseline_stats(baseline_df: pd.DataFrame, holidays: dict = None) -> 
         baseline_mean_down, baseline_std_down, n_down
     """
     df = _add_point_key(baseline_df)
-    df = _to_numeric(df, ["traffic_up", "traffic_down"])
+    present = [c for c in TRAFFIC_SERIES if c in df.columns]
+    df = _to_numeric(df, present)
     df = add_daytype(df, holidays or {})
     df["hour"] = pd.to_datetime(df["datetime"]).dt.hour
 
-    grouped = df.groupby(["point_id", "point_lon", "point_lat", "daytype", "hour"]).agg(
-        baseline_mean_up=("traffic_up", "mean"),
-        baseline_std_up=("traffic_up", "std"),
-        n_up=("traffic_up", "count"),
-        baseline_mean_down=("traffic_down", "mean"),
-        baseline_std_down=("traffic_down", "std"),
-        n_down=("traffic_down", "count"),
-    ).reset_index()
+    agg = {}
+    for col in present:
+        agg[_baseline_col(col, "mean")] = (col, "mean")
+        agg[_baseline_col(col, "std")] = (col, "std")
+        agg[f"n_{col[len('traffic_'):]}"] = (col, "count")
+
+    grouped = df.groupby(
+        ["point_id", "point_lon", "point_lat", "daytype", "hour"]
+    ).agg(**agg).reset_index()
 
     return grouped
 
@@ -92,12 +107,11 @@ def scale_baseline_stats(stats: pd.DataFrame, factor: float) -> pd.DataFrame:
        5分間値そのもののばらつきではない点に注意（帯は狭くなる）。
     """
     scaled = stats.copy()
-    for col in [
-        "baseline_mean_up", "baseline_std_up",
-        "baseline_mean_down", "baseline_std_down",
-    ]:
-        if col in scaled.columns:
-            scaled[col] = scaled[col] * factor
+    for series in TRAFFIC_SERIES:
+        for kind in ("mean", "std"):
+            col = _baseline_col(series, kind)
+            if col in scaled.columns:
+                scaled[col] = scaled[col] * factor
     return scaled
 
 
@@ -127,7 +141,7 @@ def build_observation_table(
         baseline_stats = compute_baseline_stats(baseline_df, holidays)
 
     df = _add_point_key(target_df)
-    df = _to_numeric(df, ["traffic_up", "traffic_down"])
+    df = _to_numeric(df, [c for c in TRAFFIC_SERIES if c in df.columns])
     df["datetime"] = pd.to_datetime(df["datetime"])
     df = add_daytype(df, holidays or {})
     df["hour"] = df["datetime"].dt.hour
@@ -154,16 +168,26 @@ def build_observation_table(
     # JARTICの常時観測点コードを付ける（観測点を指す公式のID）
     merged = attach_point_code(merged, station_master or {})
 
-    cols = [
-        "point_code", "point_id", "point_lon", "point_lat", "datetime",
-        "daytype", "hour",
-        "traffic_up", "traffic_down",
-        "baseline_mean_up", "baseline_std_up",
-        "baseline_mean_down", "baseline_std_down",
-        "z_up", "z_down",
-        "is_post_quake", "is_anomaly",
-        "distance_km_from_epicenter",
-    ]
+    cols = (
+        [
+            "point_code", "point_id", "point_lon", "point_lat", "datetime",
+            "daytype", "hour",
+        ]
+        # 合計と車種別（小型・大型）の実績、およびそれぞれの平常時。
+        # 異常判定は合計（traffic_up / traffic_down）だけで行い、車種別は
+        # 時系列図の「車種別」ビュー用に持たせるだけ。
+        + [c for c in TRAFFIC_SERIES if c in merged.columns]
+        + [
+            _baseline_col(c, kind)
+            for c in TRAFFIC_SERIES for kind in ("mean", "std")
+            if _baseline_col(c, kind) in merged.columns
+        ]
+        + [
+            "z_up", "z_down",
+            "is_post_quake", "is_anomaly",
+            "distance_km_from_epicenter",
+        ]
+    )
     cols = [c for c in cols if c in merged.columns]
     return merged[cols].sort_values(["point_id", "datetime"]).reset_index(drop=True)
 
