@@ -1343,63 +1343,67 @@ def main():
                     if not _regulation_is_post_quake(r, quake_at)
                     and not _regulation_is_ended(r, _now_jst())
                 )
-                # 観測点の凡例。異常度が計算できたものと、地震後が欠測で
-                # 計算できなかったものの両方を書く（片方だけだと、寒色の丸が
-                # 何を表しているのか凡例から分からなくなる）。
+                # 凡例は3行に圧縮する。見出しを独立行にすると1項目ごとに
+                # 行が増えて余白ばかりになるので、見出しも同じ行に入れて
+                # 「分類: 項目 項目 …」の形にし、文字も小さくする。
                 n_points = len(point_summary)
                 n_no_data = int(point_summary["max_abs_z"].isna().sum())
-                point_legend = (
-                    '<div style="width:100%; margin-top:2px;">'
-                    f'<b>観測点（{n_points}点）</b></div>'
-                    '<div><span style="display:inline-block;width:34px;height:12px;border-radius:6px;'
-                    'background:linear-gradient(to right,#deebf7,#08306b);'
-                    'border:1px solid #aaa;vertical-align:middle;"></span>'
-                    f' 濃く大きいほど異常度（|zスコア|）が大きい（{n_points - n_no_data}点）</div>'
-                )
-                if n_no_data:
-                    point_legend += (
-                        '<div><span style="display:inline-block;width:13px;height:13px;border-radius:50%;'
-                        'background:#f0f0f0;border:2px dashed #777;vertical-align:middle;"></span>'
-                        f' 灰色・破線は地震後が欠測で異常度を計算できない（{n_no_data}点）</div>'
-                    )
-                # 直轄国道の規制。線形を復元できたものと、できずに位置だけ示すものを分けて書く
                 _mlit_items = (mlit or {}).get("items", [])
                 n_mlit_line = sum(1 for i in _mlit_items if i.get("path"))
                 n_mlit_point = sum(
                     1 for i in _mlit_items
                     if not i.get("path") and i.get("affected_point_codes")
                 )
-                mlit_legend = ""
+
+                def _sw(style: str) -> str:
+                    """凡例の色見本。縦位置を文字に揃える。"""
+                    return f'<span style="display:inline-block;vertical-align:middle;{style}"></span>'
+
+                bar = "width:20px;height:5px;"
+                post_items = [
+                    f'{_sw(bar + "background:#e60000;")} <b>×</b> 全面/車両通行止め',
+                    f'{_sw("width:20px;height:4px;background:#e67e22;")} 片側交互など',
+                ]
                 if n_mlit_line:
-                    mlit_legend += (
-                        '<div style="width:100%;"><span style="display:inline-block;width:22px;'
-                        'height:0;border-top:5px dashed #e60000;vertical-align:middle;"></span>'
-                        f' 直轄国道の規制（{n_mlit_line}件・別レイヤ）。'
-                        '区間はOSMのIC座標から復元</div>'
+                    post_items.append(
+                        f'{_sw("width:20px;height:0;border-top:5px dashed #e60000;")}'
+                        f' 直轄国道 {n_mlit_line}件（区間はOSMのIC座標から復元・別レイヤ）'
                     )
                 if n_mlit_point:
-                    mlit_legend += (
-                        '<div style="width:100%;"><span style="color:#b00000;font-weight:900;">▲</span>'
-                        f' 直轄国道の規制のうち区間の線形が作れないもの（{n_mlit_point}件）。'
-                        '掛かっていた観測点の<b>すぐ上</b>に表示</div>'
+                    post_items.append(
+                        '<span style="color:#b00000;font-weight:900;">▲</span>'
+                        f' 直轄国道で線形が作れないもの {n_mlit_point}件（該当観測点のすぐ上）'
                     )
+                pre_items = [
+                    f'{_sw("width:20px;height:3px;background:#5b7c99;opacity:0.55;")} 今回の地震とは無関係',
+                    f'{_sw("width:20px;height:0;border-top:3px dashed #95a5a6;")} 破線は解除済み',
+                ]
+                point_items = [
+                    f'{_sw("width:30px;height:11px;border-radius:6px;border:1px solid #aaa;"
+                          "background:linear-gradient(to right,#deebf7,#08306b);")}'
+                    f' 濃く大きいほど異常度|z|が大きい {n_points - n_no_data}点',
+                ]
+                if n_no_data:
+                    point_items.append(
+                        f'{_sw("width:11px;height:11px;border-radius:50%;background:#f0f0f0;"
+                              "border:2px dashed #777;")}'
+                        f' 灰色・破線は地震後が欠測 {n_no_data}点'
+                    )
+                rows = [
+                    (f"地震後に始まった規制 {n_post}件", post_items),
+                    (f"地震前からの規制 {n_pre}件（工事・過去の災害）", pre_items),
+                    (f"観測点 {n_points}点", point_items),
+                ]
+                legend_html = "".join(
+                    '<div style="display:flex;flex-wrap:wrap;gap:1px 12px;align-items:center;">'
+                    f'<b style="white-space:nowrap;">{head}:</b>'
+                    + "".join(f'<span style="white-space:nowrap;">{it}</span>' for it in items)
+                    + "</div>"
+                    for head, items in rows
+                )
                 st.markdown(
-                    f"""
-                    <div style="display:flex; flex-wrap:wrap; gap:6px 14px; align-items:center; font-size:0.85rem; margin:0 0 6px 0;">
-                        <div style="width:100%;"><b>今回の地震以降に始まった規制（{n_post}件）</b></div>
-                        <div><span style="display:inline-block;width:22px;height:5px;background:#e60000;vertical-align:middle;"></span>
-                            <b>×</b> 全面/車両通行止め</div>
-                        <div><span style="display:inline-block;width:22px;height:4px;background:#e67e22;vertical-align:middle;"></span>
-                            片側交互通行止めなど</div>
-                        {mlit_legend}
-                        <div style="width:100%; margin-top:2px;"><b>地震前からの規制（{n_pre}件・工事や過去の災害など）</b></div>
-                        <div><span style="display:inline-block;width:22px;height:3px;background:#5b7c99;opacity:0.55;vertical-align:middle;"></span>
-                            今回の地震とは無関係</div>
-                        <div><span style="display:inline-block;width:22px;height:0;border-top:3px dashed #95a5a6;vertical-align:middle;"></span>
-                            破線はいずれも解除済み</div>
-                        {point_legend}
-                    </div>
-                    """,
+                    '<div style="font-size:0.72rem;line-height:1.5;margin:0 0 4px 0;">'
+                    f"{legend_html}</div>",
                     unsafe_allow_html=True,
                 )
                 base_map = build_base_map(
