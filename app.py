@@ -26,6 +26,10 @@ from modules.stations import attach_point_code, load_station_master
 DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
 MAX_SELECTED_POINTS = 2
 SELECTION_COLORS = ["red", "green"]
+# 観測点マーカーのツールチップに必ず入れる定型句。クリックされた図形が
+# 観測点マーカーかどうかを、この文字列で判定する（point_id_from_tooltip）。
+# 表示と判定でずれないよう1か所に置く。
+POINT_TOOLTIP_HINT = "（クリックで時系列に表示/解除）"
 # 時系列図の表示開始時刻（データ保持期間の先頭より後ろにしている）
 TIMESERIES_DISPLAY_START = pd.Timestamp("2026-07-27 12:00")
 
@@ -923,7 +927,7 @@ def build_points_feature_group(
             fill=True,
             fill_color="#f0f0f0" if no_data else _severity_color(frac),
             fill_opacity=0.6 if no_data else 0.85,
-            tooltip=f"{label}（クリックで時系列に表示/解除）<br>{detail}",
+            tooltip=f"{label}{POINT_TOOLTIP_HINT}<br>{detail}",
         ).add_to(fg)
     return fg
 
@@ -943,14 +947,28 @@ def build_point_labels(point_summary: pd.DataFrame) -> dict:
     return labels
 
 
-def _nearest_point_id(lat, lon, point_summary: pd.DataFrame, tol_deg: float = 0.01):
-    if lat is None or lon is None or point_summary.empty:
+def point_id_from_tooltip(tooltip, point_labels: dict):
+    """
+    クリックされた図形のツールチップ本文から観測点を特定する。
+
+    streamlit_folium の last_object_clicked は「クリックした位置」であって
+    マーカーの中心ではない（onLayerClick が event.latlng をそのまま入れている）。
+    そのため座標の近さで観測点を当てる方式にすると、
+      ・大きなマーカーの端を押すと中心から離れて判定に失敗する
+      ・通行規制の線など別の図形を押しただけで近くの観測点が選ばれてしまう
+    という取り違えが起きる。ツールチップ本文で判定すれば、
+    観測点マーカーを押したときだけ反応し、それ以外は何も起きない。
+
+    ツールチップはHTMLタグを除いたテキストになる（コンポーネント側の
+    extractContent が textContent を取る）ので、先頭がラベル＋定型句かで見る。
+    """
+    if not tooltip:
         return None
-    d = ((point_summary["point_lat"] - lat) ** 2 + (point_summary["point_lon"] - lon) ** 2) ** 0.5
-    idx = d.idxmin()
-    if d.loc[idx] > tol_deg:
-        return None
-    return point_summary.loc[idx, "point_id"]
+    text = str(tooltip).strip()
+    for pid, label in (point_labels or {}).items():
+        if text.startswith(f"{label}{POINT_TOOLTIP_HINT}"):
+            return pid
+    return None
 
 
 def describe_baseline(baseline_windows) -> str:
@@ -1341,12 +1359,15 @@ def main():
                 map_state = st_folium(
                     base_map, height=750, width=550,
                     feature_group_to_add=points_fg,
-                    # last_object_clicked だけだと、クリックが通行規制の線や×に
-                    # 当たったときにその座標が返ってきて観測点が選べない。
-                    # 地図そのもののクリック位置(last_clicked)も受け取って、
-                    # どちらかが観測点の近くならその観測点を選ぶようにする。
-                    returned_objects=["last_object_clicked", "last_clicked"],
-                    key="quake_map_v7",
+                    # 座標ではなく「何をクリックしたか」で判定する。
+                    #   last_object_clicked_tooltip … クリックされた図形のツールチップ本文。
+                    #        これで観測点マーカーかどうかを確実に見分けられる
+                    #   last_object_clicked_count   … 図形クリックのたびに増える通し番号。
+                    #        同じマーカーを続けて押しても値が変わるので反応する
+                    returned_objects=[
+                        "last_object_clicked_tooltip", "last_object_clicked_count",
+                    ],
+                    key="quake_map_v8",
                 )
                 render_mlit_notice(mlit, point_summary, point_labels)
                 st.caption(
@@ -1371,66 +1392,31 @@ def main():
                     "観測点は色が濃いほど地震後の交通量変化（|zスコア|）が大きいことを示す（青系のグラデーション）。"
                     "地点番号は異常度の大きい順。青いマーカーは震源。"
                     "選択中の観測点は赤/緑の枠で強調表示されます（最大2地点）。"
-                    "地図のマーカークリックでも選択できます（反映に1〜2秒かかります）。"
-                    "マーカーの上でなくても、近くをクリックすれば最も近い観測点が選ばれます。"
+                    "丸いマーカーをクリックしても選択できます（反映に1〜2秒かかります）。"
                     "すぐに切り替えたいときは上のプルダウンが速いです。"
                 )
 
-            # クリック位置の候補を2つ見る。
-            #   last_object_clicked … クリックが当たった図形の座標。観測点マーカーに
-            #                         当たれば正確だが、通行規制の線や×に当たると
-            #                         そちらの座標になる
-            #   last_clicked        … 地図そのものをクリックした座標。図形に当たっても
-            #                         地図のclickイベントは発生するので、横取りされた
-            #                         ときの受け皿になる
-            # 観測点に近い方を採用する。どちらも遠ければ「観測点以外を押した」と扱う。
-            candidates = []
-            if map_state:
-                for key in ("last_object_clicked", "last_clicked"):
-                    c = map_state.get(key)
-                    if c and c.get("lat") is not None and c.get("lng") is not None:
-                        candidates.append((key, float(c["lat"]), float(c["lng"])))
-            best = None
-            for key, lat, lng in candidates:
-                pid = _nearest_point_id(lat, lng, point_summary)
-                if pid is None:
-                    continue
-                row = point_summary[point_summary["point_id"] == pid].iloc[0]
-                d = ((row["point_lat"] - lat) ** 2 + (row["point_lon"] - lng) ** 2) ** 0.5
-                if best is None or d < best[0]:
-                    best = (d, pid, key, lat, lng)
-
-            if candidates:
-                # 同じ図形を続けてクリックしても last_object_clicked は変わらないが、
-                # last_clicked はピクセル単位で変わるので、両方を鍵にすると
-                # 「同じマーカーを2回押しても反応しない」も起きにくくなる。
-                fingerprint = tuple(
-                    (key, round(lat, 6), round(lng, 6)) for key, lat, lng in candidates
+            # クリックされたのが観測点マーカーのときだけ選択を切り替える。
+            # 通行規制の線などを押した場合はツールチップが一致しないので何も起きない
+            # （ツールチップは表示されるので、押した本人の意図とも合う）。
+            click_count = map_state.get("last_object_clicked_count") if map_state else None
+            if click_count is not None and click_count != st.session_state.get("_last_click_count"):
+                st.session_state["_last_click_count"] = click_count
+                pid = point_id_from_tooltip(
+                    map_state.get("last_object_clicked_tooltip"), point_labels
                 )
-                if fingerprint != st.session_state.get("_last_click_fingerprint"):
-                    st.session_state["_last_click_fingerprint"] = fingerprint
-                    if best is not None:
-                        pid = best[1]
-                        selected = list(st.session_state["selected_points"])
-                        if pid in selected:
-                            selected.remove(pid)
-                        else:
-                            if len(selected) >= MAX_SELECTED_POINTS:
-                                selected.pop(0)
-                            selected.append(pid)
-                        st.session_state["selected_points"] = selected
-                        st.session_state["_click_miss"] = None
-                        # セレクタ側のウィジェット状態は古くなるので、キーを変えて作り直す
-                        st.session_state["_sel_version"] = sel_version + 1
-                        st.rerun()
+                if pid is not None:
+                    selected = list(st.session_state["selected_points"])
+                    if pid in selected:
+                        selected.remove(pid)
                     else:
-                        # 押しても何も起きない状態を黙って放置しないで理由を出す
-                        st.session_state["_click_miss"] = (
-                            "観測点から離れた場所がクリックされたため、選択は変わっていません。"
-                            "丸いマーカーの上でクリックするか、上のプルダウンから選んでください。"
-                        )
-            if st.session_state.get("_click_miss"):
-                st.caption(f"⚠ {st.session_state['_click_miss']}")
+                        if len(selected) >= MAX_SELECTED_POINTS:
+                            selected.pop(0)
+                        selected.append(pid)
+                    st.session_state["selected_points"] = selected
+                    # セレクタ側のウィジェット状態は古くなるので、キーを変えて作り直す
+                    st.session_state["_sel_version"] = sel_version + 1
+                    st.rerun()
 
             with col_ts:
                 st.subheader("選択観測点の時系列（平常時 vs 観測実績）")
