@@ -1238,9 +1238,14 @@ def main():
                     st.session_state["_sel_version"] = sel_version + 1
                     st.rerun()
 
+            # プルダウンの選択は、この実行のなかでそのまま採用する。
+            # 以前は session_state に入れて st.rerun() していたが、選択1回あたり
+            # スクリプトが2回走り（実測: 96ms差で連続実行）、体感で倍の待ち時間に
+            # なっていた。地図・時系列はこの下で描かれるので、picked を
+            # そのまま使えば1回の実行で反映できる。
             if picked != selected_points:
-                st.session_state["selected_points"] = picked
-                st.rerun()
+                selected_points = picked
+            st.session_state["selected_points"] = picked
 
             # 地図と時系列が近すぎて見分けづらいので、列の間隔を広く取る
             col_map, col_ts = st.columns([2, 3], gap="large")
