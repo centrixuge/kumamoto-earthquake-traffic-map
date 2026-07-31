@@ -1170,9 +1170,10 @@ def main():
         "5-": "5弱", "5+": "5強", "6-": "6弱", "6+": "6強", "7": "7",
     }
     # 地震一覧は参照用なので折りたたむ（開いたままだと本題が画面の下に押し出される）
+    # 見出しに本震だけの諸元（震源の深さ・震源地）を併記すると、
+    # 複数地震の一覧であることと食い違うので入れない。
     with st.expander(
         f"最大震度{min_intensity_label}以上を観測した地震の一覧（{n_events}件）"
-        f"・震源の深さ {mainshock['depth_km']:.0f}km／震源地 {mainshock['epicenter_name']}"
     ):
         events_rows = []
         for e in quake_info.get("events", []):
