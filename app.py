@@ -39,7 +39,7 @@ POINT_TOOLTIP_HINT = "（クリックで時系列に表示/解除）"
 TIMESERIES_DISPLAY_START = pd.Timestamp("2026-07-27 12:00")
 
 # 時系列ビューの切り替え。実績の既定は5分間値、平常時はいずれも1時間値
-# （同曜日8週分・祝日除く）から求めている。
+# （同じ日区分の各8日分）から求めている。
 TIMESERIES_VIEWS = {
     "5分間値（既定）": {
         "file": "observations.parquet",
@@ -247,10 +247,11 @@ _OBSERVATION_COLUMNS = [
     ("point_lon", "度（EPSG:4326）", "観測点の経度（6桁に丸め）"),
     ("point_lat", "度（EPSG:4326）", "観測点の緯度（6桁に丸め）"),
     ("datetime", "日時（JST）", "観測時刻（1時間値なので毎時0分）"),
-    ("hour", "0〜23", "時刻の「時」。平常時の平均・標準偏差はこの単位で求めている"),
+    ("daytype", "文字列", "日区分（月/火/水/木/金/土/日祝）。03:00起点の日付で判定し、祝日は曜日によらず日祝に入れる。平常時は同じ日区分どうしで比べる"),
+    ("hour", "0〜23", "時刻の「時」。平常時の平均・標準偏差は日区分×この単位で求めている"),
     ("traffic_up", "台/時", "上り方向の実績交通量"),
     ("traffic_down", "台/時", "下り方向の実績交通量"),
-    ("baseline_mean_up", "台/時", "平常時（同曜日8週分・祝日除く）の上り交通量の平均"),
+    ("baseline_mean_up", "台/時", "平常時（同じ日区分の8日分）の上り交通量の平均"),
     ("baseline_std_up", "台/時", "同じ母集団での上り交通量の標準偏差"),
     ("baseline_mean_down", "台/時", "平常時の下り交通量の平均"),
     ("baseline_std_down", "台/時", "平常時の下り交通量の標準偏差"),
@@ -983,12 +984,25 @@ def point_id_from_tooltip(tooltip, point_labels: dict):
     return None
 
 
-def describe_baseline(baseline_windows) -> str:
+def describe_baseline(baseline_windows, daytypes: dict = None) -> str:
     """
     「平常時」が具体的にどの期間を指すのかを説明する文を作る。
-    期間は fetch_and_prepare.py が実際に使った値を quake_info.json 経由で受け取るため、
-    説明文と計算内容がずれない。
+    使った日は fetch_and_prepare.py が quake_info.json に書き出した値をそのまま
+    受け取るため、説明文と計算内容がずれない。
     """
+    if daytypes:
+        counts = {dt: len(days) for dt, days in daytypes.items() if days}
+        allday = sorted(d for days in daytypes.values() for d in days)
+        n = ", ".join(f"{dt} {c}日" for dt, c in counts.items())
+        return (
+            "**平常時**＝地震発生前の**同じ日区分・同じ時刻**の交通量。"
+            "曜日で交通量の形が違うため、月・火・水・木・金はそれぞれ別に平均をとり、"
+            "土曜は土曜、日曜と祝日は「日祝」としてまとめています"
+            f"（{n}／{allday[0]}〜{allday[-1]}）。"
+            "実測の各行は自分と同じ日区分の平常時と比べます。"
+            "観測点ごと・日区分ごと・時刻（時）ごとに平均と標準偏差を求めています。"
+        )
+    # 日区分の情報が無い古いデータ向けのフォールバック
     weekdays = ["月", "火", "水", "木", "金", "土", "日"]
     days = []
     for w in baseline_windows or []:
@@ -998,14 +1012,10 @@ def describe_baseline(baseline_windows) -> str:
             continue
         days.append((d, f"{d.month}/{d.day}"))
     if not days:
-        return "**平常時**＝地震発生前の平日同時刻の交通量（時刻帯ごとの平均）。"
+        return "**平常時**＝地震発生前の同じ日区分・同時刻の交通量（時刻帯ごとの平均）。"
     days.sort()
     wd = weekdays[days[0][0].weekday()]
-    if len(days) <= 3:
-        span = "・".join(f"{s}（{wd}）" for _, s in days)
-    else:
-        # 8週分などを列挙すると長いので、日数と範囲だけを示す
-        span = f"{days[0][1]}〜{days[-1][1]}の{wd}曜 {len(days)}日分"
+    span = f"{days[0][1]}〜{days[-1][1]}の{wd}曜 {len(days)}日分"
     return (
         f"**平常時**＝地震発生前の同じ曜日（{span}）の、同じ時刻の交通量。"
         "観測点ごと・時刻（時）ごとに平均と標準偏差を求め、今回の実績と比べています。"
@@ -1016,7 +1026,7 @@ def render_timeseries(
     observations: pd.DataFrame, selected_points, quake_at,
     other_event_times=(), point_labels: dict = None, baseline_windows=None,
     unit_label: str = "5分間値", extra_note: str = "",
-    mlit_bands=(),
+    mlit_bands=(), baseline_daytypes: dict = None,
 ) -> None:
     if not selected_points:
         st.info("上のプルダウンから選ぶか、地図上の丸いマーカーをクリックして観測点を選ぶと、ここに時系列が表示されます（最大2地点まで比較可）。")
@@ -1104,7 +1114,7 @@ def render_timeseries(
         st.markdown(f"**{label}交通量（{unit_label}）**")
         st.plotly_chart(fig, use_container_width=True)
 
-    st.markdown(describe_baseline(baseline_windows))
+    st.markdown(describe_baseline(baseline_windows, baseline_daytypes))
     st.caption(
         "実線「実績」＝今回の観測実績（地震前日からの推移を含む）。"
         "点線「平常時」＝上記の平常時平均。"
@@ -1512,6 +1522,7 @@ def main():
                     unit_label=cfg["unit_label"],
                     extra_note=cfg["note"],
                     mlit_bands=mlit_bands,
+                    baseline_daytypes=quake_info.get("hourly_baseline_daytypes"),
                 )
 
     # ------------------------------------------------------------------
@@ -1522,8 +1533,9 @@ def main():
         anomalies = observations[observations["is_anomaly"]].sort_values("datetime")
         st.write(f"検知件数: {len(anomalies)} 件")
         st.caption(
-            "1時間値の実績と、平常時（同曜日8週分・祝日除く）の1時間値の平均・標準偏差を比べ、"
-            "|zスコア| >= 2 を異常としています。地図の色分けもこの判定に基づきます。"
+            "1時間値の実績と、同じ日区分の平常時（月/火/水/木/金/土/日祝の各8日分）の"
+            "1時間値の平均・標準偏差を比べ、|zスコア| >= 2 を異常としています。"
+            "地図の色分けもこの判定に基づきます。"
         )
         display_cols = [
             "point_code", "point_id", "datetime", "traffic_up", "traffic_down",
@@ -1561,7 +1573,7 @@ def main():
                 "1時間交通量（生データ・アーカイブ全期間）",
                 load_traffic_archive("traffic_hourly.parquet"),
                 "kumamoto_traffic_hourly_archive.csv",
-                "同じ観測点の1時間値。平常時（同曜日8週分）の母集団もこのデータから作っています。",
+                "同じ観測点の1時間値。平常時（日区分ごとに8日分）の母集団もこのデータから作っています。",
             ),
         ]
         regs_df, hist_df = load_regulations_archive()

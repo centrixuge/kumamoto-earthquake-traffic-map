@@ -1,8 +1,13 @@
 """
 交通量の平常時ベースラインとの比較による簡易異常検知。
 
-観測点×時刻(hour)ごとに平常時（ベースライン期間）の平均・標準偏差を求め、
-地震後の実測値との zスコアを計算する。
+観測点×日区分×時刻(hour)ごとに平常時（ベースライン期間）の平均・標準偏差を
+求め、実測値との zスコアを計算する。
+
+日区分（月/火/水/木/金/土/日祝）で分けるのは、曜日によって交通量の形が
+まったく違うためである。曜日を無視して火曜だけの平常時と比べると、
+地震と無関係な平常時の土日でも8割の行が |z|>=2 になることを実測で確認した
+（朝7時は火曜比0.68倍、深夜22時は1.99倍）。
 各観測点と震源との距離[km]も参考値として持たせるが、判定には使わない。
 """
 from typing import Optional
@@ -11,6 +16,7 @@ import numpy as np
 import pandas as pd
 
 from .earthquake_data import haversine_km
+from .holidays import daytype_of
 from .stations import attach_point_code
 
 POINT_DECIMALS = 6  # 観測点を緯度経度で識別する際の丸め桁数
@@ -33,23 +39,31 @@ def _to_numeric(df: pd.DataFrame, cols) -> pd.DataFrame:
     return df
 
 
-def compute_baseline_stats(baseline_df: pd.DataFrame) -> pd.DataFrame:
+def add_daytype(df: pd.DataFrame, holidays: dict) -> pd.DataFrame:
+    """日区分の列を足す（03:00起点の日付で判定）。"""
+    df = df.copy()
+    df["daytype"] = pd.to_datetime(df["datetime"]).map(lambda t: daytype_of(t, holidays))
+    return df
+
+
+def compute_baseline_stats(baseline_df: pd.DataFrame, holidays: dict = None) -> pd.DataFrame:
     """
-    平常時データから、観測点(point_id)×時刻(hour)ごとの
+    平常時データから、観測点(point_id)×日区分×時刻(hour)ごとの
     平均・標準偏差を計算する。
 
     Returns
     -------
     pd.DataFrame with columns:
-        point_id, point_lon, point_lat, hour,
+        point_id, point_lon, point_lat, daytype, hour,
         baseline_mean_up, baseline_std_up, n_up,
         baseline_mean_down, baseline_std_down, n_down
     """
     df = _add_point_key(baseline_df)
     df = _to_numeric(df, ["traffic_up", "traffic_down"])
+    df = add_daytype(df, holidays or {})
     df["hour"] = pd.to_datetime(df["datetime"]).dt.hour
 
-    grouped = df.groupby(["point_id", "point_lon", "point_lat", "hour"]).agg(
+    grouped = df.groupby(["point_id", "point_lon", "point_lat", "daytype", "hour"]).agg(
         baseline_mean_up=("traffic_up", "mean"),
         baseline_std_up=("traffic_up", "std"),
         n_up=("traffic_up", "count"),
@@ -96,26 +110,31 @@ def build_observation_table(
     anomaly_z_threshold: float = 2.0,
     baseline_stats: pd.DataFrame = None,
     station_master: dict = None,
+    holidays: dict = None,
 ) -> pd.DataFrame:
     """
     対象期間データ・ベースラインデータ・地震情報を結合し、
-    観測点×時刻ごとの zスコア／異常フラグ／震源距離を含む1本のテーブルを作る。
+    観測点×日区分×時刻ごとの zスコア／異常フラグ／震源距離を含む1本のテーブルを作る。
+
+    実測の各行は「同じ日区分の平常時」と比べる。月曜の実測は月曜の平常時、
+    土曜は土曜、日曜と祝日は日祝の平常時と突き合わせる。
 
     `baseline_stats` を渡した場合はそれを平常時の統計量として使い、
     `baseline_df` からの再計算を行わない（1時間値ベースの統計量を
     5分間値に適用する等、母集団を差し替えたいときに使う）。
     """
     if baseline_stats is None:
-        baseline_stats = compute_baseline_stats(baseline_df)
+        baseline_stats = compute_baseline_stats(baseline_df, holidays)
 
     df = _add_point_key(target_df)
     df = _to_numeric(df, ["traffic_up", "traffic_down"])
     df["datetime"] = pd.to_datetime(df["datetime"])
+    df = add_daytype(df, holidays or {})
     df["hour"] = df["datetime"].dt.hour
 
     merged = df.merge(
         baseline_stats.drop(columns=["point_lon", "point_lat"], errors="ignore"),
-        on=["point_id", "hour"],
+        on=["point_id", "daytype", "hour"],
         how="left",
     )
 
@@ -136,7 +155,8 @@ def build_observation_table(
     merged = attach_point_code(merged, station_master or {})
 
     cols = [
-        "point_code", "point_id", "point_lon", "point_lat", "datetime", "hour",
+        "point_code", "point_id", "point_lon", "point_lat", "datetime",
+        "daytype", "hour",
         "traffic_up", "traffic_down",
         "baseline_mean_up", "baseline_std_up",
         "baseline_mean_down", "baseline_std_down",

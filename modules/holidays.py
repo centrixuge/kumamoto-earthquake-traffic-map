@@ -57,3 +57,46 @@ def fetch_holidays(cache_path: str = None, timeout: int = 30) -> Dict[str, str]:
 
 def holiday_dates(holidays: Dict[str, str]) -> Set[date]:
     return {date.fromisoformat(k) for k in holidays}
+
+
+# 交通量の「1日」は03:00起点で数える。深夜帯を日付でまたいで切らないため、
+# 平常時ウィンドウ（day 03:00 〜 翌day 03:00）と同じ区切りにそろえる。
+TRAFFIC_DAY_START_HOUR = 3
+
+# 日区分。曜日ごとの交通量の傾向が違うため、平常時は同じ区分どうしで比べる。
+#   月〜金 … 祝日でない各曜日（それぞれ別の平常時を持つ）
+#   土     … 祝日でない土曜
+#   日祝   … 日曜、および平日・土曜にあたる祝日
+WEEKDAY_LABELS = ["月", "火", "水", "木", "金", "土", "日"]
+DAYTYPE_SUNDAY_HOLIDAY = "日祝"
+DAYTYPES = ["月", "火", "水", "木", "金", "土", DAYTYPE_SUNDAY_HOLIDAY]
+
+
+def traffic_date(ts) -> date:
+    """その時刻が属する「交通量の日」（03:00起点）を返す。"""
+    import pandas as pd
+
+    t = pd.Timestamp(ts)
+    if t.hour < TRAFFIC_DAY_START_HOUR:
+        t = t - pd.Timedelta(days=1)
+    return t.date()
+
+
+def daytype_of_date(d: date, holidays: Dict[str, str]) -> str:
+    """
+    日付の日区分を返す。
+
+    祝日は曜日によらず「日祝」に入れる。日曜はもともと休日なので祝日と
+    重なっても傾向が変わらず、平日・土曜の祝日は日曜寄りの traffic になるため。
+    """
+    if (holidays or {}).get(d.isoformat()):
+        return DAYTYPE_SUNDAY_HOLIDAY
+    wd = d.weekday()  # 月=0 ... 日=6
+    if wd == 6:
+        return DAYTYPE_SUNDAY_HOLIDAY
+    return WEEKDAY_LABELS[wd]
+
+
+def daytype_of(ts, holidays: Dict[str, str]) -> str:
+    """時刻の日区分を返す（03:00起点の日付で判定する）。"""
+    return daytype_of_date(traffic_date(ts), holidays)

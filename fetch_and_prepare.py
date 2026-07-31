@@ -53,7 +53,10 @@ from modules.road_regulations import (
     fetch_regulations, build_regulation_paths, merge_regulations_archive,
     regulation_key,
 )
-from modules.holidays import fetch_holidays
+from modules.holidays import (
+    fetch_holidays, daytype_of_date, DAYTYPES, DAYTYPE_SUNDAY_HOLIDAY,
+    TRAFFIC_DAY_START_HOUR,
+)
 from modules.stations import (
     build_station_master, merge_station_master, load_station_master,
     save_station_master,
@@ -88,34 +91,54 @@ BASELINE_WINDOWS = [
 # 1時間値は過去3ヶ月遡れるので、本震と同じ曜日（火）を8週分さかのぼって
 # 平常時の平均・標準偏差の母集団にする。1日の区切りは5分間値側と揃えて03:00起点。
 # 祝日は交通量の傾向が平日と異なるため、母集団から除外する（下で実施）。
-HOURLY_BASELINE_WEEKS = 8
-_HOURLY_BASELINE_CANDIDATES = [
-    (
-        datetime(2026, 7, 21, 3, 0) - timedelta(weeks=i),
-        datetime(2026, 7, 22, 3, 0) - timedelta(weeks=i),
-    )
-    for i in range(HOURLY_BASELINE_WEEKS)
-]
+# 平常時は日区分ごとに別々に持つ（月/火/水/木/金/土/日祝）。曜日で交通量の形が
+# まったく違うため、火曜だけの平常時で土日を評価すると、地震と無関係な平常時の
+# 土日でも8割の行が |z|>=2 になる（実測: 朝7時は火曜比0.68倍、深夜22時は1.99倍）。
+# 各区分で「祝日でない同曜日」を8日集める。足りなければさらに前の週へ遡る。
+HOURLY_BASELINE_DAYS_PER_TYPE = 8
+# 平常時に使えるのは分析対象期間より前の日だけ（対象期間の実測を平常時に
+# 混ぜると自分自身と比べることになる）。
+BASELINE_LATEST_DAY = TARGET_START.date() - timedelta(days=1)
 
 HOLIDAY_CACHE_PATH = os.path.join(DATA_DIR, "holidays.json")
 
 
-def _baseline_windows_excluding_holidays(candidates, holidays):
-    """祝日にあたる日を平常時の母集団から外す。除外内容は必ずログに出す。"""
-    kept, dropped = [], []
-    for start_dt, end_dt in candidates:
-        name = holidays.get(start_dt.date().isoformat())
-        if name:
-            dropped.append((start_dt.date(), name))
-        else:
-            kept.append((start_dt, end_dt))
-    if dropped:
-        for d, name in dropped:
-            print(f"[baseline-1h] excluding {d} ({name}) as a public holiday", flush=True)
-    else:
-        print("[baseline-1h] no public holidays fell in the baseline window", flush=True)
-    print(f"[baseline-1h] using {len(kept)} of {len(candidates)} candidate days", flush=True)
-    return kept
+def _daytype_baseline_windows(holidays, days_per_type=HOURLY_BASELINE_DAYS_PER_TYPE):
+    """
+    日区分ごとの平常時ウィンドウを作る。
+
+    月〜金・土は「その曜日で祝日でない日」を、日祝は「日曜、または平日・土曜に
+    あたる祝日」を、それぞれ新しい順に days_per_type 日集める。
+    1日のウィンドウは 03:00 〜 翌03:00（深夜帯を日付でまたいで切らないため）。
+
+    Returns
+    -------
+    dict: {日区分: [(start_dt, end_dt), ...]}
+    """
+    picked = {dt: [] for dt in DAYTYPES}
+    d = BASELINE_LATEST_DAY
+    # 十分な期間だけ遡る（1時間値は3ヶ月＝約13週まで取得できる）
+    limit = BASELINE_LATEST_DAY - timedelta(days=7 * 13)
+    while d >= limit and any(len(v) < days_per_type for v in picked.values()):
+        dt = daytype_of_date(d, holidays)
+        if len(picked[dt]) < days_per_type:
+            start = datetime(d.year, d.month, d.day, TRAFFIC_DAY_START_HOUR)
+            picked[dt].append((start, start + timedelta(days=1)))
+        d -= timedelta(days=1)
+
+    for dt in DAYTYPES:
+        days = [s.date().isoformat() for s, _ in picked[dt]]
+        print(f"[baseline-1h] {dt}: {len(days)}日 {days}", flush=True)
+    hol_in = [
+        s.date().isoformat() for s, _ in picked[DAYTYPE_SUNDAY_HOLIDAY]
+        if holidays.get(s.date().isoformat())
+    ]
+    print(
+        f"[baseline-1h] 日祝の母集団に含めた祝日: {hol_in or 'なし'}"
+        "（日曜は祝日と重なっても除外しない。平日・土曜の祝日は日祝側に入れる）",
+        flush=True,
+    )
+    return picked
 
 
 def _fetch_period(
@@ -267,8 +290,10 @@ def main():
 
     # --- 1時間値（平常時の母集団＋異常検知の基準） -----------------------------
     holidays = fetch_holidays(HOLIDAY_CACHE_PATH)
-    hourly_baseline_windows = _baseline_windows_excluding_holidays(
-        _HOURLY_BASELINE_CANDIDATES, holidays
+    daytype_windows = _daytype_baseline_windows(holidays)
+    # 取得は日区分をまとめて1つのリストで扱う（アーカイブは日区分を持たない）
+    hourly_baseline_windows = sorted(
+        w for windows in daytype_windows.values() for w in windows
     )
 
     hourly_archive = _load_archive(HOURLY_ARCHIVE_PATH)
@@ -290,7 +315,7 @@ def main():
         [_slice(hourly_archive, s, e) for s, e in hourly_baseline_windows],
         ignore_index=True,
     )
-    hourly_baseline_stats = compute_baseline_stats(hourly_baseline_df)
+    hourly_baseline_stats = compute_baseline_stats(hourly_baseline_df, holidays)
 
     # --- 観測点マスタ（常時観測点コードと緯度経度の対応） ----------------------
     # アーカイブにはコード列を持たない時期のデータが含まれるため、座標から
@@ -317,7 +342,7 @@ def main():
         min_intensity=MIN_AFTERSHOCK_INTENSITY,
     )
 
-    # 実績の既定は5分間値。平常時は1時間値（同曜日8週分・祝日除く）から求め、
+    # 実績の既定は5分間値。平常時は同じ日区分の1時間値（各区分8日分）から求め、
     # 単位を合わせるため1/12にスケールする。
     observations = build_observation_table(
         target_df=target_df,
@@ -327,6 +352,7 @@ def main():
         epicenter_lon=mainshock["epicenter_lon"],
         baseline_stats=scale_baseline_stats(hourly_baseline_stats, 1.0 / 12.0),
         station_master=station_master,
+        holidays=holidays,
     )
     observations.to_parquet(os.path.join(DATA_DIR, "observations.parquet"))
 
@@ -341,6 +367,7 @@ def main():
         epicenter_lon=mainshock["epicenter_lon"],
         baseline_stats=hourly_baseline_stats,
         station_master=station_master,
+        holidays=holidays,
     )
     observations_hourly.to_parquet(os.path.join(DATA_DIR, "observations_hourly.parquet"))
 
@@ -359,6 +386,10 @@ def main():
         "baseline_windows": [
             {"start": s.isoformat(), "end": e.isoformat()} for s, e in BASELINE_WINDOWS
         ],
+        "hourly_baseline_daytypes": {
+            dt: [s2.date().isoformat() for s2, _ in sorted(w)]
+            for dt, w in daytype_windows.items()
+        },
         "hourly_baseline_windows": [
             {"start": s.isoformat(), "end": e.isoformat()}
             for s, e in sorted(hourly_baseline_windows)
