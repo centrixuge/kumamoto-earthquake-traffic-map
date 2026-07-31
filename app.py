@@ -1279,6 +1279,26 @@ def main():
             # 地図と時系列が近すぎて見分けづらいので、列の間隔を広く取る
             col_map, col_ts = st.columns([2, 3], gap="large")
 
+            # 粒度のラジオは地図より先に作る。地図クリックの処理は st.rerun() で
+            # スクリプトを中断するため、そこより後ろでウィジェットを作ると
+            # その実行では作られず、Streamlit側の状態が落ちて既定値（5分間値）に
+            # 戻ることがある（画面のラジオは1時間値のままなのに図だけ5分値になる）。
+            # あわせて、選択内容をウィジェット以外のキーにも控えておき、
+            # 状態が落ちても index で復元できるようにする。
+            with col_ts:
+                st.subheader("選択観測点の時系列（平常時 vs 観測実績）")
+                view_names = list(TIMESERIES_VIEWS.keys())
+                saved_view = st.session_state.get("_timeseries_view_choice", view_names[0])
+                view = st.radio(
+                    "時系列の粒度と平常時の取り方",
+                    view_names,
+                    index=view_names.index(saved_view) if saved_view in view_names else 0,
+                    horizontal=True,
+                    key="timeseries_view",
+                )
+                st.session_state["_timeseries_view_choice"] = view
+                cfg = TIMESERIES_VIEWS[view]
+
             with col_map:
                 st.subheader("観測点別の異常度 × 通行規制")
                 n_post = sum(
@@ -1419,14 +1439,6 @@ def main():
                     st.rerun()
 
             with col_ts:
-                st.subheader("選択観測点の時系列（平常時 vs 観測実績）")
-                view = st.radio(
-                    "時系列の粒度と平常時の取り方",
-                    list(TIMESERIES_VIEWS.keys()),
-                    horizontal=True,
-                    key="timeseries_view",
-                )
-                cfg = TIMESERIES_VIEWS[view]
                 # 選択中の観測点に掛かっている直轄国道の通行止めを帯で示す
                 mlit_bands = []
                 for pid in selected_points:
