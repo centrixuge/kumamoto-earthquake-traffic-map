@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # coding: utf-8
 """
-熊本地震（2026-07-28）による交通行動変容分析ダッシュボード。
+熊本地震（2026-07-28）前後の交通量を平常時と比べるダッシュボード。
 
 `fetch_and_prepare.py` が生成した data/*.parquet, data/quake_info.json を
 読み込んで表示するだけのビュー層。GDAL依存のgeopandas/shapelyはここでは使わない
@@ -63,7 +63,7 @@ def _now_jst() -> datetime:
     return datetime.now(JST).replace(tzinfo=None)
 
 st.set_page_config(
-    page_title="熊本地震・交通行動変容ダッシュボード",
+    page_title="熊本地震・交通量変化ダッシュボード",
     layout="wide",
 )
 
@@ -413,7 +413,7 @@ def to_dictionary_xlsx_bytes(dict_df: pd.DataFrame, notes: tuple) -> bytes:
     intro = wb.active
     intro.title = "はじめに"
 
-    intro["A1"] = "熊本地震・交通行動変容ダッシュボード CSV列定義書"
+    intro["A1"] = "熊本地震・交通量変化ダッシュボード CSV列定義書"
     intro["A1"].font = Font(bold=True, size=14)
     intro["A2"] = f"作成日時: {_now_jst():%Y-%m-%d %H:%M} (JST)"
     intro["A3"] = "公開URL: https://kumamoto-earthquake-traffic-map.streamlit.app/"
@@ -1150,7 +1150,7 @@ def main():
         unsafe_allow_html=True,
     )
     st.markdown(
-        '<div class="dash-title">熊本地震（2026-07-28）交通行動変容ダッシュボード</div>'
+        '<div class="dash-title">熊本地震（2026-07-28）交通量変化ダッシュボード</div>'
         '<div class="dash-lead">'
         '<b><a href="https://www.jartic-open-traffic.org/" target="_blank">'
         'JARTIC 交通量オープンデータ</a></b> の常設トラカン交通量（5分間値・1時間値）を主データに、'
