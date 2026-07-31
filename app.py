@@ -670,6 +670,10 @@ def build_base_map(
             # 通行止めの×は目印だけなのでクリックを透過させ、下にある
             # 観測点マーカーを確実にクリックできるようにする。
             ".reg-x-mark{pointer-events:none !important;}"
+            # ツールチップは既定だと横に伸びて地図の外まではみ出す。
+            # 幅の上限を付けて折り返し、文字も小さくする。
+            ".leaflet-tooltip{max-width:230px;white-space:normal;"
+            "font-size:11px;line-height:1.45;padding:4px 7px;}"
             ".leaflet-control-layers{font-size:12px;max-width:calc(100vw - 28px);}"
             ".leaflet-control-layers-overlays label,"
             ".leaflet-control-layers-overlays label>span{white-space:nowrap;}"
@@ -754,11 +758,10 @@ def build_base_map(
                     opacity=0.5 if ended else 0.95,
                     dash_array="6,8" if ended else None,
                     tooltip=(
-                        f"<b>直轄国道の規制</b>（区間の線はOSMのIC座標から復元）<br>"
-                        f"{item['route_name']}（{item['section']}）<br>"
+                        f"<b>{item['route_name']}</b><br>{item['section']}<br>"
                         f"<b>{item['content']}／{'解除済み' if ended else '規制中'}</b><br>"
                         f"{item['start_timestamp']} 〜 {item['end_timestamp'] or '(継続中)'}<br>"
-                        f"出典: 熊本河川国道事務所（県ポータルのデータには含まれません）"
+                        f"直轄国道（出典: 熊本河川国道事務所）"
                     ),
                 ).add_to(mlit_layer)
                 mlit_drawn += 1
@@ -805,7 +808,8 @@ def build_base_map(
                 mlit_layer.add_to(fmap)
 
         if regulations or mlit_drawn:
-            folium.LayerControl(collapsed=False).add_to(fmap)
+            # 左上・右上だと観測点マーカーに被るので右下に置く
+            folium.LayerControl(position="bottomright", collapsed=False).add_to(fmap)
 
         folium.Marker(
             location=[mainshock["epicenter_lat"], mainshock["epicenter_lon"]],
@@ -1402,7 +1406,7 @@ def main():
                     for head, items in rows
                 )
                 st.markdown(
-                    '<div style="font-size:0.72rem;line-height:1.5;margin:0 0 4px 0;">'
+                    '<div style="font-size:0.79rem;line-height:1.45;margin:0 0 4px 0;">'
                     f"{legend_html}</div>",
                     unsafe_allow_html=True,
                 )
