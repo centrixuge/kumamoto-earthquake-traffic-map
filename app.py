@@ -1394,7 +1394,7 @@ def main():
                 view_names = list(TIMESERIES_VIEWS.keys())
                 saved_view = st.session_state.get("_timeseries_view_choice", view_names[0])
                 view = st.radio(
-                    "集計方法",
+                    "交通量の集計方法",
                     view_names,
                     index=view_names.index(saved_view) if saved_view in view_names else 0,
                     horizontal=True,
