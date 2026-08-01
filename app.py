@@ -41,7 +41,7 @@ TIMESERIES_DISPLAY_START = pd.Timestamp("2026-07-27 12:00")
 # 時系列ビューの切り替え。実績の既定は5分間値、平常時はいずれも1時間値
 # （同じ日区分の各8日分）から求めている。
 TIMESERIES_VIEWS = {
-    "5分間値（既定）": {
+    "5分間値": {
         "file": "observations.parquet",
         "unit_label": "5分間値",
         "note": (
@@ -51,7 +51,7 @@ TIMESERIES_VIEWS = {
             "異常検知の判定は1時間値ベースで行っています。"
         ),
     },
-    "1時間値（参考）": {
+    "1時間値": {
         "file": "observations_hourly.parquet",
         "unit_label": "1時間値",
         "note": "実績・平常時とも1時間値どうしの比較で、異常検知の判定もこの粒度で行っています。",
