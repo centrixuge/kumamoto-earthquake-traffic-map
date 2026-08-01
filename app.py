@@ -1432,16 +1432,16 @@ def main():
 
             with col_map:
                 st.subheader("観測点別の異常度 × 通行規制")
+                # 色（規制の区分）と線の形（規制中か解除済みか）は独立した軸で、
+                # 破線は青灰・赤・橙のどれにも、県feedにも直轄国道にも同じように
+                # 掛かる。以前は「破線は解除済み」を地震前の規制の行に置いていて、
+                # その区分だけの決まりごとに見えていたので、行を分けた。
+                _now = _now_jst()
                 n_post = sum(
-                    1 for r in regulations
-                    if _regulation_is_post_quake(r, quake_at)
-                    and not _regulation_is_ended(r, _now_jst())
+                    1 for r in regulations if _regulation_is_post_quake(r, quake_at)
                 )
-                n_pre = sum(
-                    1 for r in regulations
-                    if not _regulation_is_post_quake(r, quake_at)
-                    and not _regulation_is_ended(r, _now_jst())
-                )
+                n_pre = len(regulations) - n_post
+                n_ended = sum(1 for r in regulations if _regulation_is_ended(r, _now))
                 # 凡例は3行に圧縮する。見出しを独立行にすると1項目ごとに
                 # 行が増えて余白ばかりになるので、見出しも同じ行に入れて
                 # 「分類: 項目 項目 …」の形にし、文字も小さくする。
@@ -1453,30 +1453,39 @@ def main():
                     1 for i in _mlit_items
                     if not i.get("path") and i.get("affected_point_codes")
                 )
+                n_ended += sum(
+                    1 for i in _mlit_items if i.get("path") and i.get("end_timestamp")
+                )
 
                 def _sw(style: str) -> str:
                     """凡例の色見本。縦位置を文字に揃える。"""
                     return f'<span style="display:inline-block;vertical-align:middle;{style}"></span>'
 
                 bar = "width:20px;height:5px;"
-                post_items = [
-                    f'{_sw(bar + "background:#e60000;")} <b>×</b> 全面/車両通行止め',
+                color_items = [
+                    f'{_sw(bar + "background:#e60000;")} <b>×</b> 全面/車両通行止め'
+                    f'（地震後 {n_post}件）',
                     f'{_sw("width:20px;height:4px;background:#e67e22;")} 片側交互など',
+                    f'{_sw("width:20px;height:3px;background:#5b7c99;opacity:0.55;")}'
+                    f' 地震前からの規制 {n_pre}件（工事・過去の災害）',
                 ]
                 if n_mlit_line:
-                    post_items.append(
-                        f'{_sw("width:20px;height:0;border-top:5px dashed #e60000;")}'
-                        f' 直轄国道 {n_mlit_line}件（区間はOSMのIC座標から復元・別レイヤ）'
+                    color_items.append(
+                        f'直轄国道 {n_mlit_line}件も同じ描き分けで別レイヤ'
+                        '（区間はOSMのIC座標から復元）'
                     )
+                # 線の形は色と独立した軸。県道以下でも直轄国道でも、
+                # 解除済みなら破線になることを1か所で言い切る。
+                shape_items = [
+                    f'{_sw("width:20px;height:4px;background:#95a5a6;")} 実線は規制中',
+                    f'{_sw("width:20px;height:0;border-top:4px dashed #95a5a6;")}'
+                    f' 破線は解除済み {n_ended}件',
+                ]
                 if n_mlit_point:
-                    post_items.append(
+                    shape_items.append(
                         '<span style="color:#b00000;font-weight:900;">▲</span>'
                         f' 直轄国道で線形が作れないもの {n_mlit_point}件（該当観測点のすぐ上）'
                     )
-                pre_items = [
-                    f'{_sw("width:20px;height:3px;background:#5b7c99;opacity:0.55;")} 今回の地震とは無関係',
-                    f'{_sw("width:20px;height:0;border-top:3px dashed #95a5a6;")} 破線は解除済み',
-                ]
                 point_items = [
                     f'{_sw("width:30px;height:11px;border-radius:6px;border:1px solid #aaa;"
                           "background:linear-gradient(to right,#deebf7,#08306b);")}'
@@ -1486,11 +1495,11 @@ def main():
                     point_items.append(
                         f'{_sw("width:11px;height:11px;border-radius:50%;background:#f0f0f0;"
                               "border:2px dashed #777;")}'
-                        f' 灰色・破線は地震後が欠測 {n_no_data}点'
+                        f' 枠が灰色の破線なら地震後が欠測 {n_no_data}点'
                     )
                 rows = [
-                    (f"地震後に始まった規制 {n_post}件", post_items),
-                    (f"地震前からの規制 {n_pre}件（工事・過去の災害）", pre_items),
+                    ("規制の色", color_items),
+                    ("規制の線の形（色・道路の種別によらず共通）", shape_items),
                     (f"観測点 {n_points}点", point_items),
                 ]
                 legend_html = "".join(
