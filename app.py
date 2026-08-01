@@ -26,6 +26,11 @@ from modules.stations import attach_point_code, load_station_master
 DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
 MAX_SELECTED_POINTS = 2
 SELECTION_COLORS = ["red", "green"]
+# 車種別ビューで大型車に使う色。選択色（赤・緑）と同系統のまま明るくして、
+# 「同じ観測点の別の車種」だと分かるようにする。大型車は小型車の1割程度の
+# 水準なので同じ縦軸でも下側に分かれて描かれる。
+# 線種で分ける案は、平常時の点線と紛らわしくなるため採らなかった。
+SELECTION_ALT_COLORS = ["#ff5fa2", "#7ac70c"]  # ピンク / ライムグリーン
 # 観測点マーカーのツールチップに必ず入れる定型句。クリックされた図形が
 # 観測点マーカーかどうかを、この文字列で判定する（point_id_from_tooltip）。
 # 表示と判定でずれないよう1か所に置く。
@@ -56,8 +61,9 @@ TIMESERIES_VIEWS = {
         "unit_label": "1時間値",
         "series": "vehicle",
         "note": (
-            "小型車と大型車を分けて表示します。大型車は小型車の1割程度しかないため、"
-            "同じ軸に重ねると潰れてしまうので図を分けています（縦軸の目盛りが図ごとに違う点に注意）。"
+            "同じ図の中に小型車（濃い色）と大型車（明るい色）を並べています。"
+            "大型車は小型車の1割程度の水準なので、同じ縦軸でも下側に分かれて描かれます。"
+            "線種で分ける案は平常時の点線と紛らわしくなるため色で分けています。"
             "異常検知の判定は車種を合計した1時間値で行っており、この図の判定は変わりません。"
             "APIは車種判別不能の台数も返しますが、アーカイブ全期間で1台しかないため扱っていません。"
         ),
@@ -67,7 +73,8 @@ TIMESERIES_VIEWS = {
         "unit_label": "5分間値",
         "series": "vehicle",
         "note": (
-            "小型車と大型車を5分間値で分けて表示します。**大型車は5分あたり中央値4台（0台が14%）**"
+            "同じ図の中に小型車（濃い色）と大型車（明るい色）を5分間値で並べています。"
+            "**大型車は5分あたり中央値4台（0台が14%）**"
             "と粒度が粗く、線がぎざぎざになります。形の変化を細かく追いたいとき向けで、"
             "水準の比較は「車種別・1時間値」のほうが読みやすいです。"
             "平常時は1時間値から求めた値を1/12しているため、帯は実際のばらつきより狭く出ます"
@@ -79,15 +86,15 @@ TIMESERIES_VIEWS = {
 
 # 時系列図に描く系列。既定は上り・下りの合計、「車種別」は小型・大型に分ける。
 # 大型車は小型車の1割程度なので、同じ軸に載せず図を分ける。
+# 1図＝1方向。各図に描く系列を (列のサフィックス, 凡例に足す語, 色の種別) で持つ。
+# 色の種別 "main" は選択色そのもの、"alt" は同系統の明るい色（大型車用）。
 SERIES_TOTAL = [
-    ("traffic_up", "上り"),
-    ("traffic_down", "下り"),
+    ("上り", [("up", "", "main")]),
+    ("下り", [("down", "", "main")]),
 ]
 SERIES_VEHICLE = [
-    ("traffic_up_small", "上り・小型車"),
-    ("traffic_up_large", "上り・大型車"),
-    ("traffic_down_small", "下り・小型車"),
-    ("traffic_down_large", "下り・大型車"),
+    ("上り", [("up_small", " 小型", "main"), ("up_large", " 大型", "alt")]),
+    ("下り", [("down_small", " 小型", "main"), ("down_large", " 大型", "alt")]),
 ]
 
 # 通行規制の日時はJSTの壁時計時刻（naive）で保存されている。Streamlit Cloud等の
@@ -1085,44 +1092,52 @@ def render_timeseries(
     x_range = [TIMESERIES_DISPLAY_START, observations["datetime"].max()]
 
     series = SERIES_VEHICLE if series_mode == "vehicle" else SERIES_TOTAL
-    # 車種別は図が4枚になるので1枚あたりを低くする
-    chart_height = 210 if series_mode == "vehicle" else 290
-    for direction, label in series:
-        suffix = direction[len("traffic_"):]
-        mean_col, std_col = f"baseline_mean_{suffix}", f"baseline_std_{suffix}"
-        if direction not in observations.columns or mean_col not in observations.columns:
+    chart_height = 290
+    for label, sub_series in series:
+        missing = [
+            suf for suf, _, _ in sub_series
+            if f"traffic_{suf}" not in observations.columns
+            or f"baseline_mean_{suf}" not in observations.columns
+        ]
+        if missing:
             st.info(
-                f"「{label}」の列がデータにありません。"
+                f"「{label}」に必要な列がデータにありません（{', '.join(missing)}）。"
                 "`python fetch_and_prepare.py` を実行してデータを作り直してください。"
             )
             continue
         fig = go.Figure()
         for i, pid in enumerate(selected_points):
-            color = SELECTION_COLORS[i % len(SELECTION_COLORS)]
             mark = point_labels.get(pid, pid)
             pdf = observations[observations["point_id"] == pid].sort_values("datetime")
-            if len(selected_points) == 1:
+            for suffix, veh_label, color_kind in sub_series:
+                palette = SELECTION_ALT_COLORS if color_kind == "alt" else SELECTION_COLORS
+                color = palette[i % len(palette)]
+                mean_col = f"baseline_mean_{suffix}"
+                std_col = f"baseline_std_{suffix}"
+                # ±σの帯は1地点のときだけ。車種別では車種ごとに1本ずつ出す
+                if len(selected_points) == 1:
+                    fig.add_trace(go.Scatter(
+                        x=pdf["datetime"], y=pdf[mean_col] + pdf[std_col],
+                        mode="lines", line=dict(width=0), showlegend=False,
+                    ))
+                    fig.add_trace(go.Scatter(
+                        x=pdf["datetime"], y=pdf[mean_col] - pdf[std_col],
+                        mode="lines", line=dict(width=0), fill="tonexty",
+                        fillcolor="rgba(100,100,100,0.2)",
+                        name=f"平常時±σ{veh_label}",
+                    ))
                 fig.add_trace(go.Scatter(
-                    x=pdf["datetime"], y=pdf[mean_col] + pdf[std_col],
-                    mode="lines", line=dict(width=0), showlegend=False,
+                    x=pdf["datetime"], y=pdf[mean_col],
+                    mode="lines", line=dict(color=color, dash="dot", width=1),
+                    opacity=0.6, name=f"{mark}{veh_label} 平常時",
                 ))
                 fig.add_trace(go.Scatter(
-                    x=pdf["datetime"], y=pdf[mean_col] - pdf[std_col],
-                    mode="lines", line=dict(width=0), fill="tonexty",
-                    fillcolor="rgba(100,100,100,0.2)", name="平常時±σ",
+                    x=pdf["datetime"], y=pdf[f"traffic_{suffix}"],
+                    mode="lines+markers",
+                    line=dict(color=color, width=1.2),
+                    marker=dict(size=3),
+                    name=f"{mark}{veh_label} 実績",
                 ))
-            fig.add_trace(go.Scatter(
-                x=pdf["datetime"], y=pdf[mean_col],
-                mode="lines", line=dict(color=color, dash="dot", width=1),
-                opacity=0.6, name=f"{mark} 平常時",
-            ))
-            fig.add_trace(go.Scatter(
-                x=pdf["datetime"], y=pdf[direction],
-                mode="lines+markers",
-                line=dict(color=color, width=1.2),
-                marker=dict(size=3),
-                name=f"{mark} 実績",
-            ))
         # 直轄国道の通行止め期間。この規制は県ポータルのデータに含まれず地図に
         # 線として出ないため、交通量が0になっている理由が図から読めなくなる。
         # 該当観測点を選んだときだけ、期間を帯で示す。
@@ -1150,7 +1165,7 @@ def render_timeseries(
         # 上下2図を並べると縦に長くなり、観測点を比べるたびにスクロールが
         # 必要になるため1図の高さを抑える（400 -> 290）。凡例は2図で同じ内容
         # なので上の図だけに出し、下の図はその分の余白も詰める。
-        show_legend = label == series[0][1]
+        show_legend = label == series[0][0]
         fig.update_layout(
             height=chart_height,
             # 凡例はグラフ下に置く。上部だとplotlyのモードバー（カメラ・ズーム等の
@@ -1163,8 +1178,9 @@ def render_timeseries(
             ),
             xaxis=dict(tickformat="%m/%d\n%H:%M", range=x_range),
         )
-        title = (f"{label}（{unit_label}）" if series_mode == "vehicle"
-                 else f"{label}交通量（{unit_label}）")
+        title = f"{label}交通量（{unit_label}）"
+        if series_mode == "vehicle":
+            title += "　小型＝濃い色／大型＝明るい色"
         st.markdown(f"**{title}**")
         st.plotly_chart(fig, use_container_width=True)
 
