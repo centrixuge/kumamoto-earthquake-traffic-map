@@ -4,7 +4,7 @@
 
 ## データのアーカイブについて
 
-JARTIC交通量オープンデータの5分値は**過去1ヶ月分しか遡って取得できません**（[公式サイト](https://www.jartic-open-traffic.org/)）。この制約に対応するため、`fetch_and_prepare.py` は取得した生データを `data/archive/traffic_raw.parquet` に**追記専用（削除・上書きなし）**で蓄積します。
+JARTIC交通量オープンデータの5分値は**過去1ヶ月分しか遡って取得できません**（[公式サイト](https://www.jartic-open-traffic.org/)）。この制約に対応するため、`fetch_and_prepare.py` は取得した生データを `data/archive/traffic_raw.parquet` に**追記専用**（削除・上書きなし）で蓄積します。
 
 - `target.parquet`/`baseline.parquet`/`observations*.parquet`/`quake_info.json` はこのアーカイブから毎回再生成される「現在時点のビュー」で、上書きされて構いません
 - 実行のたびに、アーカイブ済みの**コマ（5分間値なら1コマ=5分）と期待されるコマの並びを突き合わせ、まだ持っていないコマだけ**をAPIに問い合わせます。1コマ=1リクエストなので範囲でまとめて取り直すより無駄がなく、途中に空いた穴も次の実行で埋まります
