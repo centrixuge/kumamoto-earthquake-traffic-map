@@ -584,6 +584,23 @@ def build_point_summary(post: pd.DataFrame, observations: pd.DataFrame = None) -
     return summary.sort_values("max_abs_z", ascending=False).reset_index(drop=True)
 
 
+# 初期表示で選んでおく観測点（JARTICの常時観測点コード）。
+# 異常度の最上位を出すと日によって入れ替わってしまうので、
+# 見せたい地点を固定しておく。データに無ければ最上位にフォールバックする。
+DEFAULT_POINT_CODE = "9110040"
+
+
+def _default_selection(point_summary: pd.DataFrame) -> list:
+    """初期選択の観測点IDを返す。"""
+    if point_summary.empty:
+        return []
+    if "point_code" in point_summary.columns:
+        hit = point_summary[point_summary["point_code"].astype(str) == DEFAULT_POINT_CODE]
+        if not hit.empty:
+            return [hit["point_id"].iloc[0]]
+    return [point_summary["point_id"].iloc[0]]
+
+
 FULL_CLOSURE_CONTENTS = {"全面通行止め", "車両通行止め"}
 
 
@@ -1354,9 +1371,7 @@ def main():
     point_summary = build_point_summary(post, observations)
 
     if "selected_points" not in st.session_state:
-        st.session_state["selected_points"] = (
-            [point_summary["point_id"].iloc[0]] if not point_summary.empty else []
-        )
+        st.session_state["selected_points"] = _default_selection(point_summary)
 
     INTENSITY_LABELS = {1: "1", 2: "2", 3: "3", 4: "4", 5: "5弱", 6: "5強", 7: "6弱", 8: "6強", 9: "7"}
     n_events = len(quake_info.get("events", []))
