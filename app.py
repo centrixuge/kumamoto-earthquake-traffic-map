@@ -755,7 +755,7 @@ def build_base_map(
             ".reg-x-mark{pointer-events:none !important;}"
             # 地図内の観測点凡例（左下）。レイヤ一覧(bottomright)と重ならない
             # 位置に置き、クリックは下の地図に通す。
-            ".pt-shape-legend{position:absolute;left:8px;bottom:8px;z-index:650;"
+            ".pt-shape-legend{position:absolute;right:8px;top:8px;z-index:650;"
             "background:rgba(255,255,255,0.88);border:1px solid #bbb;border-radius:4px;"
             "padding:4px 7px;font-size:11.5px;line-height:1.6;color:#222;"
             "pointer-events:none;font-family:sans-serif;}"
@@ -908,8 +908,9 @@ def build_base_map(
             folium.LayerControl(position="bottomright", collapsed=False).add_to(fmap)
 
         # 観測点の形（＝道路の種別）は地図を見ながら参照するものなので、
-        # 地図の外の凡例ではなく地図の中に置く。レイヤ一覧が右下にあるので
-        # こちらは左下。マーカーに重なっても中身が読めるよう半透明の白地にする。
+        # 地図の外の凡例ではなく地図の中に置く。位置は右上（レイヤ一覧は右下、
+        # ズームボタンは左上なので、どちらとも重ならない）。
+        # マーカーに重なっても中身が読めるよう半透明の白地にする。
         n_general = int((~point_summary["road_type"].map(_is_square_point)).sum())             if "road_type" in point_summary.columns else len(point_summary)
         n_express = len(point_summary) - n_general
         if n_express:
