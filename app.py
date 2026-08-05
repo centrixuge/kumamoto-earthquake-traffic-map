@@ -267,6 +267,7 @@ def to_csv_bytes(df: pd.DataFrame) -> bytes:
 # 対応させている。実データの列と食い違っていないかは build_data_dictionary で検査する。
 _TRAFFIC_COLUMNS = [
     ("point_code", "文字列", "JARTICの常時観測点コード。観測点を一意に識別する公式のID"),
+    ("road_type", "文字列", "「1」＝高速自動車国道、「3」＝一般国道（JARTICの道路種別。この2値のみ）。常時観測点コードからは判別できないためAPIの値を保持している。地図では高速自動車国道を■、一般国道を●で描き分けている"),
     ("lon", "度（EPSG:4326）", "観測点の経度"),
     ("lat", "度（EPSG:4326）", "観測点の緯度"),
     ("datetime", "日時（JST）", "観測時刻。5分間値は5分刻み、1時間値は毎時0分（その時刻から始まる区間の集計値）"),
@@ -282,6 +283,7 @@ _TRAFFIC_COLUMNS = [
 
 _OBSERVATION_COLUMNS = [
     ("point_code", "文字列", "JARTICの常時観測点コード"),
+    ("road_type", "文字列", "「1」＝高速自動車国道、「3」＝一般国道（JARTICの道路種別。この2値のみ）。常時観測点コードからは判別できないためAPIの値を保持している。地図では高速自動車国道を■、一般国道を●で描き分けている"),
     ("point_id", "文字列", "内部の結合キー（経度_緯度を6桁に丸めた文字列）。観測点の識別にはpoint_codeを使ってください"),
     ("point_lon", "度（EPSG:4326）", "観測点の経度（6桁に丸め）"),
     ("point_lat", "度（EPSG:4326）", "観測点の緯度（6桁に丸め）"),
@@ -542,7 +544,7 @@ def build_point_summary(post: pd.DataFrame, observations: pd.DataFrame = None) -
     """
     if post.empty:
         return pd.DataFrame(columns=[
-            "point_id", "point_code", "point_lon", "point_lat",
+            "point_id", "point_code", "road_type", "point_lon", "point_lat",
             "max_abs_z", "n_anomaly", "distance_km", "last_observed_at",
         ])
     summary = (
@@ -553,6 +555,13 @@ def build_point_summary(post: pd.DataFrame, observations: pd.DataFrame = None) -
                 "point_code": (
                     g["point_code"].dropna().iloc[0]
                     if "point_code" in g.columns and g["point_code"].notna().any()
+                    else None
+                ),
+                # 道路種別も観測点ごとに固定（1:高速自動車国道 / 3:一般国道）。
+                # 地図のマーカー形状を分けるのに使う。
+                "road_type": (
+                    g["road_type"].dropna().iloc[0]
+                    if "road_type" in g.columns and g["road_type"].notna().any()
                     else None
                 ),
                 "max_abs_z": max(g["z_up"].abs().max(), g["z_down"].abs().max()),
@@ -585,6 +594,23 @@ def _point_radius(max_abs_z, max_z: float, selected: bool = False) -> float:
     """
     frac = 0.0 if pd.isna(max_abs_z) else max_abs_z / max_z
     return (14 if selected else 11) + 12 * frac
+
+
+# 高速自動車国道は■、一般国道は●で描く。色は異常度に使っているので、
+# 道路の種別は形で分ける（色を増やすと異常度のグラデーションが読めなくなる）。
+ROAD_TYPE_SQUARE = "1"   # 高速自動車国道
+ROAD_TYPE_LABELS = {"1": "高速自動車国道", "3": "一般国道"}
+
+
+def _is_square_point(road_type) -> bool:
+    return str(road_type) == ROAD_TYPE_SQUARE
+
+
+def _rgba(hex_color: str, alpha: float) -> str:
+    """#rrggbb を rgba() にする。■はdivで描くため、塗りだけ透過させたい。"""
+    h = hex_color.lstrip("#")
+    r, g, b = (int(h[i:i + 2], 16) for i in (0, 2, 4))
+    return f"rgba({r},{g},{b},{alpha})"
 
 
 def _severity_color(frac: float) -> str:
@@ -982,17 +1008,44 @@ def build_points_feature_group(
             detail = (
                 f"最大|zスコア|: {row['max_abs_z']:.2f} / 異常件数: {int(row['n_anomaly'])}"
             )
-        folium.CircleMarker(
-            location=[row["point_lat"], row["point_lon"]],
-            radius=_point_radius(row["max_abs_z"], max_z, is_selected),
-            color=border_color,
-            weight=4 if is_selected else (2 if no_data else 1),
-            dash_array="4,3" if no_data else None,
-            fill=True,
-            fill_color="#f0f0f0" if no_data else _severity_color(frac),
-            fill_opacity=0.6 if no_data else 0.85,
-            tooltip=f"{label}{POINT_TOOLTIP_HINT}<br>{detail}",
-        ).add_to(fg)
+        radius = _point_radius(row["max_abs_z"], max_z, is_selected)
+        weight = 4 if is_selected else (2 if no_data else 1)
+        fill_color = "#f0f0f0" if no_data else _severity_color(frac)
+        fill_opacity = 0.6 if no_data else 0.85
+        tooltip = f"{label}{POINT_TOOLTIP_HINT}<br>{detail}"
+
+        if _is_square_point(row.get("road_type")):
+            # CircleMarkerに角を出す方法はないので、DivIconの四角で描く。
+            # 円と同じ大きさに見えるよう1辺を直径に合わせ、中心をアンカーにする。
+            # ツールチップは丸と同じ文字列にしてあるので、クリックの判定
+            # （point_id_from_tooltip）は形が変わっても同じように効く。
+            size = int(round(radius * 2))
+            style = (
+                f"width:{size}px;height:{size}px;box-sizing:border-box;"
+                f"background:{_rgba(fill_color, fill_opacity)};"
+                f"border:{weight}px {'dashed' if no_data else 'solid'} {border_color};"
+            )
+            folium.Marker(
+                location=[row["point_lat"], row["point_lon"]],
+                icon=folium.DivIcon(
+                    icon_size=(size, size),
+                    icon_anchor=(size // 2, size // 2),
+                    html=f'<div style="{style}"></div>',
+                ),
+                tooltip=tooltip,
+            ).add_to(fg)
+        else:
+            folium.CircleMarker(
+                location=[row["point_lat"], row["point_lon"]],
+                radius=radius,
+                color=border_color,
+                weight=weight,
+                dash_array="4,3" if no_data else None,
+                fill=True,
+                fill_color=fill_color,
+                fill_opacity=fill_opacity,
+                tooltip=tooltip,
+            ).add_to(fg)
     return fg
 
 
@@ -1484,11 +1537,22 @@ def main():
                         '<span style="color:#b00000;font-weight:900;">▲</span>'
                         f' 直轄国道で線形が作れないもの {n_mlit_point}件（該当観測点のすぐ上）'
                     )
+                n_square = int(point_summary["road_type"].map(_is_square_point).sum())                     if "road_type" in point_summary.columns else 0
                 point_items = [
                     f'{_sw("width:30px;height:11px;border-radius:6px;border:1px solid #aaa;"
                           "background:linear-gradient(to right,#deebf7,#08306b);")}'
                     f' 濃く大きいほど異常度|z|が大きい {n_points - n_no_data}点',
                 ]
+                if n_square:
+                    # 形＝道路の種別。色は異常度に使っているので形で分けている。
+                    point_items.append(
+                        f'{_sw("width:11px;height:11px;border-radius:50%;"
+                              "background:#4a7ab5;border:1px solid #333;")}'
+                        f' ●一般国道 {n_points - n_square}点　'
+                        f'{_sw("width:11px;height:11px;"
+                              "background:#4a7ab5;border:1px solid #333;")}'
+                        f' ■高速自動車国道 {n_square}点'
+                    )
                 if n_no_data:
                     point_items.append(
                         f'{_sw("width:11px;height:11px;border-radius:50%;background:#f0f0f0;"

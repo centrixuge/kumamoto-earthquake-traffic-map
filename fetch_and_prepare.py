@@ -62,7 +62,10 @@ from modules.stations import (
     save_station_master,
 )
 
-ROAD_TYPE = "3"
+# 取得する道路種別。仕様書では 1:高速自動車国道 / 3:一般国道 の2値のみ。
+# APIは種別ごとに別リクエストなので、両方取ってから結合する。
+# 以前は "3" だけで、BBOX内にある九州中央自動車道の3点を取りこぼしていた。
+ROAD_TYPES = ("3", "1")
 TYPE_NAME = "t_travospublic_measure_5m"
 HOURLY_TYPE_NAME = "t_travospublic_measure_1h"
 BBOX = (130.450, 32.400, 131.000, 33.000)  # 熊本県
@@ -147,14 +150,20 @@ def _fetch_period(
     start_s = start_dt.strftime("%Y%m%d%H%M")
     end_s = end_dt.strftime("%Y%m%d%H%M")
     print(f"[{label}] fetching {start_s} -> {end_s}", flush=True)
-    combined = fetch_traffic_range(
-        road_type=ROAD_TYPE,
-        time_code_start=start_s,
-        time_code_end=end_s,
-        type_name=type_name,
-        bbox=BBOX,
-    )
-    print(f"[{label}] total features: {len(combined['features'])}", flush=True)
+    feats = []
+    for rt in ROAD_TYPES:
+        part = fetch_traffic_range(
+            road_type=rt,
+            time_code_start=start_s,
+            time_code_end=end_s,
+            type_name=type_name,
+            bbox=BBOX,
+        )
+        got = part.get("features", [])
+        print(f"[{label}] 道路種別{rt}: {len(got)} features", flush=True)
+        feats.extend(got)
+    combined = {"type": "FeatureCollection", "features": feats}
+    print(f"[{label}] total features: {len(feats)}", flush=True)
     # 常設トラカンの1時間値は5分間値と同じプロパティ名なので、変換関数を共用できる。
     gdf = create_traffic_geodf(combined)
     return pd.DataFrame(gdf.drop(columns="geometry"))
@@ -189,12 +198,30 @@ def _slice(archive: pd.DataFrame, start_dt: datetime, end_dt: datetime) -> pd.Da
     return archive.loc[mask].reset_index(drop=True)
 
 
-def _fetch_frames(frames, label: str, type_name: str = TYPE_NAME) -> pd.DataFrame:
-    """指定したコマだけを取得する（飛び飛びの欠けを埋めるため）。"""
+def _archived_frames(archive: pd.DataFrame, road_type: str) -> set:
+    """
+    その道路種別で取得済みのコマ。
+
+    既取得の判定は道路種別ごとに行う。まとめて「そのコマが1行でもあるか」で
+    見ていたときは、種別3を取り終えたコマは種別1が未取得でもスキップされ、
+    後から種別1を足しても過去分が永久に埋まらなかった。
+    """
+    if archive.empty or "road_type" not in archive.columns:
+        return set()
+    return set(archive.loc[archive["road_type"] == road_type, "datetime"])
+
+
+def _fetch_frames(
+    frames, label: str, type_name: str = TYPE_NAME, road_type: str = "3",
+) -> pd.DataFrame:
+    """指定した道路種別・コマだけを取得する（飛び飛びの欠けを埋めるため）。"""
     codes = [pd.Timestamp(t).strftime("%Y%m%d%H%M") for t in frames]
-    print(f"[{label}] fetching {len(codes)} frames ({codes[0]} ... {codes[-1]})", flush=True)
+    print(
+        f"[{label}] 道路種別{road_type}: fetching {len(codes)} frames "
+        f"({codes[0]} ... {codes[-1]})", flush=True,
+    )
     combined = fetch_traffic_codes(
-        road_type=ROAD_TYPE, time_codes=codes, type_name=type_name, bbox=BBOX,
+        road_type=road_type, time_codes=codes, type_name=type_name, bbox=BBOX,
     )
     print(f"[{label}] total features: {len(combined['features'])}", flush=True)
     gdf = create_traffic_geodf(combined)
@@ -220,21 +247,30 @@ def _fetch_missing_target(
     飛ばされた）。そのため、期待されるコマの並びと突き合わせて
     「無いコマだけ」を取りにいく。1コマ=1リクエストなので範囲取得より無駄がない。
     """
-    existing = set(_slice(archive, TARGET_START, target_end)["datetime"]) if not archive.empty else set()
     grid = pd.date_range(TARGET_START, target_end, freq=step)
-    missing = [t for t in grid if t not in existing]
-    if not missing:
-        print(f"[{label}] already up to date ({len(grid)} frames archived)", flush=True)
+    sliced = _slice(archive, TARGET_START, target_end)
+    new_dfs = []
+    for rt in ROAD_TYPES:
+        existing = _archived_frames(sliced, rt)
+        missing = [t for t in grid if t not in existing]
+        if not missing:
+            print(
+                f"[{label}] 道路種別{rt}: already up to date "
+                f"({len(grid)} frames archived)", flush=True,
+            )
+            continue
+        if len(missing) > MAX_FRAMES_PER_RUN:
+            # 新しい方を優先して取る（古い穴は次回以降に回す）
+            skipped = len(missing) - MAX_FRAMES_PER_RUN
+            missing = missing[-MAX_FRAMES_PER_RUN:]
+            print(
+                f"[{label}] 道路種別{rt}: {skipped} older missing frames deferred "
+                f"to a later run (cap {MAX_FRAMES_PER_RUN})", flush=True,
+            )
+        new_dfs.append(_fetch_frames(missing, label, type_name, road_type=rt))
+    if not new_dfs:
         return pd.DataFrame()
-    if len(missing) > MAX_FRAMES_PER_RUN:
-        # 新しい方を優先して取る（古い穴は次回以降に回す）
-        skipped = len(missing) - MAX_FRAMES_PER_RUN
-        missing = missing[-MAX_FRAMES_PER_RUN:]
-        print(
-            f"[{label}] {skipped} older missing frames deferred to a later run "
-            f"(cap {MAX_FRAMES_PER_RUN})", flush=True,
-        )
-    return _fetch_frames(missing, label, type_name)
+    return pd.concat(new_dfs, ignore_index=True)
 
 
 def _fetch_missing_baseline(
@@ -247,17 +283,23 @@ def _fetch_missing_baseline(
     以前は「ウィンドウ内に1件でもあればスキップ」だったため、途中に穴が
     空いたまま埋まらなかった。ウィンドウごとに期待されるコマと突き合わせる。
     """
-    existing = set(archive["datetime"]) if not archive.empty else set()
     new_dfs = []
-    for start_dt, end_dt in windows:
-        grid = pd.date_range(start_dt, end_dt, freq=step)
-        missing = [t for t in grid if t not in existing]
-        if not missing:
-            print(f"[{label}({start_dt.date()})] already archived, skipping", flush=True)
-            continue
-        new_dfs.append(
-            _fetch_frames(missing, f"{label}({start_dt.date()})", type_name)
-        )
+    for rt in ROAD_TYPES:
+        existing = _archived_frames(archive, rt)
+        for start_dt, end_dt in windows:
+            grid = pd.date_range(start_dt, end_dt, freq=step)
+            missing = [t for t in grid if t not in existing]
+            if not missing:
+                print(
+                    f"[{label}({start_dt.date()})] 道路種別{rt}: already archived, "
+                    f"skipping", flush=True,
+                )
+                continue
+            new_dfs.append(
+                _fetch_frames(
+                    missing, f"{label}({start_dt.date()})", type_name, road_type=rt
+                )
+            )
     if not new_dfs:
         return pd.DataFrame()
     return pd.concat(new_dfs, ignore_index=True)

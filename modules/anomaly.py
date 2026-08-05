@@ -170,8 +170,8 @@ def build_observation_table(
 
     cols = (
         [
-            "point_code", "point_id", "point_lon", "point_lat", "datetime",
-            "daytype", "hour",
+            "point_code", "road_type", "point_id", "point_lon", "point_lat",
+            "datetime", "daytype", "hour",
         ]
         # 合計と車種別（小型・大型）の実績、およびそれぞれの平常時。
         # 異常判定は合計（traffic_up / traffic_down）だけで行い、車種別は
@@ -200,7 +200,7 @@ def summarize_by_point(observations: pd.DataFrame) -> pd.DataFrame:
     post = observations[observations["is_post_quake"]]
     if post.empty:
         return pd.DataFrame(columns=[
-            "point_id", "point_lon", "point_lat",
+            "point_id", "point_lon", "point_lat", "road_type",
             "max_abs_z", "max_abs_z_up", "max_abs_z_down",
             "n_anomaly", "distance_km_from_epicenter",
         ])
@@ -211,6 +211,8 @@ def summarize_by_point(observations: pd.DataFrame) -> pd.DataFrame:
         return pd.Series({
             "point_lon": g["point_lon"].iloc[0],
             "point_lat": g["point_lat"].iloc[0],
+            # 地図のマーカー形状を分けるのに使う（1:高速自動車国道 / 3:一般国道）
+            "road_type": g["road_type"].iloc[0] if "road_type" in g.columns else None,
             "max_abs_z_up": max_z_up,
             "max_abs_z_down": max_z_down,
             "max_abs_z": np.nanmax([max_z_up, max_z_down]),

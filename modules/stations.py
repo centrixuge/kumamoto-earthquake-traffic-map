@@ -26,20 +26,35 @@ def build_station_master(df: pd.DataFrame) -> Dict[str, dict]:
     """
     if df.empty or "point_code" not in df.columns:
         return {}
-    sub = df.dropna(subset=["point_code"])[["point_code", "lon", "lat"]].drop_duplicates()
+    cols = ["point_code", "lon", "lat"]
+    if "road_type" in df.columns:
+        cols.append("road_type")
+    sub = df.dropna(subset=["point_code"])[cols].drop_duplicates()
     master = {}
     for _, r in sub.iterrows():
-        master[coord_key(r["lon"], r["lat"])] = {
+        entry = {
             "point_code": str(int(r["point_code"])),
             "lon": float(r["lon"]),
             "lat": float(r["lat"]),
         }
+        # 道路種別はアーカイブの古い行には入っていないので、マスタ側に持たせて
+        # 後から付け直す（point_code と同じ扱い）。
+        if "road_type" in sub.columns and pd.notna(r.get("road_type")):
+            entry["road_type"] = str(r["road_type"])
+        master[coord_key(r["lon"], r["lat"])] = entry
     return master
 
 
 def merge_station_master(existing: Dict[str, dict], new: Dict[str, dict]) -> Dict[str, dict]:
+    """
+    既存のマスタに新しい観測点を足す。同じ座標の項目は新しい値で上書きするが、
+    新しい側に無いキー（道路種別を持たない時期のデータなど）は消さない。
+    """
     merged = dict(existing or {})
-    merged.update(new or {})
+    for k, v in (new or {}).items():
+        entry = dict(merged.get(k) or {})
+        entry.update(v)
+        merged[k] = entry
     return merged
 
 
@@ -75,4 +90,17 @@ def attach_point_code(df: pd.DataFrame, master: Dict[str, dict]) -> pd.DataFrame
         )
     else:
         df["point_code"] = codes
+
+    # 道路種別も同じマスタから引く（1:高速自動車国道 / 3:一般国道）。
+    types = df.apply(
+        lambda r: (master.get(coord_key(r["lon"], r["lat"])) or {}).get("road_type"),
+        axis=1,
+    )
+    if "road_type" in df.columns:
+        df["road_type"] = df["road_type"].where(df["road_type"].notna(), types)
+    else:
+        df["road_type"] = types
+    df["road_type"] = df["road_type"].map(
+        lambda v: str(int(v)) if isinstance(v, (int, float)) and pd.notna(v) else v
+    )
     return df
