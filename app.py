@@ -753,6 +753,16 @@ def build_base_map(
             # 通行止めの×は目印だけなのでクリックを透過させ、下にある
             # 観測点マーカーを確実にクリックできるようにする。
             ".reg-x-mark{pointer-events:none !important;}"
+            # 地図内の観測点凡例（左下）。レイヤ一覧(bottomright)と重ならない
+            # 位置に置き、クリックは下の地図に通す。
+            ".pt-shape-legend{position:absolute;left:8px;bottom:8px;z-index:650;"
+            "background:rgba(255,255,255,0.88);border:1px solid #bbb;border-radius:4px;"
+            "padding:4px 7px;font-size:11.5px;line-height:1.6;color:#222;"
+            "pointer-events:none;font-family:sans-serif;}"
+            ".pt-shape-legend span{display:block;white-space:nowrap;}"
+            ".pt-mark{display:inline-block;width:10px;height:10px;margin-right:5px;"
+            "background:#4a7ab5;border:1px solid #333;vertical-align:middle;}"
+            ".pt-circle{border-radius:50%;}"
             # ツールチップは既定（white-space:nowrap）だと横に伸びて地図の外まで
             # はみ出す。かといって max-width だけを付けると、絶対配置の
             # 幅が「その位置から地図の端までの残り幅」に縮められ、
@@ -896,6 +906,19 @@ def build_base_map(
         if regulations or mlit_drawn:
             # 左上・右上だと観測点マーカーに被るので右下に置く
             folium.LayerControl(position="bottomright", collapsed=False).add_to(fmap)
+
+        # 観測点の形（＝道路の種別）は地図を見ながら参照するものなので、
+        # 地図の外の凡例ではなく地図の中に置く。レイヤ一覧が右下にあるので
+        # こちらは左下。マーカーに重なっても中身が読めるよう半透明の白地にする。
+        n_general = int((~point_summary["road_type"].map(_is_square_point)).sum())             if "road_type" in point_summary.columns else len(point_summary)
+        n_express = len(point_summary) - n_general
+        if n_express:
+            fmap.get_root().html.add_child(folium.Element(
+                '<div class="pt-shape-legend">'
+                f'<span><i class="pt-mark pt-circle"></i>一般国道 {n_general}点</span>'
+                f'<span><i class="pt-mark pt-square"></i>高速自動車国道 {n_express}点</span>'
+                '</div>'
+            ))
 
         folium.Marker(
             location=[mainshock["epicenter_lat"], mainshock["epicenter_lon"]],
@@ -1537,22 +1560,12 @@ def main():
                         '<span style="color:#b00000;font-weight:900;">▲</span>'
                         f' 直轄国道で線形が作れないもの {n_mlit_point}件（該当観測点のすぐ上）'
                     )
-                n_square = int(point_summary["road_type"].map(_is_square_point).sum())                     if "road_type" in point_summary.columns else 0
+                # 形（道路の種別）の凡例は地図の中に置いてあるのでここには出さない
                 point_items = [
                     f'{_sw("width:30px;height:11px;border-radius:6px;border:1px solid #aaa;"
                           "background:linear-gradient(to right,#deebf7,#08306b);")}'
                     f' 濃く大きいほど異常度|z|が大きい {n_points - n_no_data}点',
                 ]
-                if n_square:
-                    # 形＝道路の種別。色は異常度に使っているので形で分けている。
-                    point_items.append(
-                        f'{_sw("width:11px;height:11px;border-radius:50%;"
-                              "background:#4a7ab5;border:1px solid #333;")}'
-                        f' ●一般国道 {n_points - n_square}点　'
-                        f'{_sw("width:11px;height:11px;"
-                              "background:#4a7ab5;border:1px solid #333;")}'
-                        f' ■高速自動車国道 {n_square}点'
-                    )
                 if n_no_data:
                     point_items.append(
                         f'{_sw("width:11px;height:11px;border-radius:50%;background:#f0f0f0;"
