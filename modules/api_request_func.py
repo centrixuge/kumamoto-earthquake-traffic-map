@@ -1,6 +1,33 @@
-import requests
+import time
 from datetime import datetime, timedelta
 from typing import Optional, Tuple, Dict, Any
+
+import requests
+
+# 交通量API利用規約 第6条1項(2)「短時間における大量のアクセスその他本機能の
+# 運用に支障を与える行為」を避けるため、リクエスト間隔の下限を置く。
+# 1コマ=1リクエストで、欠けを埋める実行では数百コマ取りにいくことがある。
+# 素で回すと約4 req/s 出てしまうので、2 req/s に抑える。
+# 定常運用（6時間ごと）で必要なのは1回あたり72コマ×道路種別なので、
+# この間隔でも1分程度で終わる。
+MIN_REQUEST_INTERVAL_SEC = 0.5
+_last_request_at = 0.0
+
+# 誰からのアクセスかを運用者が識別できるようにしておく。
+USER_AGENT = (
+    "kumamoto-earthquake-traffic-map/1.0 "
+    "(+https://github.com/centrixuge/kumamoto-earthquake-traffic-map)"
+)
+
+
+def _throttle() -> None:
+    """前回のリクエストから MIN_REQUEST_INTERVAL_SEC 空ける。"""
+    global _last_request_at
+    wait = MIN_REQUEST_INTERVAL_SEC - (time.monotonic() - _last_request_at)
+    if wait > 0:
+        time.sleep(wait)
+    _last_request_at = time.monotonic()
+
 def fetch_traffic(
     road_type: str,
     time_code: str,
@@ -34,7 +61,8 @@ def fetch_traffic(
         "exceptions":   "application/json",
         "cql_filter":   " AND ".join(filters),
     }
-    resp = requests.get(url, params=params)
+    _throttle()
+    resp = requests.get(url, params=params, headers={"User-Agent": USER_AGENT}, timeout=60)
     resp.raise_for_status()
     return resp.json()
 
