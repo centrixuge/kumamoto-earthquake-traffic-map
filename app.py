@@ -1370,17 +1370,6 @@ def main():
         "</style>",
         unsafe_allow_html=True,
     )
-    st.markdown(
-        '<div class="dash-title">熊本地震（2026-07-28）交通量変化ダッシュボード</div>'
-        '<div class="dash-lead">'
-        '<b><a href="https://www.jartic-open-traffic.org/" target="_blank">'
-        'JARTIC 交通量オープンデータ</a></b> の常設トラカン交通量（5分間値・1時間値）を主データに、'
-        '平常時と比べて交通量がどれだけ外れたかを観測点ごとに可視化しています。'
-        '地震情報と通行規制を重ね合わせ、変化の背景を追えるようにしています。'
-        "</div>",
-        unsafe_allow_html=True,
-    )
-
     data_missing = not os.path.exists(os.path.join(DATA_DIR, "observations.parquet"))
     if data_missing:
         st.error(
@@ -1414,18 +1403,34 @@ def main():
     period_start = quake_info.get("events_period_start", "?")
     period_end = quake_info.get("events_period_end", "?")
 
-    # 交通量データが主題なので、地震の諸元だけでなくデータの規模も並べる。
-    # 震源の深さ・発生時刻・震源地は下の地震一覧に入っているので出さない。
+    # 以前はマグニチュード・最大震度・観測点数・取得件数・異常件数を
+    # st.metric 5枚で並べていたが、縦を取るわりに読む頻度が低い。
+    # 地震の諸元はタイトルに、データの規模はリード文に畳み込み、
+    # 観測点数は地図の見出しへ移した（異常件数は一覧タブにあるので出さない）。
     raw_5min = load_traffic_archive("traffic_raw.parquet")
-    info_cols = st.columns(5)
-    info_cols[0].metric("マグニチュード", f"M{mainshock['magnitude']}")
-    info_cols[1].metric("最大震度", mainshock["max_intensity"] or "?")
-    info_cols[2].metric("常時観測点", f"{len(point_summary)} 点")
-    info_cols[3].metric(
-        "取得済み5分間値",
-        f"{len(raw_5min):,} 件" if not raw_5min.empty else "—",
+    n_points = len(point_summary)
+    scale_note = ""
+    if not raw_5min.empty:
+        scale_note = (
+            f"（対象範囲の{n_points}点で全{len(raw_5min):,}件、"
+            f"{raw_5min['datetime'].max():%Y-%m-%d %H:%M}時点）"
+        )
+    st.markdown(
+        '<div class="dash-title">熊本地震（2026-07-28 M{m}・最大震度{i}）'
+        '交通量変化ダッシュボード</div>'
+        '<div class="dash-lead">'
+        '<b><a href="https://www.jartic-open-traffic.org/" target="_blank">'
+        'JARTIC 交通量オープンデータ</a></b> の常設トラカン交通量（5分間値・1時間値）'
+        '{note}を主データに、'
+        '平常時と比べて交通量がどれだけ外れたかを観測点ごとに可視化しています。'
+        '地震情報と通行規制を重ね合わせ、変化の背景を追えるようにしています。'
+        "</div>".format(
+            m=mainshock["magnitude"],
+            i=mainshock["max_intensity"] or "?",
+            note=scale_note,
+        ),
+        unsafe_allow_html=True,
     )
-    info_cols[4].metric("検知した異常", f"{int(observations['is_anomaly'].sum())} 件")
 
     archive_period = ""
     if not raw_5min.empty and "datetime" in raw_5min.columns:
@@ -1575,7 +1580,7 @@ def main():
                 st.subheader("選択観測点の時系列（平常時 vs 観測実績）")
 
             with col_map:
-                st.subheader("観測点別の異常度 × 通行規制")
+                st.subheader(f"常時観測点（{n_points}点）別の異常度 × 通行規制")
                 # 色（規制の区分）と線の形（規制中か解除済みか）は独立した軸で、
                 # 破線は青灰・赤・橙のどれにも、県feedにも直轄国道にも同じように
                 # 掛かる。以前は「破線は解除済み」を地震前の規制の行に置いていて、
