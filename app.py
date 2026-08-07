@@ -37,22 +37,29 @@ SELECTION_ALT_COLORS = ["#ff5fa2", "#7ac70c"]  # ピンク / ライムグリー�
 POINT_TOOLTIP_HINT = "（クリックで時系列に表示/解除）"
 # 時系列図の表示開始時刻（データ保持期間の先頭より後ろにしている）
 TIMESERIES_DISPLAY_START = pd.Timestamp("2026-07-27 12:00")
-# 既定の表示終端。データは復旧期（本震+2週間）まで伸び続けるので、
-# 既定では発災直後の変化が読める範囲で切り、それより後ろは
-# 表示期間のプルダウンで広げられるようにする。
-TIMESERIES_DEFAULT_END = pd.Timestamp("2026-08-04 00:00")  # 8/3の24時
+# 表示期間の選択肢。データは復旧期（本震+2週間）まで伸び続けるので、
+# 常に最新まで出すと発災直後の変化が横に潰れて読めなくなる。
+# 区切りは本震発生時刻を起点にした経過時間で置く（日付で書くと
+# 何日目なのかが読み取れないため）。開始はどれも発災前からで
+# 自明なので、名前には終端だけを書いている。
+# 値は (本震時刻, データの最終時刻) を受け取って (開始, 終了) を返す。
+# 本震時刻は quake_info.json から読んだものを渡す（ここで日時を
+# 直書きすると二重管理になる）。終了がデータより後ろでも Plotly 側で
+# 右側が空くだけなので、データがそこまで伸びるまでの間も同じ窓を出せる。
+def _since_quake(days: int):
+    return lambda quake, last: (
+        TIMESERIES_DISPLAY_START, quake + pd.Timedelta(days=days)
+    )
 
-# 表示期間の選択肢。値はデータの最終時刻を受け取って (開始, 終了) を返す。
-# 終了がデータより後ろでも Plotly 側で空白になるだけなので、
-# データが伸びるまでの間も既定の窓をそのまま出す。
+
 TIMESERIES_RANGES = {
-    "発災前〜8/3": lambda last: (TIMESERIES_DISPLAY_START, TIMESERIES_DEFAULT_END),
-    "発災前〜最新": lambda last: (TIMESERIES_DISPLAY_START, last),
-    "発災直後72時間": lambda last: (
-        TIMESERIES_DISPLAY_START, pd.Timestamp("2026-07-31 16:30")
-    ),
-    "最新3日間": lambda last: (last - pd.Timedelta(days=3), last),
+    "発災後3日間": _since_quake(3),
+    "発災後1週間": _since_quake(7),
+    "発災後2週間": _since_quake(14),
+    "最新3日間": lambda quake, last: (last - pd.Timedelta(days=3), last),
 }
+# 既定は発災後1週間。発災直後の落ち込みと戻り始めが1枚で読める。
+TIMESERIES_DEFAULT_RANGE = "発災後1週間"
 
 # 時系列ビューの切り替え。実績の既定は5分間値、平常時はいずれも1時間値
 # （同じ日区分の各8日分）から求めている。
@@ -1519,11 +1526,16 @@ def main():
                 # 粒度ラジオと同じ理由で地図より前に作る（地図クリックの
                 # st.rerun() で中断されるとウィジェットの状態が落ちるため）。
                 range_names = list(TIMESERIES_RANGES.keys())
-                saved_range = st.session_state.get("_timeseries_range_choice", range_names[0])
+                saved_range = st.session_state.get(
+                    "_timeseries_range_choice", TIMESERIES_DEFAULT_RANGE
+                )
                 range_name = st.selectbox(
                     "時系列の表示期間",
                     range_names,
-                    index=range_names.index(saved_range) if saved_range in range_names else 0,
+                    index=(
+                        range_names.index(saved_range) if saved_range in range_names
+                        else range_names.index(TIMESERIES_DEFAULT_RANGE)
+                    ),
                     key="timeseries_range",
                 )
                 st.session_state["_timeseries_range_choice"] = range_name
@@ -1732,7 +1744,7 @@ def main():
                 ts_obs = load_observations(cfg["file"])
                 last_at = (
                     ts_obs["datetime"].max() if not ts_obs.empty
-                    else TIMESERIES_DEFAULT_END
+                    else quake_at + pd.Timedelta(days=7)
                 )
                 render_timeseries(
                     ts_obs,
@@ -1743,7 +1755,7 @@ def main():
                     mlit_bands=mlit_bands,
                     baseline_daytypes=quake_info.get("hourly_baseline_daytypes"),
                     series_mode=cfg.get("series", "total"),
-                    x_range=TIMESERIES_RANGES[range_name](last_at),
+                    x_range=TIMESERIES_RANGES[range_name](quake_at, last_at),
                 )
 
     # ------------------------------------------------------------------
