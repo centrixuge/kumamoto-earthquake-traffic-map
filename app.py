@@ -45,7 +45,8 @@ JARTIC_TERMS_NOTICE = (
     "サービスの内容は国土交通省によって保証されたものではありません。"
     "掲載している交通量は「国土交通省API 機能による交通量(参考値)を加工して作成」"
     "したものです。本サービスの作成・運営について、"
-    "作成者（centrixuge）が一切の責任を負います。"
+    '<a href="https://github.com/centrixuge" target="_blank">作成者</a>'
+    "が一切の責任を負います。"
 )
 
 # 時系列図の表示開始時刻（データ保持期間の先頭より後ろにしている）
@@ -1859,7 +1860,7 @@ def main():
         )
         # 配布するCSVは「本機能により取得した情報を用いた資料」にあたるので、
         # 交通量API利用規約 第5条2項の出典をダウンロード箇所にも出す。
-        st.caption(f"**出典**: {JARTIC_TERMS_NOTICE}")
+        st.caption(f"<b>出典</b>: {JARTIC_TERMS_NOTICE}", unsafe_allow_html=True)
 
         downloads = [
             (
