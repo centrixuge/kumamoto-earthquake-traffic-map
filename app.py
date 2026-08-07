@@ -828,6 +828,8 @@ def build_base_map(
             ".pt-mark{display:inline-block;width:10px;height:10px;margin-right:5px;"
             "background:#4a7ab5;border:1px solid #333;vertical-align:middle;}"
             ".pt-circle{border-radius:50%;}"
+            ".pt-legend-head{font-size:10.5px;color:#555;letter-spacing:0.02em;"
+            "border-bottom:1px solid #ddd;margin-bottom:2px;padding-bottom:1px;}"
             # ツールチップは既定（white-space:nowrap）だと横に伸びて地図の外まで
             # はみ出す。かといって max-width だけを付けると、絶対配置の
             # 幅が「その位置から地図の端までの残り幅」に縮められ、
@@ -978,7 +980,14 @@ def build_base_map(
         # マーカーに重なっても中身が読めるよう半透明の白地にする。
         n_general, n_express, n_unknown = _road_type_counts(point_summary)
         if n_express or n_unknown:
+            # 見出しで出典を明示する。「一般国道」「高速自動車国道」は
+            # APIが返した道路種別の区分名をそのまま使っており、道路の
+            # 法的な位置づけを表すものではない（例: 九州中央自動車道は
+            # 種別1だが、規制を公表しているのは直轄国道の管理者である
+            # 熊本河川国道事務所）。どちらの分類なのかが読み取れるよう、
+            # JARTICの区分だと分かる見出しを付けている。
             rows = [
+                '<span class="pt-legend-head">JARTICの道路種別</span>',
                 f'<span><i class="pt-mark pt-circle"></i>一般国道 {n_general}点</span>',
                 f'<span><i class="pt-mark pt-square"></i>高速自動車国道 {n_express}点</span>',
             ]
