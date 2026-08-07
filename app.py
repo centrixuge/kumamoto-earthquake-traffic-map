@@ -645,12 +645,30 @@ def _point_radius(max_abs_z, max_z: float, selected: bool = False) -> float:
 
 # 高速自動車国道は■、一般国道は●で描く。色は異常度に使っているので、
 # 道路の種別は形で分ける（色を増やすと異常度のグラデーションが読めなくなる）。
-ROAD_TYPE_SQUARE = "1"   # 高速自動車国道
+ROAD_TYPE_SQUARE = "1"    # 高速自動車国道
+ROAD_TYPE_GENERAL = "3"   # 一般国道
 ROAD_TYPE_LABELS = {"1": "高速自動車国道", "3": "一般国道"}
 
 
 def _is_square_point(road_type) -> bool:
     return str(road_type) == ROAD_TYPE_SQUARE
+
+
+def _road_type_counts(point_summary: pd.DataFrame) -> tuple:
+    """(一般国道, 高速自動車国道, 種別不明) の点数を返す。
+
+    種別が取れていない観測点を一般国道に混ぜないよう別に数える。
+    アーカイブには道路種別の列を持たない時期のデータがあり、
+    配信が止まって観測点マスタにも残っていない地点（9310183 など）は
+    種別が引けない。そういう点まで「一般国道」と表示すると、
+    根拠のない分類を出すことになる。
+    """
+    if "road_type" not in point_summary.columns:
+        return 0, 0, len(point_summary)
+    rt = point_summary["road_type"].astype("string")
+    n_express = int((rt == ROAD_TYPE_SQUARE).sum())
+    n_general = int((rt == ROAD_TYPE_GENERAL).sum())
+    return n_general, n_express, len(point_summary) - n_general - n_express
 
 
 def _rgba(hex_color: str, alpha: float) -> str:
@@ -958,14 +976,19 @@ def build_base_map(
         # 地図の外の凡例ではなく地図の中に置く。位置は右上（レイヤ一覧は右下、
         # ズームボタンは左上なので、どちらとも重ならない）。
         # マーカーに重なっても中身が読めるよう半透明の白地にする。
-        n_general = int((~point_summary["road_type"].map(_is_square_point)).sum())             if "road_type" in point_summary.columns else len(point_summary)
-        n_express = len(point_summary) - n_general
-        if n_express:
+        n_general, n_express, n_unknown = _road_type_counts(point_summary)
+        if n_express or n_unknown:
+            rows = [
+                f'<span><i class="pt-mark pt-circle"></i>一般国道 {n_general}点</span>',
+                f'<span><i class="pt-mark pt-square"></i>高速自動車国道 {n_express}点</span>',
+            ]
+            if n_unknown:
+                # 形は●のままだが、一般国道と言い切れないので別行にする
+                rows.append(
+                    f'<span><i class="pt-mark pt-circle"></i>種別不明 {n_unknown}点</span>'
+                )
             fmap.get_root().html.add_child(folium.Element(
-                '<div class="pt-shape-legend">'
-                f'<span><i class="pt-mark pt-circle"></i>一般国道 {n_general}点</span>'
-                f'<span><i class="pt-mark pt-square"></i>高速自動車国道 {n_express}点</span>'
-                '</div>'
+                '<div class="pt-shape-legend">' + "".join(rows) + '</div>'
             ))
 
         folium.Marker(
