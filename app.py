@@ -47,8 +47,15 @@ TIMESERIES_DISPLAY_START = pd.Timestamp("2026-07-27 12:00")
 # 直書きすると二重管理になる）。終了がデータより後ろでも Plotly 側で
 # 右側が空くだけなので、データがそこまで伸びるまでの間も同じ窓を出せる。
 def _since_quake(days: int):
+    """本震から days 日後を含む日の24時までを返す。
+
+    本震は16:27なので厳密に days 日後で切ると日の途中で終わり、
+    右端が半端な位置になる。その時点を含む日の終わり（翌日0時）まで
+    伸ばして、日の区切りで終わるようにしている。
+    """
     return lambda quake, last: (
-        TIMESERIES_DISPLAY_START, quake + pd.Timedelta(days=days)
+        TIMESERIES_DISPLAY_START,
+        (quake + pd.Timedelta(days=days)).normalize() + pd.Timedelta(days=1),
     )
 
 
