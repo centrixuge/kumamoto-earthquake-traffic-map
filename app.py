@@ -37,6 +37,22 @@ SELECTION_ALT_COLORS = ["#ff5fa2", "#7ac70c"]  # ピンク / ライムグリー�
 POINT_TOOLTIP_HINT = "（クリックで時系列に表示/解除）"
 # 時系列図の表示開始時刻（データ保持期間の先頭より後ろにしている）
 TIMESERIES_DISPLAY_START = pd.Timestamp("2026-07-27 12:00")
+# 既定の表示終端。データは復旧期（本震+2週間）まで伸び続けるので、
+# 既定では発災直後の変化が読める範囲で切り、それより後ろは
+# 表示期間のプルダウンで広げられるようにする。
+TIMESERIES_DEFAULT_END = pd.Timestamp("2026-08-04 00:00")  # 8/3の24時
+
+# 表示期間の選択肢。値はデータの最終時刻を受け取って (開始, 終了) を返す。
+# 終了がデータより後ろでも Plotly 側で空白になるだけなので、
+# データが伸びるまでの間も既定の窓をそのまま出す。
+TIMESERIES_RANGES = {
+    "発災前〜8/3": lambda last: (TIMESERIES_DISPLAY_START, TIMESERIES_DEFAULT_END),
+    "発災前〜最新": lambda last: (TIMESERIES_DISPLAY_START, last),
+    "発災直後72時間": lambda last: (
+        TIMESERIES_DISPLAY_START, pd.Timestamp("2026-07-31 16:30")
+    ),
+    "最新3日間": lambda last: (last - pd.Timedelta(days=3), last),
+}
 
 # 時系列ビューの切り替え。実績の既定は5分間値、平常時はいずれも1時間値
 # （同じ日区分の各8日分）から求めている。
@@ -1172,6 +1188,7 @@ def render_timeseries(
     other_event_times=(), point_labels: dict = None, baseline_windows=None,
     unit_label: str = "5分間値", extra_note: str = "",
     mlit_bands=(), baseline_daytypes: dict = None, series_mode: str = "total",
+    x_range=None,
 ) -> None:
     if not selected_points:
         st.info("上のプルダウンから選ぶか、地図上の丸いマーカーをクリックして観測点を選ぶと、ここに時系列が表示されます（最大2地点まで比較可）。")
@@ -1181,9 +1198,13 @@ def render_timeseries(
         return
 
     point_labels = point_labels or {}
-    # 地震前日の深夜〜早朝は情報が薄いので、表示は7/27 12:00から始める
+    # 地震前日の深夜〜早朝は情報が薄いので、既定の表示は7/27 12:00から始める
     # （データ自体はTARGET_START=7/27 03:00から保持している）。
-    x_range = [TIMESERIES_DISPLAY_START, observations["datetime"].max()]
+    # 呼び出し側が期間を指定していればそちらを使う。
+    if x_range is None:
+        x_range = [TIMESERIES_DISPLAY_START, observations["datetime"].max()]
+    else:
+        x_range = list(x_range)
 
     series = SERIES_VEHICLE if series_mode == "vehicle" else SERIES_TOTAL
     chart_height = 290
@@ -1471,7 +1492,7 @@ def main():
             # 観測点の選択と粒度の切り替えを1行にまとめる。観測点を比べるときに
             # 何度も触るのはこの2つなので、同じ行に置いてまとめて画面に貼り付ける
             # （下のCSSで sticky）。粒度ラジオが地図より前に作られる点も維持する。
-            col_select, col_view, col_clear = st.columns([3, 2, 1])
+            col_select, col_view, col_range, col_clear = st.columns([3, 2, 1.3, 1])
             with col_select:
                 picked = st.multiselect(
                     f"観測点の選び方：このプルダウンから選ぶか、地図上の丸いマーカーをクリック"
@@ -1494,6 +1515,18 @@ def main():
                 )
                 st.session_state["_timeseries_view_choice"] = view
                 cfg = TIMESERIES_VIEWS[view]
+            with col_range:
+                # 粒度ラジオと同じ理由で地図より前に作る（地図クリックの
+                # st.rerun() で中断されるとウィジェットの状態が落ちるため）。
+                range_names = list(TIMESERIES_RANGES.keys())
+                saved_range = st.session_state.get("_timeseries_range_choice", range_names[0])
+                range_name = st.selectbox(
+                    "時系列の表示期間",
+                    range_names,
+                    index=range_names.index(saved_range) if saved_range in range_names else 0,
+                    key="timeseries_range",
+                )
+                st.session_state["_timeseries_range_choice"] = range_name
             with col_clear:
                 st.write("")
                 if st.button("選択をクリア", disabled=not selected_points):
@@ -1696,8 +1729,13 @@ def main():
                                 f"{item['route_name']}（{item['section']}）{item['content']}"
                             ),
                         })
+                ts_obs = load_observations(cfg["file"])
+                last_at = (
+                    ts_obs["datetime"].max() if not ts_obs.empty
+                    else TIMESERIES_DEFAULT_END
+                )
                 render_timeseries(
-                    load_observations(cfg["file"]),
+                    ts_obs,
                     selected_points, quake_at, other_event_times, point_labels,
                     quake_info.get("hourly_baseline_windows"),
                     unit_label=cfg["unit_label"],
@@ -1705,6 +1743,7 @@ def main():
                     mlit_bands=mlit_bands,
                     baseline_daytypes=quake_info.get("hourly_baseline_daytypes"),
                     series_mode=cfg.get("series", "total"),
+                    x_range=TIMESERIES_RANGES[range_name](last_at),
                 )
 
     # ------------------------------------------------------------------
