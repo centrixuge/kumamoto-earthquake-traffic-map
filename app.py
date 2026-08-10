@@ -1898,7 +1898,7 @@ def main():
                 st.subheader("選択観測点の時系列（平常時 vs 観測実績）")
 
             with col_map:
-                st.subheader(f"常時観測点（{n_points}点）別の異常度 × 通行規制")
+                st.subheader("常時観測点別の異常度 × 通行規制")
                 _now = _now_jst()
                 # 色（規制の区分）と線の形（規制中か解除済みか）は独立した軸で、
                 # 破線は青灰・赤・橙のどれにも、県feedにも直轄国道にも同じように
@@ -2005,11 +2005,6 @@ def main():
                     + "</div>"
                     for head, items in rows
                 )
-                st.markdown(
-                    '<div style="font-size:0.79rem;line-height:1.45;margin:0 0 4px 0;">'
-                    f"{legend_html}</div>",
-                    unsafe_allow_html=True,
-                )
                 base_map = build_base_map(
                     point_summary, mainshock, regulations, mlit, point_labels,
                     nexco=nexco,
@@ -2030,6 +2025,16 @@ def main():
                         "last_object_clicked_tooltip", "last_object_clicked_count",
                     ],
                     key="quake_map_v8",
+                )
+                # 凡例は地図の下に置く。上にあると地図そのものが下へ押し出され、
+                # 開いた直後に地図の全体が見えなくなる。凡例は「地図を見て
+                # 分からなかったときに目を落とす先」なので下で足りる。
+                # （HTMLを出すだけでウィジェットではないので、地図より後に
+                # 書いても st.rerun でstateが落ちる問題には掛からない）
+                st.markdown(
+                    '<div style="font-size:0.79rem;line-height:1.45;margin:4px 0 6px 0;">'
+                    f"{legend_html}</div>",
+                    unsafe_allow_html=True,
                 )
                 # 注記は、まずどこから何を集めたのかを表で示す。
                 # 以前は経路①②③を文章で並べていたが、3経路に増えて
