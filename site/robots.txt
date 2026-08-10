@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://centrixuge.github.io/kumamoto-earthquake-traffic-map/sitemap.xml
