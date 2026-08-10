@@ -950,8 +950,11 @@ def build_base_map(
             post_ended_layer = folium.FeatureGroup(
                 name="県・市町村道：解除済み", show=False
             )
+            # 名前は他のレイヤと同じ長さに収める。ここが1つだけ長いと
+            # レイヤ一覧の幅がそれに引きずられて、地図の右下で場所を取る。
+            # 「工事・過去の災害等」という中身は地図の上の凡例に書いてある。
             pre_layer = folium.FeatureGroup(
-                name="県・市町村道：地震前からの規制（工事・過去の災害等）", show=False
+                name="県・市町村道：地震前から", show=False
             )
             for reg in regulations:
                 is_post = _regulation_is_post_quake(reg, quake_at)
