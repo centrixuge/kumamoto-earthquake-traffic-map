@@ -91,6 +91,13 @@ def main() -> None:
         )
         item["path"] = path
         item["path_length_km"] = round(km, 2)
+        # 区間の端点（IC）は、線だけだとどこからどこまでなのかが読めないので
+        # 地図に点も落とす。そのための名前と座標をJSON側に持たせる
+        # （path の端は道路網にスナップされた位置で、IC そのものの座標ではない）。
+        item["endpoints"] = [
+            {"name": n, "osm_node": node, "lat": lat, "lon": lon}
+            for n, (node, lat, lon) in zip(names, (a, b))
+        ]
         item["path_source"] = (
             f"端点はOpenStreetMapのIC ノード（{names[0]}=node/{a[0]}、"
             f"{names[1]}=node/{b[0]}）。その間をOSRMで道路網に沿ってルーティング。"

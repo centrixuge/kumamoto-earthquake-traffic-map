@@ -979,6 +979,38 @@ def build_base_map(
                 ).add_to(mlit_layer)
                 mlit_drawn += 1
 
+            # 区間の端点（IC）を点で落とす。線だけだと、どのICからどのICまで
+            # なのかが地図から読めないため。同じICが複数の区間の端点になる
+            # （車帰ICは大津IC側と阿蘇西IC側の両方）ので、ICごとに1点だけ置き、
+            # 属する区間をツールチップに並べる。
+            # 観測点マーカーより小さく、白抜きにして混同しないようにする。
+            ic_points = {}
+            for (route_name, section), items in by_section.items():
+                for ep in items[0].get("endpoints") or []:
+                    key = (round(ep["lat"], 6), round(ep["lon"], 6))
+                    entry = ic_points.setdefault(
+                        key, {"name": ep["name"], "node": ep.get("osm_node"), "sections": []}
+                    )
+                    label = f"{route_name} {section}"
+                    if label not in entry["sections"]:
+                        entry["sections"].append(label)
+            for (lat, lon), info in ic_points.items():
+                folium.CircleMarker(
+                    location=[lat, lon],
+                    radius=5,
+                    color="#333333",
+                    weight=2,
+                    fill=True,
+                    fill_color="#ffffff",
+                    fill_opacity=0.95,
+                    tooltip=(
+                        f"<b>{info['name']}</b><br>"
+                        + "".join(f"{sec} の端点<br>" for sec in info["sections"])
+                        + "位置はOpenStreetMapのICノード"
+                        + (f"（node/{info['node']}）" if info["node"] else "")
+                    ),
+                ).add_to(mlit_layer)
+
             # 線形が無い規制のフォールバック（掛かっていた観測点の上に▲）
             if not point_summary.empty:
                 max_z_for_radius = point_summary["max_abs_z"].max()
@@ -1723,6 +1755,14 @@ def main():
                     f'{_sw("width:20px;height:3px;background:#5b7c99;opacity:0.55;")}'
                     f' 地震前からの規制 {n_pre}件（工事・過去の災害）',
                 ]
+                if n_mlit_line:
+                    # 直轄国道の規制区間は「○○IC〜○○IC」で示されるので、
+                    # 線だけでなく端点のICも点で置いている。
+                    color_items.append(
+                        f'{_sw("width:11px;height:11px;border-radius:50%;"
+                              "background:#fff;border:2px solid #333;")}'
+                        ' 規制区間の端点（IC）'
+                    )
                 # 直轄国道は県道以下とまったく同じ描き分けなので、凡例に項目を
                 # 足す必要がない。出典・別レイヤであること・区間をOSMのIC座標から
                 # 復元したことは地図の下のキャプションにまとめてある。
