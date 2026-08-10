@@ -43,7 +43,7 @@
 | 道路通行規制情報（県・市町村が管理する道路） | 熊本県「[防災情報くまもと](https://portal.bousai.pref.kumamoto.jp/)」の[通行規制情報](https://portal.bousai.pref.kumamoto.jp/?p=traffic)ページが使う公開JSON (`https://portal.bousai.pref.kumamoto.jp/data/traffic/traffic.json`) | 認証不要。[熊本市防災情報ポータル](https://city-kumamoto.my.salesforce-sites.com/)からもリンクあり。始点・終点の座標のみのため、[OSRM](https://project-osrm.org/) の公開デモサーバーで実際の道路網に沿った経路にスナップして地図に表示 |
 | 道路通行規制情報（**直轄国道・高規格道路**） | 国土交通省 九州地方整備局 [熊本河川国道事務所](https://www.qsr.mlit.go.jp/kumamoto/)の「事務所からのお知らせ」で公表されるPDF（道第○報） | **上のポータルには国が管理する道路の規制が載らない**ため、PDFから**手作業で転記**して `data/mlit_regulations.json` に持っています。自動取得ではありません。転記元のPDFは `data/qsr_regulations/` に保存しています（[docs/regulations.md](docs/regulations.md)） |
 
-詳しい欠落の理由（管理者の違い・収集開始が本震より後）と、直轄国道7件の転記内容・手順は **[docs/regulations.md](docs/regulations.md)** にまとめています。
+詳しい欠落の理由（管理者の違い・収集開始が本震より後）と、直轄国道8件の転記内容・手順は **[docs/regulations.md](docs/regulations.md)** にまとめています。
 
 > **交通量が0でも、その原因の規制が地図に出てこない場合があります。** 県のデータは県・市町村が管理する道路が対象で直轄国道を含まず、また規制の収集を始めたのが本震の翌日のため、それ以前に解除された規制は残っていません。
 
