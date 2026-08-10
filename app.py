@@ -1739,6 +1739,11 @@ def main():
                     1 for i in _mlit_items
                     if not i.get("path") and i.get("affected_point_codes")
                 )
+                # 線も▲も出せない規制。PDFが区間をIC名で示していない
+                # （キロポストや地名だけの）ものがこれにあたる。黙って
+                # 落とすと、地図を見た人は「直轄国道の規制はこれで全部」と
+                # 受け取ってしまうので、件数を明示する。
+                n_mlit_hidden = len(_mlit_items) - n_mlit_line - n_mlit_point
                 n_ended += sum(
                     1 for i in _mlit_items if i.get("path") and i.get("end_timestamp")
                 )
@@ -1841,11 +1846,17 @@ def main():
                     f"**この地図に出てこない規制があります。** ①上記データは県・市町村が管理する道路が対象で、"
                     f"国が管理する直轄国道（国道57号など）の規制は含まれません（"
                     f"[{mlit.get('source_name', '国土交通省')}]({mlit.get('source_url', '')})"
-                    f"から転記した{n_mlit_line}件を別レイヤで描いています。"
+                    f"から転記した{len(_mlit_items)}件のうち{n_mlit_line}件をそのまま区間の線として別レイヤで描いています。"
                     "PDFは区間を「○○IC〜○○IC」と名前で示すだけで座標が無いため、"
                     "線形はOSMのIC座標から復元しました。"
                     "描き分けは県道以下と同じで、色が規制の区分、破線が解除済みです。"
                     "一覧は上の「県のデータに含まれない規制があります」に出しています）。"
+                    + (
+                        f"残る{n_mlit_hidden}件は、PDFが場所をキロポストや地名でしか"
+                        "示しておらず、線を引ける区間の端点（IC）が無いため"
+                        "**地図上には出していません**（一覧には出ています）。"
+                        if n_mlit_hidden else ""
+                    ) +
                     "②規制のアーカイブに記録が残っている最も古い時点は "
                     f"**{regulation_archive_start() or '本震の翌日'}**（本震より後）です。"
                     "それ以前に解除された規制は、県管理道路であっても残っていません。"
