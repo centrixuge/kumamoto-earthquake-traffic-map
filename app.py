@@ -755,6 +755,36 @@ def _regulation_is_post_quake(reg: dict, quake_at: datetime) -> bool:
     return start_dt >= quake_at
 
 
+def _x_circle_icon(color: str, ended: bool, size: int = 22) -> folium.DivIcon:
+    """
+    PDFの別添図と同じ ⊗（丸の中に×）の印を作る。
+
+    観測点マーカーが塗りつぶしの丸なので、規制の地点まで丸にすると見分けが
+    つかない。PDFの凡例で使われている記号に合わせて、丸の中に×を描く。
+    解除済みは外周を点線にする（線の実線／破線と同じ意味）。
+
+    クリックはこの印を透過させて、下にある観測点マーカーに通す
+    （markerPane は overlayPane より上にあるため、透過させないと
+     観測点の選択を横取りしてしまう）。
+    """
+    r = size / 2 - 2.4
+    c = size / 2
+    d = r * 0.62
+    dash = ' stroke-dasharray="3,2.6"' if ended else ""
+    html = (
+        f'<svg width="{size}" height="{size}" viewBox="0 0 {size} {size}">'
+        f'<circle cx="{c}" cy="{c}" r="{r}" fill="#ffffff" fill-opacity="0.9" '
+        f'stroke="{color}" stroke-width="2.4"{dash}/>'
+        f'<path d="M{c - d} {c - d} L{c + d} {c + d} M{c + d} {c - d} L{c - d} {c + d}" '
+        f'stroke="{color}" stroke-width="2.4" stroke-linecap="round"/>'
+        "</svg>"
+    )
+    return folium.DivIcon(
+        html=html, icon_size=(size, size), icon_anchor=(size // 2, size // 2),
+        class_name="reg-x-mark",
+    )
+
+
 def _regulation_style(reg: dict, now: datetime, quake_at: datetime) -> dict:
     """
     線のスタイルを決める。色＝規制の区分、破線＝解除済み、で意味を分けている。
@@ -772,11 +802,11 @@ def _regulation_style(reg: dict, now: datetime, quake_at: datetime) -> dict:
         }
     if reg.get("content") in FULL_CLOSURE_CONTENTS:
         return {
-            "color": "#e60000", "dash_array": dash, "show_x": not ended,
+            "color": "#e60000", "dash_array": dash, "show_x": True,
             "weight": 6, "opacity": 0.5 if ended else 0.95,
         }
     return {
-        "color": "#e67e22", "dash_array": dash, "show_x": False,
+        "color": "#e67e22", "dash_array": dash, "show_x": True,
         "weight": 5, "opacity": 0.5 if ended else 0.9,
     }
 
@@ -922,13 +952,7 @@ def build_base_map(
                         # 上に来るため、そのままだと観測点クリックを横取りしてしまう
                         # （クリックが×に当たると、その座標が返るだけで観測点が選ばれない）。
                         # クリックを透過させるクラスを付ける。
-                        icon=folium.DivIcon(
-                            html=(
-                                '<div style="font-size:22px;font-weight:900;color:#e60000;'
-                                'line-height:1;text-shadow:0 0 2px white,0 0 2px white;">×</div>'
-                            ),
-                            class_name="reg-x-mark",
-                        ),
+                        icon=_x_circle_icon(style["color"], ended),
                     ).add_to(target)
             pre_layer.add_to(fmap)
             post_layer.add_to(fmap)
@@ -989,15 +1013,11 @@ def build_base_map(
                 ended = bool(item.get("end_timestamp"))
                 full = item.get("content") in FULL_CLOSURE_CONTENTS
                 color = "#e60000" if full else "#e67e22"
-                folium.CircleMarker(
+                # 観測点マーカー（塗りつぶしの丸）と見分けがつくよう、
+                # PDFの別添図と同じ ⊗ で描く。
+                folium.Marker(
                     location=[pt["lat"], pt["lon"]],
-                    radius=7,
-                    color=color,
-                    weight=3,
-                    fill=True,
-                    fill_color=color,
-                    fill_opacity=0.25 if ended else 0.6,
-                    dash_array="4,4" if ended else None,
+                    icon=_x_circle_icon(color, ended),
                     tooltip=(
                         f"<b>{item['route_name']}</b><br>{item['section']}<br>"
                         f"<b>{item['content']}／{'解除済み' if ended else '規制中'}</b><br>"
@@ -1789,16 +1809,16 @@ def main():
 
                 bar = "width:20px;height:5px;"
                 color_items = [
-                    f'{_sw(bar + "background:#e60000;")} <b>×</b> 全面/車両通行止め'
-                    f'（地震後 {n_post}件）',
+                    f'{_sw(bar + "background:#e60000;")} '
+                    '<span style="color:#e60000;font-weight:700;">⊗</span>'
+                    f' 全面/車両通行止め（地震後 {n_post}件）',
                     f'{_sw("width:20px;height:4px;background:#e67e22;")} 片側交互など',
                     f'{_sw("width:20px;height:3px;background:#5b7c99;opacity:0.55;")}'
                     f' 地震前からの規制 {n_pre}件（工事・過去の災害）',
                 ]
                 if n_mlit_spot:
                     color_items.append(
-                        f'{_sw("width:11px;height:11px;border-radius:50%;"
-                              "background:rgba(230,126,34,0.5);border:2px solid #e67e22;")}'
+                        '<span style="color:#e67e22;font-weight:700;">⊗</span>'
                         f' 地点で示された規制 {n_mlit_spot}件（位置は概略）'
                     )
                 if n_mlit_line:
