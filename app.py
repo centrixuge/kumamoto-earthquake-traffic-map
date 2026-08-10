@@ -1383,6 +1383,12 @@ def render_timeseries(
                     gridcolor="rgba(128,128,128,0.18)",
                 ),
             ),
+            # 交通量は負にならないので、0より下に軸も罫線も出さない。
+            # 平常時±σの帯は下側が負になることがあり（平常時の平均が
+            # 小さい深夜帯など）、既定のautorangeだとその分だけ軸が
+            # 0より下まで伸びて意味のない目盛りが引かれていた。
+            # nonnegative は表示範囲を切るだけで、帯の値自体は変えない。
+            yaxis=dict(rangemode="nonnegative"),
         )
         title = f"{label}交通量（{unit_label}）"
         if series_mode == "vehicle":
