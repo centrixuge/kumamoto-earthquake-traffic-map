@@ -10,6 +10,7 @@
 import io
 import itertools
 import json
+import math
 import os
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
@@ -26,6 +27,17 @@ from modules.stations import attach_point_code, load_station_master
 
 DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
 MAX_SELECTED_POINTS = 2
+# 地図の大きさと縮尺。st_folium に渡す高さと、folium 側の zoom_start。
+# 中心を震源へ寄せる余地がどれだけあるかはこの2つで決まるので、
+# 定数として1か所に置く。
+MAP_HEIGHT_PX = 496
+MAP_ZOOM = 10
+# 中心を寄せるときに、観測点マーカーが端で欠けないよう空けておく余白。
+# マーカーは最大でも直径28pxなので、その半分に少し足した値。
+MAP_EDGE_MARGIN_PX = 22
+# 幅は列幅（ブラウザの表示倍率や画面幅で変わる）に追従する。実測414pxだが、
+# 狭い画面で観測点が切れないよう、余地の計算では控えめな値を使う。
+MAP_MIN_WIDTH_PX = 400
 SELECTION_COLORS = ["red", "green"]
 # 車種別ビューで大型車に使う色。選択色（赤・緑）と同系統のまま明るくして、
 # 「同じ観測点の別の車種」だと分かるようにする。大型車は小型車の1割程度の
@@ -849,6 +861,38 @@ def _deterministic_branca_ids():
         branca_element.Element._generate_id = original
 
 
+def _map_center(point_summary: pd.DataFrame, mainshock: dict) -> list:
+    """
+    地図の中心を、観測点を1点も欠かさない範囲で震源にいちばん近づける。
+
+    観測点の平均で決めると中心が震源の北東にずれ、震源が画面の隅に寄って
+    「どこで起きた地震か」が読みにくかった。かといって震源そのものを中心に
+    すると、縮尺を変えない以上どちらかの端の観測点が画面から出てしまう。
+
+    そこで縮尺（MAP_ZOOM）と画面の大きさから「この中心なら全点が入る」
+    範囲を出し、そこへ震源を丸める。全点が入る中心が無いときだけ、
+    観測点の真ん中に戻す。
+    """
+    lat0, lat1 = point_summary["point_lat"].min(), point_summary["point_lat"].max()
+    lon0, lon1 = point_summary["point_lon"].min(), point_summary["point_lon"].max()
+    # Webメルカトルの1度あたりピクセル数（緯度は経度をcosで割った値）
+    px_per_deg_lon = 256 * (2 ** MAP_ZOOM) / 360
+    px_per_deg_lat = px_per_deg_lon / math.cos(math.radians((lat0 + lat1) / 2))
+    half_lat = (MAP_HEIGHT_PX / 2 - MAP_EDGE_MARGIN_PX) / px_per_deg_lat
+    half_lon = (MAP_MIN_WIDTH_PX / 2 - MAP_EDGE_MARGIN_PX) / px_per_deg_lon
+
+    def _clamp(target, lo_pt, hi_pt, half):
+        lo, hi = hi_pt - half, lo_pt + half   # 全点が入る中心の下限・上限
+        if lo > hi:                            # 縮尺の都合で入りきらない
+            return (lo_pt + hi_pt) / 2
+        return min(max(target, lo), hi)
+
+    return [
+        _clamp(mainshock["epicenter_lat"], lat0, lat1, half_lat),
+        _clamp(mainshock["epicenter_lon"], lon0, lon1, half_lon),
+    ]
+
+
 def build_base_map(
     point_summary: pd.DataFrame,
     mainshock: dict,
@@ -874,8 +918,10 @@ def build_base_map(
     個々の場所が分からず意味が薄いため、地図には表示しない。
     """
     with _deterministic_branca_ids():
-        center = [point_summary["point_lat"].mean(), point_summary["point_lon"].mean()]
-        fmap = folium.Map(location=center, tiles=None)
+        fmap = folium.Map(
+            location=_map_center(point_summary, mainshock),
+            zoom_start=MAP_ZOOM, tiles=None,
+        )
         # 通行規制などの重ね合わせ情報が見やすいよう、背景地図は半透明にする。
         # 背景地図は1種類しかなく、切り替えられないものをレイヤ一覧に出しても
         # 幅を取るだけなので control=False で一覧から外す。
@@ -928,11 +974,10 @@ def build_base_map(
             "</style>"
         ))
 
-        bounds = [
-            [point_summary["point_lat"].min(), point_summary["point_lon"].min()],
-            [point_summary["point_lat"].max(), point_summary["point_lon"].max()],
-        ]
-        fmap.fit_bounds(bounds, padding=(40, 40))
+        # ここで fit_bounds は使わない。st_folium は folium 側の location と
+        # zoom だけを見て地図を組み立てるため、fit_bounds を書いても効かない
+        # （実際、以前の地図は fit_bounds ではなく観測点の平均座標で
+        # 中心が決まっていた）。中心と縮尺は _map_center / MAP_ZOOM で決める。
 
         # ((状態, データソース), レイヤ)。状態は 0=規制中 / 1=解除済み /
         # 2=地震前からの規制、データソースは 0=高速道路 / 1=直轄国道 /
@@ -1517,7 +1562,7 @@ def render_timeseries(
     tick_vals, tick_text = _day_ticks(x_range)
 
     series = SERIES_VEHICLE if series_mode == "vehicle" else SERIES_TOTAL
-    chart_height = 290
+    chart_height = 232
     for label, sub_series in series:
         missing = [
             suf for suf, _, _ in sub_series
@@ -1588,7 +1633,7 @@ def render_timeseries(
             font=dict(size=11, color="black"),
         )
         # 上下2図を並べると縦に長くなり、観測点を比べるたびにスクロールが
-        # 必要になるため1図の高さを抑える（400 -> 290）。凡例は2図で同じ内容
+        # 必要になるため1図の高さを抑える（400 -> 290 -> 232）。凡例は2図で同じ内容
         # なので上の図だけに出し、下の図はその分の余白も詰める。
         show_legend = label == series[0][0]
         fig.update_layout(
@@ -2013,8 +2058,8 @@ def main():
                     point_summary, point_labels, selected_points
                 )
                 map_state = st_folium(
-                    # 縦を詰めて右側の2図と高さを近づける（750 -> 620）
-                    base_map, height=620, width=550,
+                    # 縦を詰めて右側の2図と高さを近づける（750 -> 620 -> 496）
+                    base_map, height=MAP_HEIGHT_PX, width=550,
                     feature_group_to_add=points_fg,
                     # 座標ではなく「何をクリックしたか」で判定する。
                     #   last_object_clicked_tooltip … クリックされた図形のツールチップ本文。
