@@ -83,6 +83,9 @@ EXPRESSWAY_IC_NODES = {
     "嘉島JCT": (810949406, 32.75277, 130.78863),
     "益城TB": (2847572263, 32.75140, 130.79723),
     "えびのIC": (810195850, 32.04610, 130.80058),
+    "栗野IC": (1383752612, 31.94573, 130.72537),
+    "えびのJCT": (748844869, 32.03716, 130.79907),
+    "高原IC": (1809329628, 31.92691, 131.02026),
 }
 
 # (路線名, 区間) -> (端点A, 端点B, OSM上の道路名)
@@ -93,8 +96,12 @@ EXPRESSWAY_SECTIONS = {
         ("益城熊本空港IC", "松橋IC", "九州自動車道"),
     ("E3 九州自動車道", "松橋IC〜えびのIC"):
         ("松橋IC", "えびのIC", "九州自動車道"),
+    ("E3 九州自動車道", "えびのIC〜栗野IC"):
+        ("えびのIC", "栗野IC", "九州自動車道"),
+    ("E10 宮崎自動車道", "えびのJCT〜高原IC"):
+        ("えびのJCT", "高原IC", "宮崎自動車道"),
     ("E3A 南九州自動車道", "八代JCT〜田浦IC"):
-        ("八代JCT", "田浦IC", "南九州自動車道"),
+        ("八代JCT", "田浦IC", "南九州自動車道|日奈久芦北道路"),
     ("E77 九州中央自動車道", "嘉島JCT〜益城TB"):
         ("嘉島JCT", "益城TB", "九州中央自動車道"),
 }
@@ -145,6 +152,79 @@ def _haversine(lat1, lon1, lat2, lon2) -> float:
         math.sin(p(lat2 - lat1) / 2) ** 2
         + math.cos(p(lat1)) * math.cos(p(lat2)) * math.sin(p(lon2 - lon1) / 2) ** 2
     ))
+
+
+def step_note() -> str:
+    return "200m"
+
+
+def expressway_path(ic_a: tuple, ic_b: tuple, road_name: str,
+                    step: int = 200, corridor: int = 8000) -> tuple:
+    """
+    高速道路の区間の線形を、その路線のノードを進行方向に並べて作る。
+
+    一般国道で使っているルーティング方式（両端をOSRMで結ぶ）は高速道路で
+    破綻した。上下線が別wayであることなどが原因で経路が路線から外れ、
+    実延長の2〜4倍・路線上52〜71%になった。
+
+    ここでは経路探索をせず、路線上のノードだけを使う。A→B方向へ射影した
+    進み具合で並べ、一定間隔ごとに「直前に選んだ点へ最も近いもの」を
+    選んでいく。こうすると同じ側の車線をたどり続け、wayの向きや分割の
+    仕方に左右されない。引いた線の点はすべて実在のノードなので、
+    路線からの外れはゼロになる。
+    """
+    pts = road_nodes_in_box(
+        min(ic_a[1], ic_b[1]) - 0.10, min(ic_a[2], ic_b[2]) - 0.10,
+        max(ic_a[1], ic_b[1]) + 0.10, max(ic_a[2], ic_b[2]) + 0.10,
+        road_name,
+    )
+    lat0 = math.radians((ic_a[1] + ic_b[1]) / 2)
+    mx, my = 111320 * math.cos(lat0), 110540
+    ax, ay = ic_a[2] * mx, ic_a[1] * my
+    vx, vy = ic_b[2] * mx - ax, ic_b[1] * my - ay
+    length = math.hypot(vx, vy)
+    ux, uy = vx / length, vy / length
+    # 長い区間ほど路線が直線から大きく離れる（松橋IC〜えびのICは人吉盆地を
+    # 迂回する）。回廊を延長に比例させないと、離れた部分のノードが落ちて
+    # 線に飛びができる。
+    corridor = max(corridor, length * 0.35)
+    bins = {}
+    for pt in pts:
+        wx, wy = pt[1] * mx - ax, pt[0] * my - ay
+        t = wx * ux + wy * uy
+        off = abs(wx * (-uy) + wy * ux)
+        if -step <= t <= length + step and off < corridor:
+            bins.setdefault(int(t // step), []).append((off, pt))
+    if not bins:
+        raise RuntimeError(f"{road_name} の区間上にノードが無い")
+    path, prev = [], None
+    for k in sorted(bins):
+        cand = bins[k]
+        if prev is None:
+            pt = min(cand, key=lambda c: c[0])[1]
+        else:
+            pt = min(cand, key=lambda c: _haversine(
+                prev[0], prev[1], c[1][0], c[1][1]))[1]
+        if prev is None or _haversine(prev[0], prev[1], pt[0], pt[1]) > 5:
+            path.append(pt)
+            prev = pt
+    km = sum(
+        _haversine(path[i][0], path[i][1], path[i + 1][0], path[i + 1][1])
+        for i in range(len(path) - 1)
+    ) / 1000
+    gaps = [
+        _haversine(path[i][0], path[i][1], path[i + 1][0], path[i + 1][1])
+        for i in range(len(path) - 1)
+    ]
+    straight = _haversine(ic_a[1], ic_a[2], ic_b[1], ic_b[2]) / 1000
+    return path, km, {
+        "max_gap_m": round(max(gaps)) if gaps else 0,
+        "straight_km": round(straight, 2),
+        "ratio": round(km / straight, 2) if straight else 0,
+        "snap_a": path[0], "snap_b": path[-1],
+        "snap_dist_a": round(_haversine(ic_a[1], ic_a[2], path[0][0], path[0][1])),
+        "snap_dist_b": round(_haversine(ic_b[1], ic_b[2], path[-1][0], path[-1][1])),
+    }
 
 
 def parallel_route(ic_a: tuple, ic_b: tuple, road_name: str) -> tuple:
@@ -244,13 +324,15 @@ def road_nodes_in_box(s: float, w: float, n: float, e: float, road_name: str) ->
     """
     指定した道路のノードを範囲から集める。
 
-    道路名で直接引く。ref（一般国道なら3、高速道路ならE3 など）は
-    路線によって書き方が揺れるので、名前で照合したほうが確実で、
-    一般国道にも高速道路にも同じ関数を使える。
+    道路名で引く。ref（一般国道なら3、高速道路ならE3 など）は路線によって
+    書き方が揺れるので、名前で照合したほうが確実で、一般国道にも高速道路にも
+    同じ関数を使える。照合は部分一致（正規表現）にする。OSMには
+    「南九州自動車道;八代日奈久道路」のように複数の名前を連結した
+    表記があり、完全一致では拾えないため。
     """
     query = (
         "[out:json][timeout:90];"
-        f'way["highway"]["name"="{road_name}"]({s},{w},{n},{e});'
+        f'way["highway"]["name"~"{road_name}"]({s},{w},{n},{e});'
         "out geom;"
     )
     data = _overpass(query)
@@ -368,10 +450,17 @@ def process(json_path: str, dry_run: bool) -> None:
         if exp:
             ic_a, ic_b, road = exp
             a, b = EXPRESSWAY_IC_NODES[ic_a], EXPRESSWAY_IC_NODES[ic_b]
-            path, km, info = parallel_route(a, b, road)
+            try:
+                path, km, info = expressway_path(a, b, road)
+            except RuntimeError as err:
+                # 1区間の取得失敗で全体が書き込まれないと、成功した分まで
+                # やり直しになる。飛ばして続け、何が落ちたかは残す。
+                print(f"[skip] {key[0]}（{key[1]}）… {err}")
+                continue
             print(
                 f"[高速] {key[0]}（{key[1]}）… {len(path)}点 / {km:.2f}km "
-                f"/ {road}上 {info['on_road_pct']}%（最大{info['max_off_m']}m）"
+                f"（直線 {info['straight_km']}km, 比 {info['ratio']}）"
+                f" 最大ギャップ {info['max_gap_m']}m"
             )
             item["path"] = path
             item["path_length_km"] = round(km, 2)
@@ -382,12 +471,16 @@ def process(json_path: str, dry_run: bool) -> None:
                  "lon": info["snap_b"][1]},
             ]
             item["path_source"] = (
-                f"区間の端点 {ic_a}（OSM node/{a[0]}）と {ic_b}（node/{b[0]}）を"
-                f"OSMの{road}上に投影し（それぞれ{info['snap_dist_a']}m、"
-                f"{info['snap_dist_b']}m）、その間を{road}のノード"
-                f"{info['waypoints']}点を経由地にOSRMでルーティングした。"
-                f"引いた線は{info['on_road_pct']}%が{road}から50m以内"
-                f"（最大{info['max_off_m']}m）に収まることを確認済み。"
+                f"区間の端点 {ic_a}（OSM node/{a[0]}）と {ic_b}（node/{b[0]}）の"
+                f"間について、OSMで「{road}」の名前を持つ道路のノードを"
+                f"{step_note()}おきに拾い、進行方向に並べて線にした"
+                f"（端点までの距離は{info['snap_dist_a']}m、"
+                f"{info['snap_dist_b']}m）。点はすべて実在のノードなので"
+                f"路線から外れることはない。延長{km:.2f}kmは直線距離"
+                f"{info['straight_km']}kmの{info['ratio']}倍で、"
+                f"点の間隔の最大は{info['max_gap_m']}m。"
+                "ルーティングで結ぶ方式は、上下線が別wayであることなどが原因で"
+                "経路が路線から外れたため使っていない。"
             )
             changed += 1
             continue
