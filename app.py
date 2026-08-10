@@ -217,6 +217,20 @@ def load_mlit_regulations() -> dict:
 
 
 @st.cache_data(ttl=300)
+def load_nexco_regulations() -> dict:
+    """
+    高速道路（NEXCO西日本が管理する有料道路）の規制。県のポータルにも
+    熊本河川国道事務所のPDFにも載らないため、NEXCO西日本が公表する
+    「お知らせ」PDFから手作業で転記したものを別ファイルで持つ。
+    """
+    path = os.path.join(DATA_DIR, "nexco_regulations.json")
+    if not os.path.exists(path):
+        return {}
+    with open(path, encoding="utf-8") as f:
+        return json.load(f)
+
+
+@st.cache_data(ttl=300)
 def regulation_archive_start() -> str:
     """
     通行規制のアーカイブに記録が残っている最も古い時点（first_seen の最小値）。
@@ -841,6 +855,7 @@ def build_base_map(
     regulations: list = None,
     mlit: dict = None,
     point_labels: dict = None,
+    nexco: dict = None,
 ) -> folium.Map:
     """
     選択状態に依存しない「ベース地図」（背景タイル・通行規制・震源）を作る。
@@ -918,7 +933,8 @@ def build_base_map(
         fmap.fit_bounds(bounds, padding=(40, 40))
 
         # ((状態, データソース), レイヤ)。状態は 0=規制中 / 1=解除済み /
-        # 2=地震前からの規制、データソースは 0=直轄国道 / 1=県・市町村道。
+        # 2=地震前からの規制、データソースは 0=高速道路 / 1=直轄国道 /
+        # 2=県・市町村道（管理者ごとに公表の経路が違うので、それが区切り）。
         # 規制中を上、解除済みをその下、地震前を一番下に並べ、
         # 同じ状態のなかでは直轄国道を先に置く。
         overlays = []
@@ -976,8 +992,8 @@ def build_base_map(
             # 直轄国道のレイヤも作ってから、まとめて決まった順に足す
             # （足した順がそのままレイヤ一覧の並びになるため）。
             overlays += [
-                ((0, 1), post_active_layer), ((1, 1), post_ended_layer),
-                ((2, 1), pre_layer),
+                ((0, 2), post_active_layer), ((1, 2), post_ended_layer),
+                ((2, 2), pre_layer),
             ]
 
         # 直轄国道の規制。PDFは区間を「○○IC〜○○IC」と名前で示すだけで座標が無いが、
@@ -1145,8 +1161,64 @@ def build_base_map(
 
             if mlit_drawn:
                 overlays += [
-                    ((0, 0), mlit_active_layer), ((1, 0), mlit_ended_layer),
+                    ((0, 1), mlit_active_layer), ((1, 1), mlit_ended_layer),
                 ]
+
+        # 高速道路（NEXCO西日本）の規制。すべて区間で示されているので、
+        # 直轄国道のような地点・▲のフォールバックは要らない。
+        nexco_items = (nexco or {}).get("items", [])
+        if nexco_items:
+            nx_active = folium.FeatureGroup(name="高速道路：規制中")
+            nx_ended = folium.FeatureGroup(name="高速道路：解除済み", show=False)
+            nx_ic = {}
+            for item in nexco_items:
+                path = item.get("path")
+                if not path:
+                    continue
+                ended = bool(item.get("end_timestamp"))
+                full = item.get("content") in FULL_CLOSURE_CONTENTS
+                color = "#e60000" if full else "#e67e22"
+                layer = nx_ended if ended else nx_active
+                folium.PolyLine(
+                    locations=path,
+                    color=color, weight=6 if full else 5,
+                    opacity=0.5 if ended else 0.95,
+                    dash_array="6,8" if ended else None,
+                    tooltip=(
+                        f"<b>{item['route_name']}</b><br>{item['section']}<br>"
+                        f"<b>{item['content']}／"
+                        f"{'解除済み' if ended else '規制中'}</b><br>"
+                        f"{item['start_timestamp']} 〜 "
+                        f"{item['end_timestamp'] or '(継続中)'}<br>"
+                        "高速道路（出典: NEXCO西日本）"
+                    ),
+                ).add_to(layer)
+                folium.Marker(
+                    location=path[len(path) // 2],
+                    icon=_x_circle_icon(color, ended),
+                ).add_to(layer)
+                for ep in item.get("endpoints") or []:
+                    key = (round(ep["lat"], 6), round(ep["lon"], 6), id(layer))
+                    entry = nx_ic.setdefault(
+                        key,
+                        {"name": ep["name"], "node": ep.get("osm_node"),
+                         "sections": [], "layer": layer},
+                    )
+                    label = f"{item['route_name']} {item['section']}"
+                    if label not in entry["sections"]:
+                        entry["sections"].append(label)
+            for (lat, lon, _), info in nx_ic.items():
+                folium.CircleMarker(
+                    location=[lat, lon], radius=5, color="#333333", weight=2,
+                    fill=True, fill_color="#ffffff", fill_opacity=0.95,
+                    tooltip=(
+                        f"<b>{info['name']}</b><br>"
+                        + "".join(f"{sec} の端点<br>" for sec in info["sections"])
+                        + "位置はOpenStreetMapのICノード"
+                        + (f"（node/{info['node']}）" if info["node"] else "")
+                    ),
+                ).add_to(info["layer"])
+            overlays += [((0, 0), nx_active), ((1, 0), nx_ended)]
 
         if regulations or mlit_drawn:
             # 左上・右上だと観測点マーカーに被るので右下に置く
@@ -1627,6 +1699,7 @@ def main():
     quake_info = load_quake_info()
     regulations = load_regulations()
     mlit = load_mlit_regulations()
+    nexco = load_nexco_regulations()
     mainshock = quake_info["mainshock"]
     quake_at = pd.Timestamp(mainshock["occurred_at"]).tz_localize(None)
     other_event_times = [
@@ -1940,7 +2013,8 @@ def main():
                     unsafe_allow_html=True,
                 )
                 base_map = build_base_map(
-                    point_summary, mainshock, regulations, mlit, point_labels
+                    point_summary, mainshock, regulations, mlit, point_labels,
+                    nexco=nexco,
                 )
                 points_fg = build_points_feature_group(
                     point_summary, point_labels, selected_points
