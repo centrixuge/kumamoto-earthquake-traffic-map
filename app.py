@@ -1003,6 +1003,13 @@ def build_base_map(
                         f"直轄国道（出典: 熊本河川国道事務所）"
                     ),
                 ).add_to(mlit_layer)
+                # 県フィードの地震後の規制と同じく、線の中点にも⊗を置く。
+                # 直轄国道の規制はいずれも今回の地震以降のものなので、
+                # 「⊗＝地震後に始まった規制」という凡例の規則に合わせる。
+                folium.Marker(
+                    location=items[0]["path"][len(items[0]["path"]) // 2],
+                    icon=_x_circle_icon("#e60000" if full else "#e67e22", ended),
+                ).add_to(mlit_layer)
                 mlit_drawn += 1
 
             # 区間の線を引けない規制のうち、場所が1地点として特定できたものは
@@ -1785,11 +1792,32 @@ def main():
 
             with col_map:
                 st.subheader(f"常時観測点（{n_points}点）別の異常度 × 通行規制")
+                _now = _now_jst()
+                # 地図に出ている規制の大半は解除済みで、いま何が止まっているのかが
+                # 読み取りにくい。データの段階で絞り、凡例の件数も同じ集合から
+                # 数えることで、表示と説明が食い違わないようにする。
+                # ウィジェットは地図より前に作る（地図クリックの st.rerun() で
+                # スクリプトが中断されると、後ろのウィジェットは状態が落ちるため）。
+                only_active = st.checkbox(
+                    "今回の地震以降に始まり、いま継続中の規制だけを表示",
+                    value=False, key="reg_only_active",
+                )
+                if only_active:
+                    regulations = [
+                        r for r in regulations
+                        if _regulation_is_post_quake(r, quake_at)
+                        and not _regulation_is_ended(r, _now)
+                    ]
+                    mlit = dict(mlit or {})
+                    mlit["items"] = [
+                        i for i in (mlit.get("items") or [])
+                        if not i.get("end_timestamp")
+                    ]
+
                 # 色（規制の区分）と線の形（規制中か解除済みか）は独立した軸で、
                 # 破線は青灰・赤・橙のどれにも、県feedにも直轄国道にも同じように
                 # 掛かる。以前は「破線は解除済み」を地震前の規制の行に置いていて、
                 # その区分だけの決まりごとに見えていたので、行を分けた。
-                _now = _now_jst()
                 n_post = sum(
                     1 for r in regulations if _regulation_is_post_quake(r, quake_at)
                 )
@@ -1828,9 +1856,12 @@ def main():
                 color_items = [
                     f'{_sw(bar + "background:#e60000;")} 全面/車両通行止め',
                     f'{_sw("width:20px;height:4px;background:#e67e22;")} 片側交互など',
-                    f'{_sw("width:20px;height:3px;background:#5b7c99;opacity:0.55;")}'
-                    f' 地震前からの規制 {n_pre}件（工事・過去の災害）',
                 ]
+                if n_pre:
+                    color_items.append(
+                        f'{_sw("width:20px;height:3px;background:#5b7c99;opacity:0.55;")}'
+                        f' 地震前からの規制 {n_pre}件（工事・過去の災害）'
+                    )
                 if n_mlit_line:
                     # 規制区間の端点となるICも点で置いている。
                     color_items.append(
@@ -1843,11 +1874,15 @@ def main():
                 # 場所が区間で示されているか地点でしか分からないか。
                 shape_items = [
                     '<span style="color:#555;font-weight:700;">⊗</span>'
-                    f' 地震後に始まった規制 {n_post}件（色は上の区分）',
+                    f' 地震後に始まった規制（県 {n_post}件・直轄国道'
+                    f' {len(_mlit_items)}件。色は上の区分）',
                     f'{_sw("width:20px;height:4px;background:#95a5a6;")} 実線・外円が実線は規制中',
-                    f'{_sw("width:20px;height:0;border-top:4px dashed #95a5a6;")}'
-                    f' 破線・外円が点線は解除済み {n_ended}件',
                 ]
+                if n_ended:
+                    shape_items.append(
+                        f'{_sw("width:20px;height:0;border-top:4px dashed #95a5a6;")}'
+                        f' 破線・外円が点線は解除済み {n_ended}件'
+                    )
                 if n_mlit_spot:
                     shape_items.append(
                         f'区間は線、地点だけ分かるものは⊗のみ {n_mlit_spot}件（位置は概略）'
