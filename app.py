@@ -755,7 +755,7 @@ def _regulation_is_post_quake(reg: dict, quake_at: datetime) -> bool:
     return start_dt >= quake_at
 
 
-def _x_circle_icon(color: str, ended: bool, size: int = 22) -> folium.DivIcon:
+def _x_circle_icon(color: str, ended: bool, size: int = 18) -> folium.DivIcon:
     """
     PDFの別添図と同じ ⊗（丸の中に×）の印を作る。
 
@@ -767,16 +767,18 @@ def _x_circle_icon(color: str, ended: bool, size: int = 22) -> folium.DivIcon:
     （markerPane は overlayPane より上にあるため、透過させないと
      観測点の選択を横取りしてしまう）。
     """
-    r = size / 2 - 2.4
+    # 線の太さと余白はサイズに比例させる（小さくしても潰れないように）
+    sw = round(size * 0.11, 2)
+    r = size / 2 - sw
     c = size / 2
     d = r * 0.62
-    dash = ' stroke-dasharray="3,2.6"' if ended else ""
+    dash = f' stroke-dasharray="{round(sw * 1.25, 2)},{round(sw * 1.1, 2)}"' if ended else ""
     html = (
         f'<svg width="{size}" height="{size}" viewBox="0 0 {size} {size}">'
         f'<circle cx="{c}" cy="{c}" r="{r}" fill="#ffffff" fill-opacity="0.9" '
-        f'stroke="{color}" stroke-width="2.4"{dash}/>'
+        f'stroke="{color}" stroke-width="{sw}"{dash}/>'
         f'<path d="M{c - d} {c - d} L{c + d} {c + d} M{c + d} {c - d} L{c - d} {c + d}" '
-        f'stroke="{color}" stroke-width="2.4" stroke-linecap="round"/>'
+        f'stroke="{color}" stroke-width="{sw}" stroke-linecap="round"/>'
         "</svg>"
     )
     return folium.DivIcon(
