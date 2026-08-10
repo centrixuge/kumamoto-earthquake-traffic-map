@@ -909,6 +909,8 @@ def build_base_map(
             ".pt-mark{display:inline-block;width:10px;height:10px;margin-right:5px;"
             "background:#4a7ab5;border:1px solid #333;vertical-align:middle;}"
             ".pt-circle{border-radius:50%;}"
+            # 角丸の四角。地図のマーカーと同じ丸め方（1辺の28%）にする
+            ".pt-square{width:9px;height:9px;border-radius:28%;}"
             ".pt-legend-head{font-size:10.5px;color:#555;letter-spacing:0.02em;"
             "border-bottom:1px solid #ddd;margin-bottom:2px;padding-bottom:1px;}"
             # ツールチップは既定（white-space:nowrap）だと横に伸びて地図の外まで
@@ -1325,123 +1327,6 @@ def render_source_table(regulations: list, n_post: int,
     )
 
 
-def render_nexco_notice(nexco: dict) -> None:
-    """
-    高速道路（NEXCO西日本）の規制を、出典つきで一覧にする。
-
-    直轄国道と同じく、県のポータルにも載らず配信の仕組みも無いので
-    PDFから転記している。どの報を根拠にしたのかを追えるようにする。
-    """
-    items = (nexco or {}).get("items", [])
-    if not items:
-        return
-    src_name = nexco.get("source_name", "NEXCO西日本")
-    src_url = nexco.get("source_url", "")
-    with st.expander(f"高速道路の規制（{len(items)}件・PDFから転記）", expanded=False):
-        st.markdown(
-            f"[{src_name}]({src_url}) が「お知らせ」として公表するPDF（第○報）から"
-            "手作業で転記しています。通行止めは一般車両に対するもので、"
-            "区間によっては緊急車両の通行が順次可能になっています。"
-        )
-        for item in items:
-            ended = bool(item.get("end_timestamp"))
-            st.markdown(
-                f"**{item['route_name']}（{item['section']}"
-                f"{'・' + str(item['path_length_km']) + 'km' if item.get('path_length_km') else ''}）**  \n"
-                f"{item['content']}／{'解除済み' if ended else '規制中'}｜"
-                f"{item['start_timestamp']} 〜 {item['end_timestamp'] or '(継続中)'}  \n"
-                f"{item['reason']}"
-            )
-            for rep in item.get("reports") or []:
-                st.caption(f"出典: {rep['label']}（{rep['pdf']}）")
-            if item.get("path_source"):
-                st.caption(f"区間の線形: {item['path_source']}")
-            st.markdown("---")
-        if nexco.get("coverage_note"):
-            st.caption(nexco["coverage_note"])
-        if nexco.get("note"):
-            st.caption(nexco["note"])
-
-
-def render_mlit_notice(mlit: dict, point_summary: pd.DataFrame, point_labels: dict) -> None:
-    """
-    直轄国道の規制を、出典と地図での描き方つきで一覧にする。
-
-    通行規制は管理者ごとに公表の仕方が違う。県・市町村の道路は
-    「防災情報くまもと」がJSONで配信しているが、国が管理する直轄国道は
-    熊本河川国道事務所がPDFで公表するだけなので、別に転記して持っている。
-    どの規制がどちらの経路で入り、地図にどう出ているのかを示すのがここの役割。
-    """
-    items = (mlit or {}).get("items", [])
-    if not items:
-        return
-    src_name = mlit.get("source_name", "国土交通省")
-    src_url = mlit.get("source_url", "")
-    n_line = sum(1 for i in items if i.get("path"))
-    n_spot = sum(1 for i in items if i.get("point") and not i.get("path"))
-    with st.expander(
-        f"直轄国道の規制（{len(items)}件・PDFから転記）", expanded=False
-    ):
-        st.markdown(
-            "通行規制は道路の管理者ごとに公表の仕方が違うため、"
-            "このダッシュボードでは2つの経路で集めています。\n\n"
-            "- **県・市町村が管理する道路**: 「防災情報くまもと」が公開JSONで"
-            "配信しているので、6時間ごとに自動取得しています。"
-            "始点・終点の座標があるので、OSRMで道路網に沿った経路に"
-            "スナップして地図に描いています\n"
-            f"- **国が管理する直轄国道**: [{src_name}]({src_url}) がPDFで"
-            "公表するだけで配信の仕組みがないため、**手作業で転記**しています。"
-            "以下がその一覧です\n\n"
-            "PDFには座標がないので、場所の示し方に応じて地図への出し方を"
-            "変えています。\n\n"
-            f"- **区間が「○○IC〜○○IC」で示されているもの（{n_line}件）**: "
-            "端点のICの座標（OpenStreetMap）から道路網に沿った線形を復元して"
-            "線で描いています。高速道路のIC名で並行する国道が示されている"
-            "場合は、その国道上に落として線にしています\n"
-            + (
-                f"- **キロポストや地名でしか示されていないもの（{n_spot}件）**: "
-                "地名から復元した概略の位置に **⊗** を置いています"
-                "（キロポストから直接求めた位置ではありません）\n"
-                if n_spot else ""
-            )
-            + "- 場所を特定できないものは、掛かっていた観測点が分かる場合だけ"
-            "その**すぐ上**に **▲** を置いています"
-        )
-        code_to_label = {
-            str(r["point_code"]): point_labels.get(r["point_id"], r["point_id"])
-            for _, r in point_summary.iterrows()
-            if pd.notna(r.get("point_code"))
-        }
-        for item in items:
-            affected = [
-                code_to_label.get(c, f"観測点 {c}")
-                for c in (item.get("affected_point_codes") or [])
-            ]
-            st.markdown(
-                f"**{item['route_name']}（{item['section']}"
-                f"{'・約' + str(item['length_km']) + 'km' if item.get('length_km') else ''}）**  \n"
-                f"{item['content']}｜{item['start_timestamp']} 〜 "
-                f"{item['end_timestamp'] or '(継続中)'}｜{item.get('reason', '')}  \n"
-                + (
-                    f"この規制が掛かる観測点: {', '.join(affected)}  \n" if affected
-                    else "観測点との対応づけなし（下記の根拠を参照）  \n"
-                )
-                + "出典: "
-                + " / ".join(f"[{r['label']}]({r['url']})" for r in item.get("reports", []))
-            )
-            # 観測点と規制の対応づけは推測で行わない。根拠（または裏付けが取れな
-            # かったこと）をそのまま出して、誤った因果の読み取りを防ぐ。
-            if item.get("path_source"):
-                st.caption(f"区間の線形: {item['path_source']}")
-            if item.get("match_basis"):
-                st.caption(f"観測点との対応づけ: {item['match_basis']}")
-            st.markdown("---")
-        if mlit.get("coverage_note"):
-            st.caption(mlit["coverage_note"])
-        if mlit.get("note"):
-            st.caption(mlit["note"])
-
-
 def build_points_feature_group(
     point_summary: pd.DataFrame, point_labels: dict, selected_points=()
 ) -> folium.FeatureGroup:
@@ -1485,12 +1370,23 @@ def build_points_feature_group(
 
         if _is_square_point(row.get("road_type")):
             # CircleMarkerに角を出す方法はないので、DivIconの四角で描く。
-            # 円と同じ大きさに見えるよう1辺を直径に合わせ、中心をアンカーにする。
             # ツールチップは丸と同じ文字列にしてあるので、クリックの判定
             # （point_id_from_tooltip）は形が変わっても同じように効く。
-            size = int(round(radius * 2))
+            #
+            # 見え方の調整を2つ入れている。
+            #   1辺を直径の 0.9 倍にする … 同じ差し渡しだと四角は面積が
+            #     円の1.27倍あり、同じ異常度でも大きく見えてしまう
+            #   角を1辺の28%丸める … 直角のままだと1〜2pxの縁が階段状に
+            #     見え、丸との並びで不格好になる。丸めると小さいサイズでも
+            #     縁がなめらかに出て、それでいて丸とは十分に見分けられる
+            #
+            # 1辺は必ず偶数にする。アンカーを size//2 で中心に置いている
+            # ので、奇数だと半ピクセルずれて縁がにじむ（丸はSVGなので
+            # 影響を受けず、四角だけが甘く見えていた）。
+            size = max(6, 2 * int(round(radius * 0.9)))
             style = (
                 f"width:{size}px;height:{size}px;box-sizing:border-box;"
+                f"border-radius:28%;"
                 f"background:{_rgba(fill_color, fill_opacity)};"
                 f"border:{weight}px {'dashed' if no_data else 'solid'} {border_color};"
             )
@@ -2135,8 +2031,6 @@ def main():
                     ],
                     key="quake_map_v8",
                 )
-                render_mlit_notice(mlit, point_summary, point_labels)
-                render_nexco_notice(nexco)
                 # 注記は、まずどこから何を集めたのかを表で示す。
                 # 以前は経路①②③を文章で並べていたが、3経路に増えて
                 # 読み通せない長さになったので、出典と収集済みデータへの
@@ -2151,8 +2045,9 @@ def main():
                     "線形を復元しています（キロポストだけのものは地名からの概略位置）。"
                     "描き分けは3つに共通で、色が規制の区分、破線が解除済みです。"
                     "地図の右下のレイヤ一覧で、道路の管理者×状態ごとに表示を"
-                    "切り替えられます（既定は規制中のみ）。②③の内訳は上の"
-                    "「直轄国道の規制」「高速道路の規制」に出しています。"
+                    "切り替えられます（既定は規制中のみ）。"
+                    "②③で転記した規制の一覧（区間・期間・根拠にした報・"
+                    f"線形の作り方）は[こちら]({REPO_URL}/blob/main/docs/regulations.md)にまとめています。"
                 )
                 st.caption(
                     "規制のアーカイブに記録が残っている最も古い時点は "
