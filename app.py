@@ -979,6 +979,36 @@ def build_base_map(
                 ).add_to(mlit_layer)
                 mlit_drawn += 1
 
+            # 区間の線を引けない規制のうち、場所が1地点として特定できたものは
+            # その位置に印を置く（キロポストや地名でしか示されていないもの）。
+            # 位置は地名から復元しているので誤差があり、その旨をツールチップに出す。
+            for item in mlit_items:
+                pt = item.get("point")
+                if not pt or item.get("path"):
+                    continue
+                ended = bool(item.get("end_timestamp"))
+                full = item.get("content") in FULL_CLOSURE_CONTENTS
+                color = "#e60000" if full else "#e67e22"
+                folium.CircleMarker(
+                    location=[pt["lat"], pt["lon"]],
+                    radius=7,
+                    color=color,
+                    weight=3,
+                    fill=True,
+                    fill_color=color,
+                    fill_opacity=0.25 if ended else 0.6,
+                    dash_array="4,4" if ended else None,
+                    tooltip=(
+                        f"<b>{item['route_name']}</b><br>{item['section']}<br>"
+                        f"<b>{item['content']}／{'解除済み' if ended else '規制中'}</b><br>"
+                        f"{item['start_timestamp']} 〜 "
+                        f"{item['end_timestamp'] or '(継続中)'}<br>"
+                        "位置は地名から復元した概略値<br>"
+                        "直轄国道（出典: 熊本河川国道事務所）"
+                    ),
+                ).add_to(mlit_layer)
+                mlit_drawn += 1
+
             # 区間の端点（IC）を点で落とす。線だけだと、どのICからどのICまで
             # なのかが地図から読めないため。同じICが複数の区間の端点になる
             # （車帰ICは大津IC側と阿蘇西IC側の両方）ので、ICごとに1点だけ置き、
@@ -1743,7 +1773,12 @@ def main():
                 # （キロポストや地名だけの）ものがこれにあたる。黙って
                 # 落とすと、地図を見た人は「直轄国道の規制はこれで全部」と
                 # 受け取ってしまうので、件数を明示する。
-                n_mlit_hidden = len(_mlit_items) - n_mlit_line - n_mlit_point
+                n_mlit_spot = sum(
+                    1 for i in _mlit_items if i.get("point") and not i.get("path")
+                )
+                n_mlit_hidden = (
+                    len(_mlit_items) - n_mlit_line - n_mlit_point - n_mlit_spot
+                )
                 n_ended += sum(
                     1 for i in _mlit_items if i.get("path") and i.get("end_timestamp")
                 )
@@ -1760,6 +1795,12 @@ def main():
                     f'{_sw("width:20px;height:3px;background:#5b7c99;opacity:0.55;")}'
                     f' 地震前からの規制 {n_pre}件（工事・過去の災害）',
                 ]
+                if n_mlit_spot:
+                    color_items.append(
+                        f'{_sw("width:11px;height:11px;border-radius:50%;"
+                              "background:rgba(230,126,34,0.5);border:2px solid #e67e22;")}'
+                        f' 地点で示された規制 {n_mlit_spot}件（位置は概略）'
+                    )
                 if n_mlit_line:
                     # 直轄国道の規制区間は「○○IC〜○○IC」で示されるので、
                     # 線だけでなく端点のICも点で置いている。
@@ -1852,10 +1893,15 @@ def main():
                     "描き分けは県道以下と同じで、色が規制の区分、破線が解除済みです。"
                     "一覧は上の「県のデータに含まれない規制があります」に出しています）。"
                     + (
-                        f"残る{n_mlit_hidden}件は、PDFが場所をキロポストや地名でしか"
-                        "示しておらず、線を引ける区間の端点（IC）が無いため"
+                        f"残る{n_mlit_hidden}件は場所を特定できず"
                         "**地図上には出していません**（一覧には出ています）。"
                         if n_mlit_hidden else ""
+                    )
+                    + (
+                        f"別の{n_mlit_spot}件は、PDFが場所をキロポストでしか"
+                        "示していないため、地名から復元した概略の位置に丸で"
+                        "置いています（キロポストから直接求めた位置ではありません）。"
+                        if n_mlit_spot else ""
                     ) +
                     "②規制のアーカイブに記録が残っている最も古い時点は "
                     f"**{regulation_archive_start() or '本震の翌日'}**（本震より後）です。"

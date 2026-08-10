@@ -53,6 +53,25 @@ PARALLEL_SECTIONS = {
         ("松橋IC", "八代南IC", "国道3号"),
 }
 
+# キロポストや地名でしか場所が示されていない規制。
+# PDFの別添図で位置は確認できるが、線を引ける区間の端点が無い。
+# 地名をジオコーディングして当該国道上に落とし、点として置く。
+# (路線名, 区間) -> (Nominatimに投げる地名, OSM上の道路名)
+PLACE_POINTS = {
+    ("国道3号", "八代郡氷川町大野（216K600）"):
+        ("熊本県八代郡氷川町大野", "国道3号"),
+    ("国道57号", "宇土市住吉（133K450）"):
+        ("熊本県宇土市住吉町", "国道57号"),
+}
+
+# 地名で区間が示されている規制。両端の地名を当該国道上に落として
+# その間をルーティングする。IC で示されたものと同じ考え方。
+# (路線名, 区間) -> (始点の地名, 終点の地名, OSM上の道路名)
+PLACE_SECTIONS = {
+    ("国道3号", "氷川町大野〜八代市岡町中（舗装補修3箇所）"):
+        ("熊本県八代郡氷川町大野", "熊本県八代市岡町中", "国道3号"),
+}
+
 IC_NODES = {
     "大津IC": (7968355573, 32.89208, 130.89616),
     "車帰IC": (7944635651, 32.91442, 130.97900),
@@ -186,6 +205,60 @@ def parallel_route(ic_a: tuple, ic_b: tuple, road_name: str) -> tuple:
     }
 
 
+NOMINATIM = "https://nominatim.openstreetmap.org/search"
+
+
+def geocode(place: str) -> tuple:
+    """地名の座標（その地名の代表点）を返す。"""
+    resp = requests.get(
+        NOMINATIM,
+        params={"q": place, "format": "json", "limit": 1, "countrycodes": "jp"},
+        headers={"User-Agent": "kumamoto-earthquake-traffic-map/1.0"}, timeout=40,
+    )
+    resp.raise_for_status()
+    hits = resp.json()
+    if not hits:
+        raise RuntimeError(f"地名が見つからない: {place}")
+    time.sleep(1.2)  # Nominatimの利用規約（1秒1リクエスト）
+    return float(hits[0]["lat"]), float(hits[0]["lon"])
+
+
+def road_nodes(lat: float, lon: float, road_name: str, span: float = 0.06) -> list:
+    """指定した道路のノードを、地点の周りから集める。"""
+    ref = road_name.strip("国道号")
+    query = (
+        "[out:json][timeout:60];"
+        f'way["highway"]["ref"~"(^|;){ref}(;|$)"]'
+        f"({lat - span},{lon - span},{lat + span},{lon + span});"
+        "out geom;"
+    )
+    data = _overpass(query)
+    nodes = [
+        [p["lat"], p["lon"]]
+        for w in data.get("elements", [])
+        if (w.get("tags") or {}).get("name") == road_name
+        for p in (w.get("geometry") or [])
+    ]
+    if len(nodes) < 2:
+        raise RuntimeError(f"{road_name} のノードが取得できなかった")
+    return nodes
+
+
+def snap_place(place: str, road_name: str) -> tuple:
+    """
+    地名を指定した国道の上に落とす。
+
+    最寄りの「道路」に落とすと、並行する薩摩街道や無名の側道に着いて
+    しまう（5地点すべてで確認）。道路名で絞ってから最寄りノードを採る。
+    地名の代表点は面の重心なので、道路まで1km近く離れることがある。
+    どれだけ動かしたかを戻り値に含めて、精度を記録できるようにする。
+    """
+    lat, lon = geocode(place)
+    nodes = road_nodes(lat, lon, road_name)
+    best = min(nodes, key=lambda n: _haversine(lat, lon, n[0], n[1]))
+    return best, round(_haversine(lat, lon, best[0], best[1])), (lat, lon)
+
+
 def route(a: tuple, b: tuple) -> tuple:
     """OSRMで2点間をルーティングし ([[lat,lon],...], 延長km) を返す。"""
     url = f"{OSRM_ROUTE}/{a[2]},{a[1]};{b[2]},{b[1]}"
@@ -212,6 +285,51 @@ def main() -> None:
     changed = 0
     for item in doc["items"]:
         key = (item["route_name"], item["section"])
+        pt = PLACE_POINTS.get(key)
+        if pt:
+            place, road = pt
+            node, moved, origin = snap_place(place, road)
+            print(f"[点]   {key[0]}（{key[1]}）… {road}上 "
+                  f"({node[0]:.5f}, {node[1]:.5f}) 地名から{moved}m")
+            item["point"] = {"lat": node[0], "lon": node[1]}
+            item["point_source"] = (
+                f"PDFは場所を「{key[1]}」としか示しておらず座標が無い。"
+                f"別添図では{road}上の1地点として描かれている。"
+                f"地名「{place}」をOpenStreetMapで座標にし（{road}ではなく"
+                "最寄りの道路に落とすと並行する薩摩街道や無名の側道に着くため）、"
+                f"道路名で絞ったうえで{road}上の最寄りノードを採った。"
+                f"地名の代表点は面の重心なので、そこから{moved}m動かしている。"
+                "キロポストから直接求めたものではないため、位置はこの程度の"
+                "誤差を含む。"
+            )
+            changed += 1
+            continue
+
+        ps = PLACE_SECTIONS.get(key)
+        if ps:
+            pa, pb, road = ps
+            na, ma, _ = snap_place(pa, road)
+            nb, mb, _ = snap_place(pb, road)
+            path, km, info = parallel_route(
+                (None, na[0], na[1]), (None, nb[0], nb[1]), road
+            )
+            print(f"[ok]   {key[0]}（{key[1][:18]}…）… {len(path)}点 / {km:.2f}km "
+                  f"/ {road}上 {info['on_road_pct']}%（最大{info['max_off_m']}m）")
+            item["path"] = path
+            item["path_length_km"] = round(km, 2)
+            item["path_source"] = (
+                f"PDFは区間を「{key[1]}」と地名で示すだけで座標が無い。"
+                f"両端の地名をOpenStreetMapで座標にし、{road}上に落として"
+                f"（それぞれ{ma}m、{mb}m動かした）、その間を{road}のノードを"
+                "経由地にOSRMでルーティングした。"
+                f"引いた線は{info['on_road_pct']}%が{road}から50m以内"
+                f"（最大{info['max_off_m']}m）。"
+                "地名の代表点は面の重心なので端点の位置には上記の誤差があり、"
+                "実際の工事も区間内の3箇所の点である。"
+            )
+            changed += 1
+            continue
+
         par = PARALLEL_SECTIONS.get(key)
         if par:
             ic_a, ic_b, road = par
