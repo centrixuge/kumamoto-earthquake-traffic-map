@@ -21,6 +21,7 @@ import plotly.graph_objects as go
 import streamlit as st
 from streamlit_folium import st_folium
 
+from modules.holidays import WEEKDAY_LABELS
 from modules.stations import attach_point_code, load_station_master
 
 DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
@@ -60,6 +61,25 @@ TIMESERIES_DISPLAY_START = pd.Timestamp("2026-07-27 12:00")
 # 本震時刻は quake_info.json から読んだものを渡す（ここで日時を
 # 直書きすると二重管理になる）。終了がデータより後ろでも Plotly 側で
 # 右側が空くだけなので、データがそこまで伸びるまでの間も同じ窓を出せる。
+def _day_ticks(x_range):
+    """x軸の目盛りを日の変わり目に置き、8/4(火) の形で曜日まで出す。
+
+    plotly の tickformat は d3-time-format なので、日本語の曜日を
+    出せない（%a は Tue になる）。目盛りの位置と文字列を自前で作る。
+    平常時が日区分（曜日）ごとに違うため、どの曜日と比べているのかを
+    軸から読めるようにしておきたい。
+    """
+    start, end = pd.Timestamp(x_range[0]), pd.Timestamp(x_range[1])
+    # 表示幅が広いときは1日おきにして、目盛りが詰まりすぎないようにする
+    step = 1 if (end - start) <= pd.Timedelta(days=9) else 2
+    first = start.normalize()
+    if first < start:
+        first += pd.Timedelta(days=1)
+    days = pd.date_range(first, end, freq=f"{step}D")
+    text = [f"{d.month}/{d.day}({WEEKDAY_LABELS[d.weekday()]})" for d in days]
+    return list(days), text
+
+
 def _since_quake(days: int):
     """本震から days 日後を含む日の24時までを返す。
 
@@ -1266,6 +1286,8 @@ def render_timeseries(
     else:
         x_range = list(x_range)
 
+    tick_vals, tick_text = _day_ticks(x_range)
+
     series = SERIES_VEHICLE if series_mode == "vehicle" else SERIES_TOTAL
     chart_height = 290
     for label, sub_series in series:
@@ -1351,7 +1373,16 @@ def render_timeseries(
                 orientation="h", yanchor="top", y=-0.28,
                 xanchor="left", x=0, font=dict(size=10),
             ),
-            xaxis=dict(tickformat="%m/%d\n%H:%M", range=x_range),
+            xaxis=dict(
+                range=x_range,
+                tickvals=tick_vals, ticktext=tick_text,
+                # 日付の目盛りだけだと日中の位置が読めないので、
+                # 6時間ごとの補助線をラベルなしで入れる。
+                minor=dict(
+                    dtick=6 * 3600 * 1000, showgrid=True,
+                    gridcolor="rgba(128,128,128,0.18)",
+                ),
+            ),
         )
         title = f"{label}交通量（{unit_label}）"
         if series_mode == "vehicle":
