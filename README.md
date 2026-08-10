@@ -2,8 +2,7 @@
 
 [![Open in Streamlit](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://kumamoto-earthquake-traffic-map.streamlit.app/)
 
-**🔗 公開URL: https://kumamoto-earthquake-traffic-map.streamlit.app/**  
-解説ページ: https://centrixuge.github.io/kumamoto-earthquake-traffic-map/
+**🔗 公開URL: https://kumamoto-earthquake-traffic-map.streamlit.app/**
 
 2026年7月28日16:27頃に熊本地方で発生した地震（M7.1・最大震度7）の前後で、交通量が平常時と比べてどう変わったかを観測点ごとに可視化する簡易ダッシュボードです。
 
@@ -87,7 +86,6 @@ python fetch_and_prepare.py
 | --- | --- |
 | [docs/methods.md](docs/methods.md) | 平常時の定義、異常検知、時系列の4ビュー、結果を読むうえでの制約、対象エリア・期間を決める定数 |
 | [docs/regulations.md](docs/regulations.md) | 通行規制データに載らない規制がある理由、直轄国道・高速道路の転記済み一覧、区間の線形の作り方、追加手順 |
-| [site/](site/) | GitHub Pagesで公開する解説ページ。[`scripts/build_site.py`](scripts/build_site.py) が `data/` から生成し、データ更新のたびに自動デプロイされます |
 | [docs/data-pipeline.md](docs/data-pipeline.md) | 交通量APIの利用条件への対応、追記専用アーカイブの設計、GitHub Actionsによる自動取得、コード・ディレクトリ構成 |
 
 ## 出典・ライセンス・免責
