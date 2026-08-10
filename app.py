@@ -1267,6 +1267,44 @@ def build_base_map(
         return fmap
 
 
+def render_nexco_notice(nexco: dict) -> None:
+    """
+    高速道路（NEXCO西日本）の規制を、出典つきで一覧にする。
+
+    直轄国道と同じく、県のポータルにも載らず配信の仕組みも無いので
+    PDFから転記している。どの報を根拠にしたのかを追えるようにする。
+    """
+    items = (nexco or {}).get("items", [])
+    if not items:
+        return
+    src_name = nexco.get("source_name", "NEXCO西日本")
+    src_url = nexco.get("source_url", "")
+    with st.expander(f"高速道路の規制（{len(items)}件・PDFから転記）", expanded=False):
+        st.markdown(
+            f"[{src_name}]({src_url}) が「お知らせ」として公表するPDF（第○報）から"
+            "手作業で転記しています。通行止めは一般車両に対するもので、"
+            "区間によっては緊急車両の通行が順次可能になっています。"
+        )
+        for item in items:
+            ended = bool(item.get("end_timestamp"))
+            st.markdown(
+                f"**{item['route_name']}（{item['section']}"
+                f"{'・' + str(item['path_length_km']) + 'km' if item.get('path_length_km') else ''}）**  \n"
+                f"{item['content']}／{'解除済み' if ended else '規制中'}｜"
+                f"{item['start_timestamp']} 〜 {item['end_timestamp'] or '(継続中)'}  \n"
+                f"{item['reason']}"
+            )
+            for rep in item.get("reports") or []:
+                st.caption(f"出典: {rep['label']}（{rep['pdf']}）")
+            if item.get("path_source"):
+                st.caption(f"区間の線形: {item['path_source']}")
+            st.markdown("---")
+        if nexco.get("coverage_note"):
+            st.caption(nexco["coverage_note"])
+        if nexco.get("note"):
+            st.caption(nexco["note"])
+
+
 def render_mlit_notice(mlit: dict, point_summary: pd.DataFrame, point_labels: dict) -> None:
     """
     直轄国道の規制を、出典と地図での描き方つきで一覧にする。
@@ -1935,6 +1973,8 @@ def main():
                 n_mlit_spot = sum(
                     1 for i in _mlit_items if i.get("point") and not i.get("path")
                 )
+                _nexco_items = (nexco or {}).get("items", [])
+                n_nexco_line = sum(1 for i in _nexco_items if i.get("path"))
                 n_mlit_hidden = (
                     len(_mlit_items) - n_mlit_line - n_mlit_point - n_mlit_spot
                 )
@@ -2037,6 +2077,7 @@ def main():
                     key="quake_map_v8",
                 )
                 render_mlit_notice(mlit, point_summary, point_labels)
+                render_nexco_notice(nexco)
                 st.caption(
                     "通行規制データ: 「防災情報くまもと」の"
                     "[通行規制情報](https://portal.bousai.pref.kumamoto.jp/?p=traffic)ページ"
@@ -2044,23 +2085,29 @@ def main():
                     "始点・終点座標をOSRMで道路網にスナップして表示しています。"
                     "元データには2020年7月豪雨など今回の地震と無関係な長期規制も含まれるため、"
                     "規制の開始日時が本震（16:27）以降かどうかで色分けし、"
-                    "地図の右下のレイヤ一覧で、道路の管理者（直轄国道／県・市町村道）と""状態（規制中／解除済み／地震前からの規制）の組み合わせごとに""表示を切り替えられます。既定では規制中だけを出しています。"
+                    "地図の右下のレイヤ一覧で、道路の管理者（高速道路／直轄国道／県・市町村道）と""状態（規制中／解除済み／地震前からの規制）の組み合わせごとに""表示を切り替えられます。既定では規制中だけを出しています。"
                 )
                 st.caption(
-                    "通行規制は管理者ごとに公表の仕方が違うため、2つの経路で集めています。"
-                    "①上記の「防災情報くまもと」は県・市町村が管理する道路が対象です。"
+                    "通行規制は管理者ごとに公表の仕方が違うため、3つの経路で集めています。"
+                    "①上記の「防災情報くまもと」は県・市町村が管理する道路が対象で、"
+                    "公開JSONを自動取得しています。"
                     "②国が管理する直轄国道は配信の仕組みがなく、"
                     f"[{mlit.get('source_name', '国土交通省')}]({mlit.get('source_url', '')})"
                     f"のPDFから転記した{len(_mlit_items)}件を別レイヤで描いています"
                     f"（区間の線 {n_mlit_line}件"
                     + (f"、地点の⊗ {n_mlit_spot}件" if n_mlit_spot else "")
-                    + (f"、位置を特定できず地図に出せないもの {n_mlit_hidden}件" if n_mlit_hidden else "")
+                    + (f"、位置を特定できず地図に出せないもの {n_mlit_hidden}件"
+                       if n_mlit_hidden else "")
                     + "）。"
-                    "PDFには座標がないため、区間はOSMのIC座標から線形を復元し、"
+                    "③高速道路も同じく配信がなく、"
+                    f"[{nexco.get('source_name', 'NEXCO西日本')}]({nexco.get('source_url', '')})"
+                    f"のPDFから転記した{len(_nexco_items)}件を別レイヤで描いています"
+                    f"（区間の線 {n_nexco_line}件）。"
+                    "②③のPDFには座標がないため、区間はOSMのIC座標から線形を復元し、"
                     "キロポストだけのものは地名から復元した概略の位置に置いています。"
                     "描き分けは①と同じで、色が規制の区分、破線が解除済みです。"
-                    "内訳は上の「直轄国道の規制」に出しています。"
-                    "③規制のアーカイブに記録が残っている最も古い時点は "
+                    "内訳は上の「直轄国道の規制」「高速道路の規制」に出しています。"
+                    "なお規制のアーカイブに記録が残っている最も古い時点は "
                     f"**{regulation_archive_start() or '本震の翌日'}**（本震より後）です。"
                     "それ以前に解除された規制は、県管理道路であっても残っていません。"
                 )
