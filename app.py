@@ -38,6 +38,12 @@ MAP_EDGE_MARGIN_PX = 22
 # 幅は列幅（ブラウザの表示倍率や画面幅で変わる）に追従する。実測414pxだが、
 # 狭い画面で観測点が切れないよう、余地の計算では控えめな値を使う。
 MAP_MIN_WIDTH_PX = 400
+# 時系列図の下余白。日付の目盛りと、横2行までの凡例が入る高さ（実測値）。
+CHART_BOTTOM_MARGIN = 85
+# 凡例が3行以上になるときに1行あたり足す高さと、1行に並ぶ項目数。
+# どちらも実測値（車種別は項目名が長いので1行3項目まで）。
+CHART_LEGEND_ROW_PX = 19
+CHART_LEGEND_PER_ROW = 3
 SELECTION_COLORS = ["red", "green"]
 # 車種別ビューで大型車に使う色。選択色（赤・緑）と同系統のまま明るくして、
 # 「同じ観測点の別の車種」だと分かるようにする。大型車は小型車の1割程度の
@@ -1562,7 +1568,7 @@ def render_timeseries(
     tick_vals, tick_text = _day_ticks(x_range)
 
     series = SERIES_VEHICLE if series_mode == "vehicle" else SERIES_TOTAL
-    chart_height = 232
+    chart_height = 261
     for label, sub_series in series:
         missing = [
             suf for suf, _, _ in sub_series
@@ -1633,17 +1639,36 @@ def render_timeseries(
             font=dict(size=11, color="black"),
         )
         # 上下2図を並べると縦に長くなり、観測点を比べるたびにスクロールが
-        # 必要になるため1図の高さを抑える（400 -> 290 -> 232）。凡例は2図で同じ内容
-        # なので上の図だけに出し、下の図はその分の余白も詰める。
+        # 必要になるため1図の高さを抑える（400 -> 290 -> 261）。凡例は2図で
+        # 同じ内容なので上の図だけに出す。
+        #
+        # 下余白は2図で同じにする。以前は凡例のない下の図だけ詰めていたが、
+        # 図の高さは同じなので下の図の描画領域だけが広くなり（182px と
+        # 240px）、上の図が小さく見えていた。凡例が3行になる組み合わせ
+        # （2地点×車種別＝12項目）では余白を1行分足す。plotlyの自動拡張に
+        # 任せると凡例のある上の図だけ広がってしまうので、行数は項目数から
+        # 決めて両方に同じ値を入れる。下の図の下には空きが出るが、
+        # 2図は見比べるものなので大きさが揃うほうを取る。
         show_legend = label == series[0][0]
+        # 凡例の項目数＝地点数 × その図の系列数 ×（実測・平常時）
+        legend_rows = math.ceil(
+            len(selected_points) * len(sub_series) * 2 / CHART_LEGEND_PER_ROW
+        )
+        bottom_margin = CHART_BOTTOM_MARGIN + CHART_LEGEND_ROW_PX * max(
+            0, legend_rows - 2
+        )
         fig.update_layout(
             height=chart_height,
             # 凡例はグラフ下に置く。上部だとplotlyのモードバー（カメラ・ズーム等の
             # アイコン）と重なり、幅の狭いモバイルでは折り返して読めなくなるため。
-            margin=dict(l=10, r=10, t=26, b=62 if show_legend else 24),
+            margin=dict(l=10, r=10, t=26, b=bottom_margin),
             showlegend=show_legend,
+            # 位置は図の枠（container）を基準にして下端に貼る。描画領域を
+            # 基準にすると、描画領域が縮むほど凡例がその下へ回り込み、
+            # plotlyが下余白を自動で広げてしまう（62 -> 82）。そうなると
+            # 凡例のある上の図だけ描画領域が狭くなる。
             legend=dict(
-                orientation="h", yanchor="top", y=-0.28,
+                orientation="h", yref="container", yanchor="bottom", y=0.012,
                 xanchor="left", x=0, font=dict(size=10),
             ),
             xaxis=dict(
