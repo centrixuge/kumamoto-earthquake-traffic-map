@@ -31,6 +31,7 @@ import requests
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 JSON_PATH = os.path.join(BASE_DIR, "data", "mlit_regulations.json")
+NEXCO_JSON_PATH = os.path.join(BASE_DIR, "data", "nexco_regulations.json")
 OSRM_ROUTE = "https://router.project-osrm.org/route/v1/driving"
 
 # OpenStreetMap の highway=motorway_junction ノード。
@@ -70,6 +71,32 @@ PLACE_POINTS = {
 PLACE_SECTIONS = {
     ("国道3号", "氷川町大野〜八代市岡町中（舗装補修3箇所）"):
         ("熊本県八代郡氷川町大野", "熊本県八代市岡町中", "国道3号"),
+}
+
+# 高速道路（NEXCO西日本）の規制区間の端点。data/nexco_regulations.json 用。
+EXPRESSWAY_IC_NODES = {
+    "植木IC": (1512306561, 32.93063, 130.69893),
+    "益城熊本空港IC": (810949465, 32.78782, 130.79083),
+    "松橋IC": (810949667, 32.64472, 130.70676),
+    "八代JCT": (835367426, 32.50641, 130.64642),
+    "田浦IC": (1709376186, 32.36512, 130.51330),
+    "嘉島JCT": (810949406, 32.75277, 130.78863),
+    "益城TB": (2847572263, 32.75140, 130.79723),
+    "えびのIC": (810195850, 32.04610, 130.80058),
+}
+
+# (路線名, 区間) -> (端点A, 端点B, OSM上の道路名)
+EXPRESSWAY_SECTIONS = {
+    ("E3 九州自動車道", "植木IC〜益城熊本空港IC"):
+        ("植木IC", "益城熊本空港IC", "九州自動車道"),
+    ("E3 九州自動車道", "益城熊本空港IC〜松橋IC"):
+        ("益城熊本空港IC", "松橋IC", "九州自動車道"),
+    ("E3 九州自動車道", "松橋IC〜えびのIC"):
+        ("松橋IC", "えびのIC", "九州自動車道"),
+    ("E3A 南九州自動車道", "八代JCT〜田浦IC"):
+        ("八代JCT", "田浦IC", "南九州自動車道"),
+    ("E77 九州中央自動車道", "嘉島JCT〜益城TB"):
+        ("嘉島JCT", "益城TB", "九州中央自動車道"),
 }
 
 IC_NODES = {
@@ -132,19 +159,9 @@ def parallel_route(ic_a: tuple, ic_b: tuple, road_name: str) -> tuple:
     """
     lats = sorted((ic_a[1], ic_b[1]))
     lons = sorted((ic_a[2], ic_b[2]))
-    query = (
-        "[out:json][timeout:60];"
-        f'way["highway"]["ref"~"(^|;){road_name.strip("国道号")}(;|$)"]'
-        f"({lats[0] - 0.03},{lons[0] - 0.05},{lats[1] + 0.03},{lons[1] + 0.05});"
-        "out geom;"
+    nodes = road_nodes_in_box(
+        lats[0] - 0.03, lons[0] - 0.05, lats[1] + 0.03, lons[1] + 0.05, road_name
     )
-    data = _overpass(query)
-    nodes = [
-        [p["lat"], p["lon"]]
-        for w in data.get("elements", [])
-        if (w.get("tags") or {}).get("name") == road_name
-        for p in (w.get("geometry") or [])
-    ]
     if len(nodes) < 2:
         raise RuntimeError(f"{road_name} のノードが取得できなかった")
 
@@ -223,25 +240,35 @@ def geocode(place: str) -> tuple:
     return float(hits[0]["lat"]), float(hits[0]["lon"])
 
 
-def road_nodes(lat: float, lon: float, road_name: str, span: float = 0.06) -> list:
-    """指定した道路のノードを、地点の周りから集める。"""
-    ref = road_name.strip("国道号")
+def road_nodes_in_box(s: float, w: float, n: float, e: float, road_name: str) -> list:
+    """
+    指定した道路のノードを範囲から集める。
+
+    道路名で直接引く。ref（一般国道なら3、高速道路ならE3 など）は
+    路線によって書き方が揺れるので、名前で照合したほうが確実で、
+    一般国道にも高速道路にも同じ関数を使える。
+    """
     query = (
-        "[out:json][timeout:60];"
-        f'way["highway"]["ref"~"(^|;){ref}(;|$)"]'
-        f"({lat - span},{lon - span},{lat + span},{lon + span});"
+        "[out:json][timeout:90];"
+        f'way["highway"]["name"="{road_name}"]({s},{w},{n},{e});'
         "out geom;"
     )
     data = _overpass(query)
     nodes = [
-        [p["lat"], p["lon"]]
-        for w in data.get("elements", [])
-        if (w.get("tags") or {}).get("name") == road_name
-        for p in (w.get("geometry") or [])
+        [pt["lat"], pt["lon"]]
+        for way in data.get("elements", [])
+        for pt in (way.get("geometry") or [])
     ]
     if len(nodes) < 2:
         raise RuntimeError(f"{road_name} のノードが取得できなかった")
     return nodes
+
+
+def road_nodes(lat: float, lon: float, road_name: str, span: float = 0.06) -> list:
+    """指定した道路のノードを、地点の周りから集める。"""
+    return road_nodes_in_box(
+        lat - span, lon - span, lat + span, lon + span, road_name
+    )
 
 
 def snap_place(place: str, road_name: str) -> tuple:
@@ -279,7 +306,14 @@ def main() -> None:
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
 
-    with open(JSON_PATH, encoding="utf-8") as f:
+    for path in (JSON_PATH, NEXCO_JSON_PATH):
+        if os.path.exists(path):
+            process(path, args.dry_run)
+
+
+def process(json_path: str, dry_run: bool) -> None:
+    print(f"\n■ {os.path.relpath(json_path, BASE_DIR)}")
+    with open(json_path, encoding="utf-8") as f:
         doc = json.load(f)
 
     changed = 0
@@ -326,6 +360,34 @@ def main() -> None:
                 f"（最大{info['max_off_m']}m）。"
                 "地名の代表点は面の重心なので端点の位置には上記の誤差があり、"
                 "実際の工事も区間内の3箇所の点である。"
+            )
+            changed += 1
+            continue
+
+        exp = EXPRESSWAY_SECTIONS.get(key)
+        if exp:
+            ic_a, ic_b, road = exp
+            a, b = EXPRESSWAY_IC_NODES[ic_a], EXPRESSWAY_IC_NODES[ic_b]
+            path, km, info = parallel_route(a, b, road)
+            print(
+                f"[高速] {key[0]}（{key[1]}）… {len(path)}点 / {km:.2f}km "
+                f"/ {road}上 {info['on_road_pct']}%（最大{info['max_off_m']}m）"
+            )
+            item["path"] = path
+            item["path_length_km"] = round(km, 2)
+            item["endpoints"] = [
+                {"name": ic_a, "osm_node": a[0], "lat": info["snap_a"][0],
+                 "lon": info["snap_a"][1]},
+                {"name": ic_b, "osm_node": b[0], "lat": info["snap_b"][0],
+                 "lon": info["snap_b"][1]},
+            ]
+            item["path_source"] = (
+                f"区間の端点 {ic_a}（OSM node/{a[0]}）と {ic_b}（node/{b[0]}）を"
+                f"OSMの{road}上に投影し（それぞれ{info['snap_dist_a']}m、"
+                f"{info['snap_dist_b']}m）、その間を{road}のノード"
+                f"{info['waypoints']}点を経由地にOSRMでルーティングした。"
+                f"引いた線は{info['on_road_pct']}%が{road}から50m以内"
+                f"（最大{info['max_off_m']}m）に収まることを確認済み。"
             )
             changed += 1
             continue
@@ -396,13 +458,13 @@ def main() -> None:
         changed += 1
 
     print(f"\n線形を付けた区間: {changed} / 全 {len(doc['items'])} 件")
-    if args.dry_run:
+    if dry_run:
         print("--dry-run なので書き込みません")
         return
-    with open(JSON_PATH, "w", encoding="utf-8", newline="\n") as f:
+    with open(json_path, "w", encoding="utf-8", newline="\n") as f:
         json.dump(doc, f, ensure_ascii=False, indent=2)
         f.write("\n")
-    print(f"書き込みました: {JSON_PATH}")
+    print(f"書き込みました: {json_path}")
 
 
 if __name__ == "__main__":
