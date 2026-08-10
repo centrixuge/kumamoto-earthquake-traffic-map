@@ -921,15 +921,22 @@ def build_base_map(
             now = _now_jst()
             quake_at = datetime.fromisoformat(mainshock["occurred_at"]).replace(tzinfo=None)
             # 地震前からの規制を先に描いて、地震起因の規制が上に重なるようにする。
-            post_layer = folium.FeatureGroup(name="通行規制：今回の地震以降に開始")
-            pre_layer = folium.FeatureGroup(name="通行規制：地震前からの規制（工事・過去の災害等）")
+            # 記録している規制の多くはすでに解除済みで、まとめて出すと
+            # 「いま何が止まっているのか」が読み取れない。状態ごとにレイヤを
+            # 分け、地図のレイヤ一覧（右下）でそのまま絞り込めるようにする。
+            post_active_layer = folium.FeatureGroup(name="規制中：今回の地震以降に開始")
+            post_ended_layer = folium.FeatureGroup(name="解除済み：今回の地震以降に開始")
+            pre_layer = folium.FeatureGroup(name="地震前からの規制（工事・過去の災害等）")
             for reg in regulations:
                 is_post = _regulation_is_post_quake(reg, quake_at)
                 style = _regulation_style(reg, now, quake_at)
                 ended = _regulation_is_ended(reg, now)
                 period = reg["start_timestamp"] or "?"
                 period += f" 〜 {reg['end_timestamp']}" if ended and reg["end_timestamp"] else " 〜 (継続中)"
-                target = post_layer if is_post else pre_layer
+                if not is_post:
+                    target = pre_layer
+                else:
+                    target = post_ended_layer if ended else post_active_layer
                 folium.PolyLine(
                     locations=reg["path"],
                     color=style["color"],
@@ -957,7 +964,8 @@ def build_base_map(
                         icon=_x_circle_icon(style["color"], ended),
                     ).add_to(target)
             pre_layer.add_to(fmap)
-            post_layer.add_to(fmap)
+            post_ended_layer.add_to(fmap)
+            post_active_layer.add_to(fmap)
 
         # 直轄国道の規制。PDFは区間を「○○IC〜○○IC」と名前で示すだけで座標が無いが、
         # 実在する道路区間なので端点のIC座標から線形を復元してある
@@ -967,7 +975,12 @@ def build_base_map(
         mlit_items = (mlit or {}).get("items", [])
         mlit_drawn = 0
         if mlit_items:
-            mlit_layer = folium.FeatureGroup(name="直轄国道の規制")
+            mlit_active_layer = folium.FeatureGroup(name="規制中：直轄国道")
+            mlit_ended_layer = folium.FeatureGroup(name="解除済み：直轄国道")
+            ic_layer = folium.FeatureGroup(name="規制区間の端点（IC）")
+
+            def mlit_layer_for(is_ended: bool):
+                return mlit_ended_layer if is_ended else mlit_active_layer
             # 同じ区間に別の日時の規制が複数あることがある（阿蘇西IC〜車帰IC は
             # 本震直後の通行止めと、8月の夜間工事の通行止めの2件）。
             # 区間ごとに1本にまとめないと線が完全に重なり、下になった方は
@@ -1002,14 +1015,14 @@ def build_base_map(
                         f"{periods}"
                         f"直轄国道（出典: 熊本河川国道事務所）"
                     ),
-                ).add_to(mlit_layer)
+                ).add_to(mlit_layer_for(ended))
                 # 県フィードの地震後の規制と同じく、線の中点にも⊗を置く。
                 # 直轄国道の規制はいずれも今回の地震以降のものなので、
                 # 「⊗＝地震後に始まった規制」という凡例の規則に合わせる。
                 folium.Marker(
                     location=items[0]["path"][len(items[0]["path"]) // 2],
                     icon=_x_circle_icon("#e60000" if full else "#e67e22", ended),
-                ).add_to(mlit_layer)
+                ).add_to(mlit_layer_for(ended))
                 mlit_drawn += 1
 
             # 区間の線を引けない規制のうち、場所が1地点として特定できたものは
@@ -1035,7 +1048,7 @@ def build_base_map(
                         "位置は地名から復元した概略値<br>"
                         "直轄国道（出典: 熊本河川国道事務所）"
                     ),
-                ).add_to(mlit_layer)
+                ).add_to(mlit_layer_for(ended))
                 mlit_drawn += 1
 
             # 区間の端点（IC）を点で落とす。線だけだと、どのICからどのICまで
@@ -1068,7 +1081,7 @@ def build_base_map(
                         + "位置はOpenStreetMapのICノード"
                         + (f"（node/{info['node']}）" if info["node"] else "")
                     ),
-                ).add_to(mlit_layer)
+                ).add_to(ic_layer)
 
             # 線形が無い規制のフォールバック（掛かっていた観測点の上に▲）
             if not point_summary.empty:
@@ -1105,11 +1118,13 @@ def build_base_map(
                             f"{lines}<br>{label} に掛かっていたもの<br>"
                             "出典: 熊本河川国道事務所（県ポータルのデータには含まれません）"
                         ),
-                    ).add_to(mlit_layer)
+                    ).add_to(mlit_active_layer)
                     mlit_drawn += 1
 
             if mlit_drawn:
-                mlit_layer.add_to(fmap)
+                mlit_ended_layer.add_to(fmap)
+                mlit_active_layer.add_to(fmap)
+                ic_layer.add_to(fmap)
 
         if regulations or mlit_drawn:
             # 左上・右上だと観測点マーカーに被るので右下に置く
@@ -1793,27 +1808,6 @@ def main():
             with col_map:
                 st.subheader(f"常時観測点（{n_points}点）別の異常度 × 通行規制")
                 _now = _now_jst()
-                # 地図に出ている規制の大半は解除済みで、いま何が止まっているのかが
-                # 読み取りにくい。データの段階で絞り、凡例の件数も同じ集合から
-                # 数えることで、表示と説明が食い違わないようにする。
-                # ウィジェットは地図より前に作る（地図クリックの st.rerun() で
-                # スクリプトが中断されると、後ろのウィジェットは状態が落ちるため）。
-                only_active = st.checkbox(
-                    "今回の地震以降に始まり、いま継続中の規制だけを表示",
-                    value=False, key="reg_only_active",
-                )
-                if only_active:
-                    regulations = [
-                        r for r in regulations
-                        if _regulation_is_post_quake(r, quake_at)
-                        and not _regulation_is_ended(r, _now)
-                    ]
-                    mlit = dict(mlit or {})
-                    mlit["items"] = [
-                        i for i in (mlit.get("items") or [])
-                        if not i.get("end_timestamp")
-                    ]
-
                 # 色（規制の区分）と線の形（規制中か解除済みか）は独立した軸で、
                 # 破線は青灰・赤・橙のどれにも、県feedにも直轄国道にも同じように
                 # 掛かる。以前は「破線は解除済み」を地震前の規制の行に置いていて、
@@ -1949,7 +1943,7 @@ def main():
                     "始点・終点座標をOSRMで道路網にスナップして表示しています。"
                     "元データには2020年7月豪雨など今回の地震と無関係な長期規制も含まれるため、"
                     "規制の開始日時が本震（16:27）以降かどうかで色分けし、"
-                    "地図右上のチェックボックスで種別ごとに表示を切り替えられます。"
+                    "地図の右下のチェックボックスで、規制中／解除済み／地震前からの規制を""別々に切り替えられます。「解除済み」と「地震前からの規制」を外すと、""今回の地震以降に始まり、いま継続中の規制だけが残ります。"
                 )
                 st.caption(
                     "通行規制は管理者ごとに公表の仕方が違うため、2つの経路で集めています。"
