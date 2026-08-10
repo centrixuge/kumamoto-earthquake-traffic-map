@@ -942,22 +942,38 @@ def build_base_map(
         mlit_drawn = 0
         if mlit_items:
             mlit_layer = folium.FeatureGroup(name="直轄国道の規制")
+            # 同じ区間に別の日時の規制が複数あることがある（阿蘇西IC〜車帰IC は
+            # 本震直後の通行止めと、8月の夜間工事の通行止めの2件）。
+            # 区間ごとに1本にまとめないと線が完全に重なり、下になった方は
+            # ツールチップを出せず、その規制の存在に気づけない。
+            by_section = {}
             for item in mlit_items:
-                path = item.get("path")
-                if not path:
+                if not item.get("path"):
                     continue
-                ended = bool(item.get("end_timestamp"))
-                full = item.get("content") in FULL_CLOSURE_CONTENTS
+                by_section.setdefault(
+                    (item["route_name"], item["section"]), []
+                ).append(item)
+
+            for (route_name, section), items in by_section.items():
+                # 見た目は「いま規制中のものがあるか」「全面通行止めが
+                # 含まれるか」で決める（重い方に寄せる）。
+                ended = all(i.get("end_timestamp") for i in items)
+                full = any(i.get("content") in FULL_CLOSURE_CONTENTS for i in items)
+                periods = "".join(
+                    f"<b>{i['content']}／{'解除済み' if i.get('end_timestamp') else '規制中'}</b><br>"
+                    f"{i['start_timestamp']} 〜 {i['end_timestamp'] or '(継続中)'}<br>"
+                    for i in sorted(items, key=lambda x: x["start_timestamp"])
+                )
+                count = f"（{len(items)}件）" if len(items) > 1 else ""
                 folium.PolyLine(
-                    locations=path,
+                    locations=items[0]["path"],
                     color="#e60000" if full else "#e67e22",
                     weight=6 if full else 5,
                     opacity=0.5 if ended else 0.95,
                     dash_array="6,8" if ended else None,
                     tooltip=(
-                        f"<b>{item['route_name']}</b><br>{item['section']}<br>"
-                        f"<b>{item['content']}／{'解除済み' if ended else '規制中'}</b><br>"
-                        f"{item['start_timestamp']} 〜 {item['end_timestamp'] or '(継続中)'}<br>"
+                        f"<b>{route_name}</b><br>{section}{count}<br>"
+                        f"{periods}"
                         f"直轄国道（出典: 熊本河川国道事務所）"
                     ),
                 ).add_to(mlit_layer)
