@@ -1267,6 +1267,64 @@ def build_base_map(
         return fmap
 
 
+REPO_URL = "https://github.com/centrixuge/kumamoto-earthquake-traffic-map"
+
+
+def render_source_table(regulations: list, n_post: int,
+                        mlit: dict, nexco: dict) -> str:
+    """
+    通行規制をどこから集めているかを表にする。
+
+    管理者ごとに公表の手段が違い、県はJSON配信、国と高速道路はPDFしか
+    無い。この事情を文章で説明すると長くなって読まれないので、
+    「出典の公表ページ」と「手元に集めたデータ」の2つのリンクを
+    行ごとに持つ表にする。
+    """
+    def _cell(label: str, url: str) -> str:
+        return f'<a href="{url}" target="_blank">{label}</a>' if url else label
+
+    rows = [
+        (
+            f"① 県・市町村道<br>{len(regulations)}件（地震後 {n_post}件）",
+            _cell("防災情報くまもと<br>通行規制情報",
+                  "https://portal.bousai.pref.kumamoto.jp/?p=traffic"),
+            "公開JSONを自動取得<br>"
+            + _cell("取得したデータ",
+                    f"{REPO_URL}/blob/main/data/archive/regulations_archive.json"),
+        ),
+        (
+            f"② 直轄国道<br>{len((mlit or {}).get('items', []))}件",
+            _cell("熊本河川国道事務所<br>事務所からのお知らせ",
+                  mlit.get("source_url", "")),
+            "PDFを手作業で転記<br>"
+            + _cell("収集したPDF",
+                    f"{REPO_URL}/tree/main/{mlit.get('pdf_dir', 'data')}"),
+        ),
+        (
+            f"③ 高速道路<br>{len((nexco or {}).get('items', []))}件",
+            _cell("NEXCO西日本<br>九州支社", nexco.get("source_url", "")),
+            "PDFを手作業で転記<br>"
+            + _cell("収集したPDF",
+                    f"{REPO_URL}/tree/main/{nexco.get('pdf_dir', 'data')}"),
+        ),
+    ]
+    td = "padding:3px 6px;border-bottom:1px solid #e6e6e6;vertical-align:top;"
+    body = "".join(
+        "<tr>" + "".join(f'<td style="{td}">{c}</td>' for c in row) + "</tr>"
+        for row in rows
+    )
+    return (
+        '<table style="width:100%;border-collapse:collapse;font-size:0.75rem;'
+        'line-height:1.4;margin:2px 0 6px 0;">'
+        '<thead><tr>'
+        + "".join(
+            f'<th style="{td}text-align:left;white-space:nowrap;">{h}</th>'
+            for h in ("規制の対象", "出典（公表ページ）", "集め方")
+        )
+        + "</tr></thead><tbody>" + body + "</tbody></table>"
+    )
+
+
 def render_nexco_notice(nexco: dict) -> None:
     """
     高速道路（NEXCO西日本）の規制を、出典つきで一覧にする。
@@ -2009,7 +2067,8 @@ def main():
                 shape_items = [
                     '<span style="color:#555;font-weight:700;">⊗</span>'
                     f' 地震後に始まった規制（県 {n_post}件・直轄国道'
-                    f' {len(_mlit_items)}件。色は上の区分）',
+                    f' {len(_mlit_items)}件・高速道路 {len(_nexco_items)}件。'
+                    '色は上の区分）',
                     f'{_sw("width:20px;height:4px;background:#95a5a6;")} 実線・外円が実線は規制中',
                 ]
                 if n_ended:
@@ -2078,38 +2137,29 @@ def main():
                 )
                 render_mlit_notice(mlit, point_summary, point_labels)
                 render_nexco_notice(nexco)
-                st.caption(
-                    "通行規制データ: 「防災情報くまもと」の"
-                    "[通行規制情報](https://portal.bousai.pref.kumamoto.jp/?p=traffic)ページ"
-                    "（[熊本市防災情報ポータル](https://city-kumamoto.my.salesforce-sites.com/)からもリンクあり）。"
-                    "始点・終点座標をOSRMで道路網にスナップして表示しています。"
-                    "元データには2020年7月豪雨など今回の地震と無関係な長期規制も含まれるため、"
-                    "規制の開始日時が本震（16:27）以降かどうかで色分けし、"
-                    "地図の右下のレイヤ一覧で、道路の管理者（高速道路／直轄国道／県・市町村道）と""状態（規制中／解除済み／地震前からの規制）の組み合わせごとに""表示を切り替えられます。既定では規制中だけを出しています。"
+                # 注記は、まずどこから何を集めたのかを表で示す。
+                # 以前は経路①②③を文章で並べていたが、3経路に増えて
+                # 読み通せない長さになったので、出典と収集済みデータへの
+                # リンクを表に畳み、残りの補足だけを短く下に置く。
+                st.markdown(
+                    render_source_table(regulations, n_post, mlit, nexco),
+                    unsafe_allow_html=True,
                 )
                 st.caption(
-                    "通行規制は管理者ごとに公表の仕方が違うため、3つの経路で集めています。"
-                    "①上記の「防災情報くまもと」は県・市町村が管理する道路が対象で、"
-                    "公開JSONを自動取得しています。"
-                    "②国が管理する直轄国道は配信の仕組みがなく、"
-                    f"[{mlit.get('source_name', '国土交通省')}]({mlit.get('source_url', '')})"
-                    f"のPDFから転記した{len(_mlit_items)}件を別レイヤで描いています"
-                    f"（区間の線 {n_mlit_line}件"
-                    + (f"、地点の⊗ {n_mlit_spot}件" if n_mlit_spot else "")
-                    + (f"、位置を特定できず地図に出せないもの {n_mlit_hidden}件"
-                       if n_mlit_hidden else "")
-                    + "）。"
-                    "③高速道路も同じく配信がなく、"
-                    f"[{nexco.get('source_name', 'NEXCO西日本')}]({nexco.get('source_url', '')})"
-                    f"のPDFから転記した{len(_nexco_items)}件を別レイヤで描いています"
-                    f"（区間の線 {n_nexco_line}件）。"
-                    "②③のPDFには座標がないため、区間はOSMのIC座標から線形を復元し、"
-                    "キロポストだけのものは地名から復元した概略の位置に置いています。"
-                    "描き分けは①と同じで、色が規制の区分、破線が解除済みです。"
-                    "内訳は上の「直轄国道の規制」「高速道路の規制」に出しています。"
-                    "なお規制のアーカイブに記録が残っている最も古い時点は "
-                    f"**{regulation_archive_start() or '本震の翌日'}**（本震より後）です。"
+                    "①は始点・終点の座標だけなので[OSRM](https://project-osrm.org/)で"
+                    "道路網にスナップ、②③のPDFには座標がないため区間はOSMのIC座標から"
+                    "線形を復元しています（キロポストだけのものは地名からの概略位置）。"
+                    "描き分けは3つに共通で、色が規制の区分、破線が解除済みです。"
+                    "地図の右下のレイヤ一覧で、道路の管理者×状態ごとに表示を"
+                    "切り替えられます（既定は規制中のみ）。②③の内訳は上の"
+                    "「直轄国道の規制」「高速道路の規制」に出しています。"
+                )
+                st.caption(
+                    "規制のアーカイブに記録が残っている最も古い時点は "
+                    f"**{regulation_archive_start() or '本震の翌日'}**（本震より後）で、"
                     "それ以前に解除された規制は、県管理道路であっても残っていません。"
+                    "①には2020年7月豪雨など今回の地震と無関係な長期規制も含まれるため、"
+                    "本震（16:27）以降に始まったかどうかで分けています。"
                 )
                 st.caption(
                     "観測点は色が濃いほど地震後の交通量変化（|zスコア|）が大きいことを示す（青系のグラデーション）。"
