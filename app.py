@@ -1826,36 +1826,32 @@ def main():
 
                 bar = "width:20px;height:5px;"
                 color_items = [
-                    f'{_sw(bar + "background:#e60000;")} '
-                    '<span style="color:#e60000;font-weight:700;">⊗</span>'
-                    f' 全面/車両通行止め（地震後 {n_post}件）',
+                    f'{_sw(bar + "background:#e60000;")} 全面/車両通行止め',
                     f'{_sw("width:20px;height:4px;background:#e67e22;")} 片側交互など',
                     f'{_sw("width:20px;height:3px;background:#5b7c99;opacity:0.55;")}'
                     f' 地震前からの規制 {n_pre}件（工事・過去の災害）',
                 ]
-                if n_mlit_spot:
-                    color_items.append(
-                        '<span style="color:#e67e22;font-weight:700;">⊗</span>'
-                        f' 地点で示された規制 {n_mlit_spot}件（位置は概略）'
-                    )
                 if n_mlit_line:
-                    # 直轄国道の規制区間は「○○IC〜○○IC」で示されるので、
-                    # 線だけでなく端点のICも点で置いている。
+                    # 規制区間の端点となるICも点で置いている。
                     color_items.append(
                         f'{_sw("width:11px;height:11px;border-radius:50%;"
                               "background:#fff;border:2px solid #333;")}'
                         ' 規制区間の端点（IC）'
                     )
-                # 直轄国道は県道以下とまったく同じ描き分けなので、凡例に項目を
-                # 足す必要がない。出典・別レイヤであること・区間をOSMのIC座標から
-                # 復元したことは地図の下のキャプションにまとめてある。
-                # 線の形は色と独立した軸。県道以下でも直轄国道でも、
-                # 解除済みなら破線になることを1か所で言い切る。
+                # 記号ごとに意味を1つにする。色＝規制の区分、⊗＝地震後に
+                # 始まったかどうか、実線/破線＝いまの状態、線か⊗単独か＝
+                # 場所が区間で示されているか地点でしか分からないか。
                 shape_items = [
-                    f'{_sw("width:20px;height:4px;background:#95a5a6;")} 実線は規制中',
+                    '<span style="color:#555;font-weight:700;">⊗</span>'
+                    f' 地震後に始まった規制 {n_post}件（色は上の区分）',
+                    f'{_sw("width:20px;height:4px;background:#95a5a6;")} 実線・外円が実線は規制中',
                     f'{_sw("width:20px;height:0;border-top:4px dashed #95a5a6;")}'
-                    f' 破線は解除済み {n_ended}件',
+                    f' 破線・外円が点線は解除済み {n_ended}件',
                 ]
+                if n_mlit_spot:
+                    shape_items.append(
+                        f'区間は線、地点だけ分かるものは⊗のみ {n_mlit_spot}件（位置は概略）'
+                    )
                 if n_mlit_point:
                     shape_items.append(
                         '<span style="color:#b00000;font-weight:900;">▲</span>'
@@ -1875,7 +1871,7 @@ def main():
                     )
                 rows = [
                     ("規制の色", color_items),
-                    ("規制の線の形（色・道路の種別によらず共通）", shape_items),
+                    ("規制の印と状態", shape_items),
                     (f"観測点 {n_points}点", point_items),
                 ]
                 legend_html = "".join(
