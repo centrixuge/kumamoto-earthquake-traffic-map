@@ -917,16 +917,26 @@ def build_base_map(
         ]
         fmap.fit_bounds(bounds, padding=(40, 40))
 
+        # ((状態, データソース), レイヤ)。状態は 0=規制中 / 1=解除済み /
+        # 2=地震前からの規制、データソースは 0=直轄国道 / 1=県・市町村道。
+        # 規制中を上、解除済みをその下、地震前を一番下に並べ、
+        # 同じ状態のなかでは直轄国道を先に置く。
+        overlays = []
+
         if regulations:
             now = _now_jst()
             quake_at = datetime.fromisoformat(mainshock["occurred_at"]).replace(tzinfo=None)
-            # 地震前からの規制を先に描いて、地震起因の規制が上に重なるようにする。
-            # 記録している規制の多くはすでに解除済みで、まとめて出すと
-            # 「いま何が止まっているのか」が読み取れない。状態ごとにレイヤを
-            # 分け、地図のレイヤ一覧（右下）でそのまま絞り込めるようにする。
-            post_active_layer = folium.FeatureGroup(name="規制中：今回の地震以降に開始")
-            post_ended_layer = folium.FeatureGroup(name="解除済み：今回の地震以降に開始")
-            pre_layer = folium.FeatureGroup(name="地震前からの規制（工事・過去の災害等）")
+            # レイヤは「どこから来たデータか（道路の管理者）」×「いまどの状態か」
+            # で分ける。記録している規制の多くはすでに解除済みなので、
+            # 既定では規制中だけを出し、解除済みと地震前からの規制は
+            # 地図の右下のレイヤ一覧でオンにしてもらう。
+            post_active_layer = folium.FeatureGroup(name="県・市町村道：規制中")
+            post_ended_layer = folium.FeatureGroup(
+                name="県・市町村道：解除済み", show=False
+            )
+            pre_layer = folium.FeatureGroup(
+                name="県・市町村道：地震前からの規制（工事・過去の災害等）", show=False
+            )
             for reg in regulations:
                 is_post = _regulation_is_post_quake(reg, quake_at)
                 style = _regulation_style(reg, now, quake_at)
@@ -963,9 +973,12 @@ def build_base_map(
                         # クリックを透過させるクラスを付ける。
                         icon=_x_circle_icon(style["color"], ended),
                     ).add_to(target)
-            pre_layer.add_to(fmap)
-            post_ended_layer.add_to(fmap)
-            post_active_layer.add_to(fmap)
+            # 直轄国道のレイヤも作ってから、まとめて決まった順に足す
+            # （足した順がそのままレイヤ一覧の並びになるため）。
+            overlays += [
+                ((0, 1), post_active_layer), ((1, 1), post_ended_layer),
+                ((2, 1), pre_layer),
+            ]
 
         # 直轄国道の規制。PDFは区間を「○○IC〜○○IC」と名前で示すだけで座標が無いが、
         # 実在する道路区間なので端点のIC座標から線形を復元してある
@@ -975,9 +988,10 @@ def build_base_map(
         mlit_items = (mlit or {}).get("items", [])
         mlit_drawn = 0
         if mlit_items:
-            mlit_active_layer = folium.FeatureGroup(name="規制中：直轄国道")
-            mlit_ended_layer = folium.FeatureGroup(name="解除済み：直轄国道")
-            ic_layer = folium.FeatureGroup(name="規制区間の端点（IC）")
+            mlit_active_layer = folium.FeatureGroup(name="直轄国道：規制中")
+            mlit_ended_layer = folium.FeatureGroup(
+                name="直轄国道：解除済み", show=False
+            )
 
             def mlit_layer_for(is_ended: bool):
                 return mlit_ended_layer if is_ended else mlit_active_layer
@@ -1056,17 +1070,25 @@ def build_base_map(
             # （車帰ICは大津IC側と阿蘇西IC側の両方）ので、ICごとに1点だけ置き、
             # 属する区間をツールチップに並べる。
             # 観測点マーカーより小さく、白抜きにして混同しないようにする。
+            # ICは区間とセットで意味を持つので、その区間と同じレイヤに入れる。
+            # 同じICが規制中の区間と解除済みの区間の両方の端点になることが
+            # あるため、レイヤごとに1つずつ置く（片方を消してももう片方に残る）。
             ic_points = {}
             for (route_name, section), items in by_section.items():
+                layer = mlit_layer_for(
+                    all(i.get("end_timestamp") for i in items)
+                )
                 for ep in items[0].get("endpoints") or []:
-                    key = (round(ep["lat"], 6), round(ep["lon"], 6))
+                    key = (round(ep["lat"], 6), round(ep["lon"], 6), id(layer))
                     entry = ic_points.setdefault(
-                        key, {"name": ep["name"], "node": ep.get("osm_node"), "sections": []}
+                        key,
+                        {"name": ep["name"], "node": ep.get("osm_node"),
+                         "sections": [], "layer": layer},
                     )
                     label = f"{route_name} {section}"
                     if label not in entry["sections"]:
                         entry["sections"].append(label)
-            for (lat, lon), info in ic_points.items():
+            for (lat, lon, _), info in ic_points.items():
                 folium.CircleMarker(
                     location=[lat, lon],
                     radius=5,
@@ -1081,7 +1103,7 @@ def build_base_map(
                         + "位置はOpenStreetMapのICノード"
                         + (f"（node/{info['node']}）" if info["node"] else "")
                     ),
-                ).add_to(ic_layer)
+                ).add_to(info["layer"])
 
             # 線形が無い規制のフォールバック（掛かっていた観測点の上に▲）
             if not point_summary.empty:
@@ -1122,12 +1144,14 @@ def build_base_map(
                     mlit_drawn += 1
 
             if mlit_drawn:
-                mlit_ended_layer.add_to(fmap)
-                mlit_active_layer.add_to(fmap)
-                ic_layer.add_to(fmap)
+                overlays += [
+                    ((0, 0), mlit_active_layer), ((1, 0), mlit_ended_layer),
+                ]
 
         if regulations or mlit_drawn:
             # 左上・右上だと観測点マーカーに被るので右下に置く
+            for _, layer in sorted(overlays, key=lambda x: x[0]):
+                layer.add_to(fmap)
             folium.LayerControl(position="bottomright", collapsed=False).add_to(fmap)
 
         # 観測点の形（＝道路の種別）は地図を見ながら参照するものなので、
@@ -1943,7 +1967,7 @@ def main():
                     "始点・終点座標をOSRMで道路網にスナップして表示しています。"
                     "元データには2020年7月豪雨など今回の地震と無関係な長期規制も含まれるため、"
                     "規制の開始日時が本震（16:27）以降かどうかで色分けし、"
-                    "地図の右下のチェックボックスで、規制中／解除済み／地震前からの規制を""別々に切り替えられます。「解除済み」と「地震前からの規制」を外すと、""今回の地震以降に始まり、いま継続中の規制だけが残ります。"
+                    "地図の右下のレイヤ一覧で、道路の管理者（直轄国道／県・市町村道）と""状態（規制中／解除済み／地震前からの規制）の組み合わせごとに""表示を切り替えられます。既定では規制中だけを出しています。"
                 )
                 st.caption(
                     "通行規制は管理者ごとに公表の仕方が違うため、2つの経路で集めています。"
