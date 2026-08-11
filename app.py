@@ -848,6 +848,51 @@ def _epicenter_icon(size: int = 30) -> folium.DivIcon:
     )
 
 
+def _emergency_access_html(item: dict) -> str:
+    """
+    「一般車両は通行止めだが、緊急車両は通れる」区間をツールチップに出す。
+
+    通行止めの区間まるごとではなく、その一部だけが通れる。線を分けて
+    描くと通行止めの線と重なって読みにくいうえ、PAなど端点の座標を
+    別に用意する必要もあるので、まずは属性として文字で出す。
+    いつ時点の情報かで内容が変わるため、時点と出典の報を必ず添える。
+    """
+    ea = item.get("emergency_access")
+    if not ea or not ea.get("sections"):
+        return ""
+    text = (
+        '<span style="color:#c05621;">緊急車両は '
+        + "・".join(ea["sections"])
+        + f" で通行可（{ea['as_of']}時点）</span><br>"
+    )
+    if ea.get("planned"):
+        text += f'<span style="color:#8a5a2b;">{ea["planned"]}</span><br>'
+    if ea.get("source"):
+        text += f'<span style="color:#777;">出典: {ea["source"]}</span><br>'
+    return text
+
+
+def emergency_access_note(nexco: dict) -> str:
+    """地図の下に出す1行。線を見ただけでは分からないので、ここでも触れる。"""
+    items = [
+        i for i in (nexco or {}).get("items", [])
+        if i.get("emergency_access") and not i.get("end_timestamp")
+    ]
+    if not items:
+        return ""
+    as_of = sorted({i["emergency_access"]["as_of"] for i in items})[-1]
+    detail = "／".join(
+        f"{i['route_name']}は{'・'.join(i['emergency_access']['sections'])}"
+        for i in items
+    )
+    return (
+        f"**規制中の高速道路のうち{len(items)}区間では、一部で緊急車両の通行が"
+        f"できます**（{as_of}時点）。{detail}。"
+        "一般車両は通行できません。区間の一部だけなので線では描き分けず、"
+        "線にマウスを載せると出るツールチップに区間名を出しています。"
+    )
+
+
 def _regulation_style(reg: dict, now: datetime, quake_at: datetime) -> dict:
     """
     線のスタイルを決める。色＝規制の区分、破線＝解除済み、で意味を分けている。
@@ -1322,7 +1367,8 @@ def build_base_map(
                         f"{'解除済み' if ended else '規制中'}</b><br>"
                         f"{item['start_timestamp']} 〜 "
                         f"{item['end_timestamp'] or '(継続中)'}<br>"
-                        "高速道路（出典: NEXCO西日本）"
+                        + _emergency_access_html(item)
+                        + "高速道路（出典: NEXCO西日本）"
                     ),
                 ).add_to(layer)
                 folium.Marker(
@@ -2450,6 +2496,9 @@ def main():
                     "②③で転記した規制の一覧（区間・期間・根拠にした報・"
                     f"線形の作り方）は[こちら]({REPO_URL}/blob/main/docs/regulations.md)にまとめています。"
                 )
+                _emergency = emergency_access_note(nexco)
+                if _emergency:
+                    st.caption(_emergency)
                 st.caption(
                     "規制のアーカイブに記録が残っている最も古い時点は "
                     f"**{regulation_archive_start() or '本震の翌日'}**（本震より後）で、"
