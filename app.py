@@ -23,7 +23,7 @@ import streamlit as st
 from streamlit_folium import st_folium
 
 from modules.holidays import WEEKDAY_LABELS
-from modules.mlit_map_view import render as render_mlit_map
+from modules import mlit_map_view
 from modules.stations import attach_point_code, load_station_master
 
 DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
@@ -1743,6 +1743,175 @@ def render_timeseries(
     )
 
 
+def render_mlit_beta_tab(point_summary: pd.DataFrame, point_labels: dict,
+                         quake_at, other_event_times, quake_info: dict,
+                         mainshock: dict) -> None:
+    """
+    「地図・時系列」と同じ並びで、規制だけ「通れる道マップ」の配布データに
+    差し替えた版。地図と時系列を並べて見て、規制と交通量の変化を突き合わせる
+    ための画面なので、観測点の選択・集計方法・表示期間はそのまま用意する。
+
+    ウィジェットのキーと選択状態は本家と別に持つ（同じ画面に2つのタブが
+    同時に描かれるため、同じキーは使えない。片方で選んだ地点がもう片方に
+    移らないほうが、見比べるときに都合もよい）。
+    """
+    data = mlit_map_view.load_regulations()
+    if data is None:
+        st.info(
+            "「通れる道マップ」版のデータがありません。"
+            "`python scripts/build_mlit_map_regulations.py` で作成してください。"
+        )
+        return
+
+    st.caption(
+        "**ベータ版**です。地図の通行規制を"
+        f"[{data['source_name']}]({data['source_url']})の配布データだけで作り直し、"
+        "それ以外（観測点・異常度・時系列）は「地図・時系列」タブと同じものを"
+        "出しています。規制の収録範囲が違うので、同じ観測点でも見え方が変わります。",
+        unsafe_allow_html=False,
+    )
+
+    # 既定の観測点は本家と同じにする（開いた直後に時系列が空だと、
+    # 何を見る画面なのかが伝わらないため）
+    if "selected_points_beta" not in st.session_state:
+        st.session_state["selected_points_beta"] = _default_selection(point_summary)
+    selected_points = st.session_state["selected_points_beta"]
+    sel_version = st.session_state.get("_sel_version_beta", 0)
+    coords_by_id = point_summary.set_index("point_id")[
+        ["point_lat", "point_lon"]
+    ].to_dict("index")
+
+    def _format_point(pid: str) -> str:
+        c = coords_by_id[pid]
+        return f"{point_labels[pid]}（{c['point_lat']:.3f}N, {c['point_lon']:.3f}E）"
+
+    # 本家と同じく、地図より前にウィジェットを作る（地図クリックの
+    # st.rerun() で中断されると、その実行で作られなかった分の状態が落ちる）
+    col_select, col_view, col_range, col_clear = st.columns([3, 2, 1.3, 1])
+    with col_select:
+        picked = st.multiselect(
+            f"観測点の選び方：このプルダウンから選ぶか、地図上の丸いマーカーをクリック"
+            f"（最大{MAX_SELECTED_POINTS}地点まで並べて比較できます）",
+            options=list(point_labels.keys()),
+            default=[p for p in selected_points if p in point_labels],
+            max_selections=MAX_SELECTED_POINTS,
+            format_func=_format_point,
+            key=f"point_select_beta_{sel_version}",
+        )
+    with col_view:
+        view_names = list(TIMESERIES_VIEWS.keys())
+        saved_view = st.session_state.get("_ts_view_beta", view_names[0])
+        view = st.radio(
+            "交通量の集計方法", view_names,
+            index=view_names.index(saved_view) if saved_view in view_names else 0,
+            horizontal=True, key="timeseries_view_beta",
+        )
+        st.session_state["_ts_view_beta"] = view
+        cfg = TIMESERIES_VIEWS[view]
+    with col_range:
+        range_names = list(TIMESERIES_RANGES.keys())
+        saved_range = st.session_state.get("_ts_range_beta", TIMESERIES_DEFAULT_RANGE)
+        range_name = st.selectbox(
+            "時系列の表示期間", range_names,
+            index=(
+                range_names.index(saved_range) if saved_range in range_names
+                else range_names.index(TIMESERIES_DEFAULT_RANGE)
+            ),
+            key="timeseries_range_beta",
+        )
+        st.session_state["_ts_range_beta"] = range_name
+    with col_clear:
+        st.write("")
+        if st.button("選択をクリア", disabled=not selected_points, key="clear_beta"):
+            st.session_state["selected_points_beta"] = []
+            st.session_state["_sel_version_beta"] = sel_version + 1
+            st.rerun()
+
+    selected_points = picked
+    st.session_state["selected_points_beta"] = picked
+
+    col_map, col_ts = st.columns([2, 3], gap="large")
+    with col_ts:
+        st.subheader("選択観測点の時系列（平常時 vs 観測実績）")
+    with col_map:
+        st.subheader("常時観測点別の異常度 × 通行規制")
+        st.markdown(
+            mlit_map_view.legend_html(data) + mlit_map_view.summary_html(data),
+            unsafe_allow_html=True,
+        )
+        base_map = mlit_map_view.build_map(
+            data,
+            center=_map_center(point_summary, mainshock),
+            zoom=MAP_ZOOM,
+            epicenter_icon=_epicenter_icon(),
+            epicenter=[mainshock["epicenter_lat"], mainshock["epicenter_lon"]],
+        )
+        points_fg = build_points_feature_group(
+            point_summary, point_labels, selected_points
+        )
+        map_state = st_folium(
+            base_map, height=MAP_HEIGHT_PX, width=550,
+            feature_group_to_add=points_fg,
+            returned_objects=[
+                "last_object_clicked_tooltip", "last_object_clicked_count",
+            ],
+            key="mlit_beta_map_v1",
+        )
+        st.caption(
+            "色が道路の段階（高速自動車国道／一般国道／県道・市区町村道）、"
+            "破線が解除済みです。既定では規制中だけを出しています"
+            "（地図の右下のレイヤ一覧で切り替え）。"
+            "観測点の描き方は「地図・時系列」タブと同じです。"
+        )
+
+    # クリックされたのが観測点マーカーのときだけ選択を切り替える
+    click_count = map_state.get("last_object_clicked_count") if map_state else None
+    if click_count is not None and click_count != st.session_state.get(
+        "_last_click_count_beta"
+    ):
+        st.session_state["_last_click_count_beta"] = click_count
+        pid = point_id_from_tooltip(
+            map_state.get("last_object_clicked_tooltip"), point_labels
+        )
+        if pid is not None:
+            selected = list(st.session_state["selected_points_beta"])
+            if pid in selected:
+                selected.remove(pid)
+            else:
+                if len(selected) >= MAX_SELECTED_POINTS:
+                    selected.pop(0)
+                selected.append(pid)
+            st.session_state["selected_points_beta"] = selected
+            st.session_state["_sel_version_beta"] = sel_version + 1
+            st.rerun()
+
+    with col_ts:
+        ts_obs = load_observations(cfg["file"])
+        last_at = (
+            ts_obs["datetime"].max() if not ts_obs.empty
+            else quake_at + pd.Timedelta(days=7)
+        )
+        render_timeseries(
+            ts_obs, selected_points, quake_at, other_event_times, point_labels,
+            quake_info.get("hourly_baseline_windows"),
+            unit_label=cfg["unit_label"],
+            extra_note=cfg["note"],
+            # 規制の帯は出さない。この配布データは観測点との対応づけを
+            # 持っておらず、近さだけで結びつけると誤った因果を誘発する。
+            mlit_bands=(),
+            baseline_daytypes=quake_info.get("hourly_baseline_daytypes"),
+            series_mode=cfg.get("series", "total"),
+            x_range=TIMESERIES_RANGES[range_name](quake_at, last_at),
+        )
+
+    with st.expander(f"規制の一覧（{len(data['items'])}件）", expanded=False):
+        st.dataframe(
+            mlit_map_view.regulation_table(data),
+            use_container_width=True, height=320,
+        )
+        st.caption(mlit_map_view.source_note(data))
+
+
 def main():
     st.markdown(
         "<style>"
@@ -1911,8 +2080,13 @@ def main():
             "推計震度分布図は地震発生直後に発表されたもの（発表がない地震ではリンク先に情報がない場合があります）。"
         )
 
-    tab_overview, tab_list, tab_dl, tab_mlit = st.tabs(
-        ["地図・時系列", "異常検知一覧", "データダウンロード", "通れる道マップ版の規制"]
+    tab_overview, tab_mlit, tab_list, tab_dl = st.tabs(
+        [
+            "地図・時系列",
+            "地図・時系列（通れる道マップ版・ベータ）",
+            "異常検知一覧",
+            "データダウンロード",
+        ]
     )
 
     # ------------------------------------------------------------------
@@ -2401,10 +2575,17 @@ def main():
         )
 
     # ------------------------------------------------------------------
-    # 通れる道マップ版の規制タブ（別系統のデータで作った地図）
+    # 地図・時系列（通れる道マップ版・ベータ）タブ
+    # 規制の出所だけを差し替えた、隣に並べて見比べるための版
     # ------------------------------------------------------------------
     with tab_mlit:
-        render_mlit_map()
+        if post.empty:
+            st.info("地震発生後のデータがまだありません。")
+        else:
+            render_mlit_beta_tab(
+                point_summary, point_labels, quake_at, other_event_times,
+                quake_info, mainshock,
+            )
 
 
 if __name__ == "__main__":
