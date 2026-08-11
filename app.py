@@ -23,6 +23,7 @@ import streamlit as st
 from streamlit_folium import st_folium
 
 from modules.holidays import WEEKDAY_LABELS
+from modules import mlit_map_view
 from modules.stations import attach_point_code, load_station_master
 
 DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
@@ -1742,6 +1743,201 @@ def render_timeseries(
     )
 
 
+def render_mlit_beta_tab(point_summary: pd.DataFrame, point_labels: dict,
+                         quake_at, other_event_times, quake_info: dict,
+                         mainshock: dict) -> None:
+    """
+    「地図・時系列」と同じ並びで、規制だけ「通れる道マップ」の配布データに
+    差し替えた版。地図と時系列を並べて見て、規制と交通量の変化を突き合わせる
+    ための画面なので、観測点の選択・集計方法・表示期間はそのまま用意する。
+
+    ウィジェットのキーと選択状態は本家と別に持つ（同じ画面に2つのタブが
+    同時に描かれるため、同じキーは使えない。片方で選んだ地点がもう片方に
+    移らないほうが、見比べるときに都合もよい）。
+    """
+    data = mlit_map_view.load_regulations()
+    if data is None:
+        st.info(
+            "「通れる道マップ」版のデータがありません。"
+            "`python scripts/build_mlit_map_regulations.py` で作成してください。"
+        )
+        return
+
+    st.caption(
+        "**ベータ版**です。地図の通行規制を"
+        f"[{data['source_name']}]({data['source_url']})の配布データだけで作り直し、"
+        "それ以外（観測点・異常度・時系列）は「地図・時系列」タブと同じものを"
+        "出しています。規制の収録範囲が違うので、同じ観測点でも見え方が変わります。",
+        unsafe_allow_html=False,
+    )
+
+    # 既定の観測点は本家と同じにする（開いた直後に時系列が空だと、
+    # 何を見る画面なのかが伝わらないため）
+    if "selected_points_beta" not in st.session_state:
+        st.session_state["selected_points_beta"] = _default_selection(point_summary)
+    selected_points = st.session_state["selected_points_beta"]
+    sel_version = st.session_state.get("_sel_version_beta", 0)
+    coords_by_id = point_summary.set_index("point_id")[
+        ["point_lat", "point_lon"]
+    ].to_dict("index")
+
+    def _format_point(pid: str) -> str:
+        c = coords_by_id[pid]
+        return f"{point_labels[pid]}（{c['point_lat']:.3f}N, {c['point_lon']:.3f}E）"
+
+    # 本家と同じく、地図より前にウィジェットを作る（地図クリックの
+    # st.rerun() で中断されると、その実行で作られなかった分の状態が落ちる）
+    col_select, col_view, col_range, col_clear = st.columns([3, 2, 1.3, 1])
+    with col_select:
+        picked = st.multiselect(
+            f"観測点の選び方：このプルダウンから選ぶか、地図上の丸いマーカーをクリック"
+            f"（最大{MAX_SELECTED_POINTS}地点まで並べて比較できます）",
+            options=list(point_labels.keys()),
+            default=[p for p in selected_points if p in point_labels],
+            max_selections=MAX_SELECTED_POINTS,
+            format_func=_format_point,
+            key=f"point_select_beta_{sel_version}",
+        )
+    with col_view:
+        view_names = list(TIMESERIES_VIEWS.keys())
+        saved_view = st.session_state.get("_ts_view_beta", view_names[0])
+        view = st.radio(
+            "交通量の集計方法", view_names,
+            index=view_names.index(saved_view) if saved_view in view_names else 0,
+            horizontal=True, key="timeseries_view_beta",
+        )
+        st.session_state["_ts_view_beta"] = view
+        cfg = TIMESERIES_VIEWS[view]
+    with col_range:
+        range_names = list(TIMESERIES_RANGES.keys())
+        saved_range = st.session_state.get("_ts_range_beta", TIMESERIES_DEFAULT_RANGE)
+        range_name = st.selectbox(
+            "時系列の表示期間", range_names,
+            index=(
+                range_names.index(saved_range) if saved_range in range_names
+                else range_names.index(TIMESERIES_DEFAULT_RANGE)
+            ),
+            key="timeseries_range_beta",
+        )
+        st.session_state["_ts_range_beta"] = range_name
+    with col_clear:
+        st.write("")
+        if st.button("選択をクリア", disabled=not selected_points, key="clear_beta"):
+            st.session_state["selected_points_beta"] = []
+            st.session_state["_sel_version_beta"] = sel_version + 1
+            st.rerun()
+
+    selected_points = picked
+    st.session_state["selected_points_beta"] = picked
+
+    col_map, col_ts = st.columns([2, 3], gap="large")
+    with col_ts:
+        st.subheader("選択観測点の時系列（平常時 vs 観測実績）")
+    with col_map:
+        st.subheader("常時観測点別の異常度 × 通行規制")
+        # 地図の上は色分けだけにする。件数の表は縦に場所を取って地図を
+        # 押し下げるので、地図の下に置く。
+        st.markdown(mlit_map_view.legend_html(data), unsafe_allow_html=True)
+        base_map = mlit_map_view.build_map(
+            data,
+            center=_map_center(point_summary, mainshock),
+            zoom=MAP_ZOOM,
+            epicenter_icon=_epicenter_icon(),
+            epicenter=[mainshock["epicenter_lat"], mainshock["epicenter_lon"]],
+        )
+        points_fg = build_points_feature_group(
+            point_summary, point_labels, selected_points
+        )
+        map_state = st_folium(
+            base_map, height=MAP_HEIGHT_PX, width=550,
+            feature_group_to_add=points_fg,
+            returned_objects=[
+                "last_object_clicked_tooltip", "last_object_clicked_count",
+            ],
+            key="mlit_beta_map_v1",
+        )
+        st.markdown(mlit_map_view.summary_html(data), unsafe_allow_html=True)
+        st.caption(
+            "既定では規制中だけを出しています（地図の右下のレイヤ一覧で切り替え。"
+            "一覧の「高速」「国道」「県・市町村道」は上の3段階の略記）。"
+            "観測点の描き方は「地図・時系列」タブと同じです。"
+        )
+        note = mlit_map_view.unknown_level_note(data)
+        if note:
+            st.caption(note)
+
+    # クリックされたのが観測点マーカーのときだけ選択を切り替える
+    click_count = map_state.get("last_object_clicked_count") if map_state else None
+    if click_count is not None and click_count != st.session_state.get(
+        "_last_click_count_beta"
+    ):
+        st.session_state["_last_click_count_beta"] = click_count
+        pid = point_id_from_tooltip(
+            map_state.get("last_object_clicked_tooltip"), point_labels
+        )
+        if pid is not None:
+            selected = list(st.session_state["selected_points_beta"])
+            if pid in selected:
+                selected.remove(pid)
+            else:
+                if len(selected) >= MAX_SELECTED_POINTS:
+                    selected.pop(0)
+                selected.append(pid)
+            st.session_state["selected_points_beta"] = selected
+            st.session_state["_sel_version_beta"] = sel_version + 1
+            st.rerun()
+
+    with col_ts:
+        ts_obs = load_observations(cfg["file"])
+        last_at = (
+            ts_obs["datetime"].max() if not ts_obs.empty
+            else quake_at + pd.Timedelta(days=7)
+        )
+        render_timeseries(
+            ts_obs, selected_points, quake_at, other_event_times, point_labels,
+            quake_info.get("hourly_baseline_windows"),
+            unit_label=cfg["unit_label"],
+            extra_note=cfg["note"],
+            # 規制の帯は出さない。この配布データは観測点との対応づけを
+            # 持っておらず、近さだけで結びつけると誤った因果を誘発する。
+            mlit_bands=(),
+            baseline_daytypes=quake_info.get("hourly_baseline_daytypes"),
+            series_mode=cfg.get("series", "total"),
+            x_range=TIMESERIES_RANGES[range_name](quake_at, last_at),
+        )
+
+    with st.expander(f"規制の一覧（{len(data['items'])}件）", expanded=False):
+        st.dataframe(
+            mlit_map_view.regulation_table(data),
+            use_container_width=True, height=320,
+        )
+        col_csv, col_geo = st.columns(2)
+        with col_csv:
+            st.download_button(
+                f"CSVダウンロード（{len(data['items'])}件）",
+                mlit_map_view.regulation_csv(data),
+                file_name=mlit_map_view.csv_file_name(data),
+                mime="text/csv",
+                key="mlit_map_csv",
+            )
+        with col_geo:
+            st.download_button(
+                f"GeoJSONダウンロード（{len(data['items'])}件）",
+                mlit_map_view.regulation_geojson(data),
+                file_name=mlit_map_view.geojson_file_name(data),
+                mime="application/geo+json",
+                key="mlit_map_geojson",
+            )
+        st.caption(
+            "どちらにも、画面の表に出していない識別子（id）・市町村・規制種別・"
+            "初出時点を入れています。**区間の線形が入るのはGeoJSONだけ**です"
+            "（CSVの1セルには収まらないため）。GeoJSONは配布元のものと違い、"
+            "時点をまたいで突き合わせた結果なので、1件ごとに状態"
+            "（規制中／解除済み）と初出・最終確認の時点まで入ります。"
+        )
+        st.caption(mlit_map_view.source_note(data))
+
+
 def main():
     st.markdown(
         "<style>"
@@ -1784,6 +1980,33 @@ def main():
         "@media (max-width: 900px){"
         '[data-testid="stHorizontalBlock"]:has([data-testid="stMultiSelect"])'
         "{position:static;border-bottom:none;}}"
+        # ページ切り替えのタブ。既定は文字の下に細い線が付くだけで、
+        # どれが選べるのか・いまどれを見ているのかが分かりにくい。
+        # 選んでいないタブを一段引っ込め、選んでいるタブを手前に浮かせる。
+        # 入れ子のタブ（列定義書）にも同じ見た目が掛かるが、あちらも
+        # 切り替えの操作なので揃っていて困らない。
+        'div[data-baseweb="tab-list"]'
+        "{gap:6px;border-bottom:1px solid rgba(130,130,130,0.35);"
+        "padding:4px 2px 0 2px;}"
+        'div[data-baseweb="tab-list"]>button'
+        "{border:1px solid rgba(130,130,130,0.35);border-bottom:none;"
+        "border-radius:7px 7px 0 0;padding:6px 14px;margin-bottom:-1px;"
+        "background:rgba(130,130,130,0.10);"
+        "box-shadow:inset 0 -3px 5px -4px rgba(0,0,0,0.45);"
+        "transition:background .12s, transform .12s;}"
+        'div[data-baseweb="tab-list"]>button:hover'
+        "{background:rgba(130,130,130,0.18);}"
+        # 選択中はページと地続きに見せる（下線を消して手前に出す）
+        'div[data-baseweb="tab-list"]>button[aria-selected="true"]'
+        "{background:var(--background-color,#ffffff);"
+        "border-color:rgba(130,130,130,0.55);font-weight:700;"
+        "box-shadow:0 -2px 6px -2px rgba(0,0,0,0.30);transform:translateY(-1px);}"
+        "@media (prefers-color-scheme: dark){"
+        'div[data-baseweb="tab-list"]>button[aria-selected="true"]'
+        "{background:var(--background-color,#0e1117);}}"
+        # 既定の下線（赤いハイライト）は枠と二重になるので消す
+        'div[data-baseweb="tab-highlight"],div[data-baseweb="tab-border"]'
+        "{display:none;}"
         "</style>",
         unsafe_allow_html=True,
     )
@@ -1794,7 +2017,7 @@ def main():
         )
         st.stop()
 
-    # 異常検知（zスコア・地図の色分け・異常検知一覧）は1時間値ベースで定義する。
+    # 異常検知（zスコア・地図の色分け）は1時間値ベースで定義する。
     # 時系列図の実績は既定で5分間値を使う（load_observationsで別途読み込む）。
     observations = load_observations("observations_hourly.parquet")
     quake_info = load_quake_info()
@@ -1910,8 +2133,12 @@ def main():
             "推計震度分布図は地震発生直後に発表されたもの（発表がない地震ではリンク先に情報がない場合があります）。"
         )
 
-    tab_overview, tab_list, tab_dl = st.tabs(
-        ["地図・時系列", "異常検知一覧", "データダウンロード"]
+    tab_overview, tab_mlit, tab_dl = st.tabs(
+        [
+            "地図・時系列",
+            "地図・時系列（通れる道マップ版・ベータ）",
+            "データダウンロード",
+        ]
     )
 
     # ------------------------------------------------------------------
@@ -2229,32 +2456,6 @@ def main():
                 )
 
     # ------------------------------------------------------------------
-    # 異常検知一覧タブ
-    # ------------------------------------------------------------------
-    with tab_list:
-        st.subheader("異常検知結果一覧（地震発生後・1時間値ベース）")
-        anomalies = observations[observations["is_anomaly"]].sort_values("datetime")
-        st.write(f"検知件数: {len(anomalies)} 件")
-        st.caption(
-            "1時間値の実績と、同じ日区分の平常時（月/火/水/木/金/土/日祝の各8日分）の"
-            "1時間値の平均・標準偏差を比べ、|zスコア| >= 2 を異常としています。"
-            "地図の色分けもこの判定に基づきます。"
-        )
-        display_cols = [
-            "point_code", "point_id", "datetime", "traffic_up", "traffic_down",
-            "baseline_mean_up", "baseline_mean_down", "z_up", "z_down",
-            "distance_km_from_epicenter",
-        ]
-        display_cols = [c for c in display_cols if c in anomalies.columns]
-        st.dataframe(anomalies[display_cols], use_container_width=True, height=500)
-        st.download_button(
-            "CSVダウンロード",
-            anomalies[display_cols].to_csv(index=False).encode("utf-8-sig"),
-            file_name="kumamoto_traffic_anomalies.csv",
-            mime="text/csv",
-        )
-
-    # ------------------------------------------------------------------
     # データダウンロードタブ
     # ------------------------------------------------------------------
     with tab_dl:
@@ -2302,7 +2503,7 @@ def main():
                 "異常検知の入力データ（1時間値＋平常時＋zスコア）",
                 observations,
                 "kumamoto_observations_hourly.csv",
-                "地図の色分けと異常検知一覧の根拠になっている表そのものです。",
+                "地図の色分けの根拠になっている表そのものです。",
             ),
         ]
 
@@ -2398,6 +2599,19 @@ def main():
             "通行規制の経路は始点・終点座標を[OSRM](https://project-osrm.org/)で"
             "道路網にスナップした推定値であり、元データそのものではありません。"
         )
+
+    # ------------------------------------------------------------------
+    # 地図・時系列（通れる道マップ版・ベータ）タブ
+    # 規制の出所だけを差し替えた、隣に並べて見比べるための版
+    # ------------------------------------------------------------------
+    with tab_mlit:
+        if post.empty:
+            st.info("地震発生後のデータがまだありません。")
+        else:
+            render_mlit_beta_tab(
+                point_summary, point_labels, quake_at, other_event_times,
+                quake_info, mainshock,
+            )
 
 
 if __name__ == "__main__":
