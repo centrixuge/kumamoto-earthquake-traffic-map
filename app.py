@@ -865,8 +865,9 @@ def _emergency_access_html(item: dict) -> str:
         + "・".join(ea["sections"])
         + f" で通行可（{ea['as_of']}時点）</span><br>"
     )
-    if ea.get("planned"):
-        text += f'<span style="color:#8a5a2b;">{ea["planned"]}</span><br>'
+    for extra in (ea.get("planned"), ea.get("note")):
+        if extra:
+            text += f'<span style="color:#8a5a2b;">{extra}</span><br>'
     if ea.get("source"):
         text += f'<span style="color:#777;">出典: {ea["source"]}</span><br>'
     return text
@@ -881,15 +882,18 @@ def emergency_access_note(nexco: dict) -> str:
     if not items:
         return ""
     as_of = sorted({i["emergency_access"]["as_of"] for i in items})[-1]
+    # 通れる範囲は、通行止め区間の全部のこともあれば一部のこともある。
+    # 「一部で」と決め打ちにすると、全線が通れるようになったときに誤りになる。
     detail = "／".join(
         f"{i['route_name']}は{'・'.join(i['emergency_access']['sections'])}"
         for i in items
     )
     return (
-        f"**規制中の高速道路のうち{len(items)}区間では、一部で緊急車両の通行が"
-        f"できます**（{as_of}時点）。{detail}。"
-        "一般車両は通行できません。区間の一部だけなので線では描き分けず、"
-        "線にマウスを載せると出るツールチップに区間名を出しています。"
+        f"**規制中の高速道路{len(items)}区間では、緊急車両の通行ができます**"
+        f"（{as_of}時点）。{detail}。"
+        "一般車両は通行できません。通れる範囲が通行止めの区間と一致しないこと"
+        "があるため線では描き分けず、線にマウスを載せると出るツールチップに"
+        "区間名と出典の報を出しています。"
     )
 
 
