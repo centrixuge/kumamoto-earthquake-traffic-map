@@ -17,10 +17,17 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from parse_nexco_report import parse   # noqa: E402
 
+sys.path.insert(0, ROOT_FOR_MODULES := os.path.dirname(
+    os.path.dirname(os.path.abspath(__file__))))
+from modules.nexco_text import emergency_lines, emergency_note  # noqa: E402
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 JSON_PATH = os.path.join(ROOT, "data", "nexco_regulations.json")
 REPO_URL = "https://github.com/centrixuge/kumamoto-earthquake-traffic-map"
 APP_URL = "https://kumamoto-earthquake-traffic-map.streamlit.app/"
+# developブランチを映すStreamlitアプリを作ったら、その URL を
+# リポジトリ変数 PREVIEW_APP_URL に入れる。入っていればPRに出す。
+PREVIEW_URL = os.environ.get("PREVIEW_APP_URL", "").strip()
 SOURCE_URL = "https://www.w-nexco.co.jp/"
 
 
@@ -108,7 +115,27 @@ def apply_report(report: dict, data: dict) -> tuple:
     return changes, checks
 
 
-def summary_md(report: dict, changes: list, checks: list) -> str:
+def screen_preview(data: dict) -> list:
+    """
+    反映後に画面へ出る文言をそのまま並べる。地図を開けない場所からでも、
+    何がどう出るのかをPRの本文だけで判断できるようにするため。
+    地図と同じ関数（modules/nexco_text.py）で作っている。
+    """
+    lines = ["**地図の下の注記**", "", "> " + (emergency_note(data) or "（表示なし）")]
+    for item in data["items"]:
+        text = emergency_lines(item)
+        if not text:
+            continue
+        lines += [
+            "",
+            f"**{item['route_name']}（{item['section']}）の線のツールチップ**",
+            "",
+        ]
+        lines += ["> " + t + "  " for t in text]
+    return lines
+
+
+def summary_md(report: dict, changes: list, checks: list, data: dict = None) -> str:
     lines = [
         f"NEXCO西日本の**第{report['report_no']}報**（発表 {report['published_at']}）を"
         "読み取り、緊急車両の通行可能区間を反映しました。",
@@ -134,6 +161,9 @@ def summary_md(report: dict, changes: list, checks: list) -> str:
     for r in report["closure"]["rows"] or [{"road": "（なし）", "span": ""}]:
         lines.append(f"- {r['road']} {r['span']}")
 
+    if data is not None:
+        lines += ["", "## 反映後に画面に出る文言", ""] + screen_preview(data)
+
     if checks:
         lines += ["", "## 判断が要るもの（自動では触っていません）", ""]
         lines += [f"- {c}" for c in checks]
@@ -148,8 +178,21 @@ def summary_md(report: dict, changes: list, checks: list) -> str:
         f"- 元のPDF（NEXCO西日本のニュースリリース）: {SOURCE_URL}",
         f"- このPRに入っているPDF: {REPO_URL}/blob/auto/nexco-report/"
         f"data/nexco_west_regulations/{report['pdf'].replace(' ', '%20')}",
-        f"- 反映後の地図（マージ後、数分で更新されます）: {APP_URL}",
-        "  高速道路の線にマウスを載せる／タップすると、緊急車両の通行可能区間が出ます",
+    ]
+    if PREVIEW_URL:
+        lines += [
+            f"- **このPRの内容を映した確認用アプリ**: {PREVIEW_URL}",
+            "  マージ前の状態が見られます（このブランチを映しています）",
+        ]
+    else:
+        lines += [
+            "- 確認用アプリ（マージ前の状態を映すもの）は未設定です。"
+            "Streamlit Cloudでこのブランチのアプリを作り、そのURLを"
+            "リポジトリ変数 `PREVIEW_APP_URL` に入れると、ここに出ます。"
+            "上の「反映後に画面に出る文言」で判断することもできます。",
+        ]
+    lines += [
+        f"- 公開中の地図（**マージ後**に数分で更新されます）: {APP_URL}",
         "",
         "自動で書き換えているのは緊急車両の通行可能区間だけです。"
         "通行止めそのものの追加・解除は、開始/終了時刻や線形の判断が要るため"
@@ -176,7 +219,7 @@ def main() -> int:
         with open(JSON_PATH, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=1)
 
-    md = summary_md(report, changes, checks)
+    md = summary_md(report, changes, checks, data)
     if args.summary:
         with open(args.summary, "w", encoding="utf-8") as f:
             f.write(md)

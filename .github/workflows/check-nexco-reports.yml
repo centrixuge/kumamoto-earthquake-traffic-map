@@ -34,6 +34,10 @@ jobs:
       # 判断材料をPRの本文にまとめる。通行止めの追加・解除は触らない。
       - name: Apply the new reports
         if: steps.check.outputs.new_count != '0'
+        env:
+          # このブランチを映す確認用アプリのURL。リポジトリの Variables に
+          # PREVIEW_APP_URL を作ると、PRの本文に出る（未設定なら出ない）。
+          PREVIEW_APP_URL: ${{ vars.PREVIEW_APP_URL }}
         run: |
           : > pr.md
           # 保存したPDFのパスは check_nexco_reports.py が new_reports.txt に
