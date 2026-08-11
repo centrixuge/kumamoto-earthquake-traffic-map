@@ -895,6 +895,51 @@ def _deterministic_branca_ids():
         branca_element.Element._generate_id = original
 
 
+POINT_LEGEND_CSS = (
+    # 地図内の観測点凡例（右上）。レイヤ一覧(bottomright)と重ならない
+    # 位置に置き、クリックは下の地図に通す。
+    ".pt-shape-legend{position:absolute;right:8px;top:8px;z-index:650;"
+    "background:rgba(255,255,255,0.88);border:1px solid #bbb;border-radius:4px;"
+    "padding:4px 7px;font-size:11.5px;line-height:1.6;color:#222;"
+    "pointer-events:none;font-family:sans-serif;}"
+    ".pt-shape-legend span{display:block;white-space:nowrap;}"
+    ".pt-mark{display:inline-block;width:10px;height:10px;margin-right:5px;"
+    "background:#4a7ab5;border:1px solid #333;vertical-align:middle;}"
+    ".pt-circle{border-radius:50%;}"
+    # 角丸の四角。地図のマーカーと同じ丸め方（1辺の28%）にする
+    ".pt-square{width:9px;height:9px;border-radius:28%;}"
+    ".pt-legend-head{font-size:10.5px;color:#555;letter-spacing:0.02em;"
+    "border-bottom:1px solid #ddd;margin-bottom:2px;padding-bottom:1px;}"
+)
+
+
+def point_legend_html(point_summary: pd.DataFrame) -> str:
+    """
+    観測点の形（＝道路の種別）の凡例。地図を見ながら参照するものなので
+    地図の外ではなく地図の中（右上）に置く。
+
+    観測点の描き方はどの地図でも同じなので、通れる道マップ版の地図にも
+    同じものを渡す。区分名（一般国道／高速自動車国道）はJARTICが返す
+    道路種別をそのままで、道路の法的な位置づけを表すものではない
+    （例: 九州中央自動車道は種別1だが、規制を公表しているのは直轄国道の
+    管理者である熊本河川国道事務所）。この但し書きはREADMEとdocsにある。
+    """
+    n_general, n_express, n_unknown = _road_type_counts(point_summary)
+    if not (n_express or n_unknown):
+        return ""
+    rows = [
+        '<span class="pt-legend-head">観測点の道路種別</span>',
+        f'<span><i class="pt-mark pt-circle"></i>一般国道 {n_general}点</span>',
+        f'<span><i class="pt-mark pt-square"></i>高速自動車国道 {n_express}点</span>',
+    ]
+    if n_unknown:
+        # 形は●のままだが、一般国道と言い切れないので別行にする
+        rows.append(
+            f'<span><i class="pt-mark pt-circle"></i>種別不明 {n_unknown}点</span>'
+        )
+    return '<div class="pt-shape-legend">' + "".join(rows) + "</div>"
+
+
 def _map_center(point_summary: pd.DataFrame, mainshock: dict) -> list:
     """
     地図の中心を、観測点を1点も欠かさない範囲で震源にいちばん近づける。
@@ -979,20 +1024,7 @@ def build_base_map(
             # 通行止めの×は目印だけなのでクリックを透過させ、下にある
             # 観測点マーカーを確実にクリックできるようにする。
             ".reg-x-mark{pointer-events:none !important;}"
-            # 地図内の観測点凡例（左下）。レイヤ一覧(bottomright)と重ならない
-            # 位置に置き、クリックは下の地図に通す。
-            ".pt-shape-legend{position:absolute;right:8px;top:8px;z-index:650;"
-            "background:rgba(255,255,255,0.88);border:1px solid #bbb;border-radius:4px;"
-            "padding:4px 7px;font-size:11.5px;line-height:1.6;color:#222;"
-            "pointer-events:none;font-family:sans-serif;}"
-            ".pt-shape-legend span{display:block;white-space:nowrap;}"
-            ".pt-mark{display:inline-block;width:10px;height:10px;margin-right:5px;"
-            "background:#4a7ab5;border:1px solid #333;vertical-align:middle;}"
-            ".pt-circle{border-radius:50%;}"
-            # 角丸の四角。地図のマーカーと同じ丸め方（1辺の28%）にする
-            ".pt-square{width:9px;height:9px;border-radius:28%;}"
-            ".pt-legend-head{font-size:10.5px;color:#555;letter-spacing:0.02em;"
-            "border-bottom:1px solid #ddd;margin-bottom:2px;padding-bottom:1px;}"
+            + POINT_LEGEND_CSS +
             # ツールチップは既定（white-space:nowrap）だと横に伸びて地図の外まで
             # はみ出す。かといって max-width だけを付けると、絶対配置の
             # 幅が「その位置から地図の端までの残り幅」に縮められ、
@@ -1310,30 +1342,9 @@ def build_base_map(
                 layer.add_to(fmap)
             folium.LayerControl(position="bottomright", collapsed=False).add_to(fmap)
 
-        # 観測点の形（＝道路の種別）は地図を見ながら参照するものなので、
-        # 地図の外の凡例ではなく地図の中に置く。位置は右上（レイヤ一覧は右下、
-        # ズームボタンは左上なので、どちらとも重ならない）。
-        # マーカーに重なっても中身が読めるよう半透明の白地にする。
-        n_general, n_express, n_unknown = _road_type_counts(point_summary)
-        if n_express or n_unknown:
-            # 何の凡例なのかが分かるよう見出しを付ける。区分名（一般国道／
-            # 高速自動車国道）はJARTICが返す道路種別をそのまま使っており、
-            # 道路の法的な位置づけを表すものではない（例: 九州中央自動車道は
-            # 種別1だが、規制を公表しているのは直轄国道の管理者である
-            # 熊本河川国道事務所）。この但し書きはREADMEとdocsに書いてある。
-            rows = [
-                '<span class="pt-legend-head">観測点の道路種別</span>',
-                f'<span><i class="pt-mark pt-circle"></i>一般国道 {n_general}点</span>',
-                f'<span><i class="pt-mark pt-square"></i>高速自動車国道 {n_express}点</span>',
-            ]
-            if n_unknown:
-                # 形は●のままだが、一般国道と言い切れないので別行にする
-                rows.append(
-                    f'<span><i class="pt-mark pt-circle"></i>種別不明 {n_unknown}点</span>'
-                )
-            fmap.get_root().html.add_child(folium.Element(
-                '<div class="pt-shape-legend">' + "".join(rows) + '</div>'
-            ))
+        legend = point_legend_html(point_summary)
+        if legend:
+            fmap.get_root().html.add_child(folium.Element(legend))
 
         folium.Marker(
             location=[mainshock["epicenter_lat"], mainshock["epicenter_lon"]],
@@ -1857,6 +1868,9 @@ def render_mlit_beta_tab(point_summary: pd.DataFrame, point_labels: dict,
             zoom=MAP_ZOOM,
             epicenter_icon=_epicenter_icon(),
             epicenter=[mainshock["epicenter_lat"], mainshock["epicenter_lon"]],
+            # 観測点の描き方は本家と同じなので、その凡例も同じものを出す
+            point_legend=point_legend_html(point_summary),
+            point_legend_css=POINT_LEGEND_CSS,
         )
         points_fg = build_points_feature_group(
             point_summary, point_labels, selected_points

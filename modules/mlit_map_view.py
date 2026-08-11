@@ -88,10 +88,13 @@ def _tooltip(item: dict) -> str:
 
 
 def build_map(data: dict, center=None, zoom: int = None,
-              epicenter_icon=None, epicenter=None) -> folium.Map:
+              epicenter_icon=None, epicenter=None,
+              point_legend: str = "", point_legend_css: str = "") -> folium.Map:
     """
-    規制の地図を作る。中心・縮尺・震源の印は、並べて見比べられるように
-    「地図・時系列」タブと同じものを呼び出し側から渡せるようにしている。
+    規制の地図を作る。中心・縮尺・震源の印・観測点の凡例は、並べて見比べ
+    られるように「地図・交通量の時系列変化」タブと同じものを呼び出し側から
+    渡せるようにしている（観測点の描き方は両方の地図で共通なので、
+    その凡例もこちらに出さないと何の印か分からなくなる）。
     """
     fmap = folium.Map(
         location=center or MAP_CENTER, zoom_start=zoom or MAP_ZOOM, tiles=None,
@@ -114,6 +117,7 @@ def build_map(data: dict, center=None, zoom: int = None,
         ".leaflet-control-layers-overlays label>span{white-space:nowrap;}"
         ".leaflet-control-layers-overlays label>span>span"
         "{white-space:normal;overflow-wrap:anywhere;}"
+        + point_legend_css +
         "</style>"
     ))
 
@@ -147,6 +151,8 @@ def build_map(data: dict, center=None, zoom: int = None,
         folium.Marker(
             location=epicenter, icon=epicenter_icon, tooltip="震源（本震）",
         ).add_to(fmap)
+    if point_legend:
+        fmap.get_root().html.add_child(folium.Element(point_legend))
     folium.LayerControl(position="bottomright", collapsed=False).add_to(fmap)
     return fmap
 
