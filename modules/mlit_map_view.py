@@ -328,8 +328,10 @@ def geojson_file_name(data: dict) -> str:
 def source_note(data: dict) -> str:
     return (
         f"[{data['source_name']}]({data['source_url']})が配布する各時点のGeoJSON "
-        f"{len(data['snapshots'])}時点（最新 {data['latest_snapshot']}）を"
-        "突き合わせ、最新時点にも残っていれば「規制中」、途中で消えていれば"
+        f"{len(data['snapshots'])}時点を突き合わせています"
+        f"（最新の配布は {data['latest_snapshot']} の回で、"
+        f"そこに入っている規制情報は {data['latest_regulation_time']} 時点）。"
+        "最新時点にも残っていれば「規制中」、途中で消えていれば"
         "「解除済み」としています。解除の時刻は配布の間隔（半日〜3日）より"
         "細かくは分かりません。道路の段階は元データの「道路種別」をまとめたもので、"
         "高速自動車国道＝高速道路、一般国道＝直轄国道・補助国道・一般国道、"

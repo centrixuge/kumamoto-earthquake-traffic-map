@@ -1775,7 +1775,12 @@ def render_mlit_beta_tab(point_summary: pd.DataFrame, point_labels: dict,
         "**ベータ版**です。地図の通行規制を"
         f"[{data['source_name']}]({data['source_url']})の配布データだけで作り直し、"
         "それ以外（観測点・異常度・交通量のグラフ）は「地図・交通量の時系列変化」タブと"
-        "同じものを出しています。規制の収録範囲が違うので、同じ観測点でも見え方が変わります。",
+        "同じものを出しています。規制の収録範囲が違うので、同じ観測点でも"
+        "見え方が変わります。  \n"
+        f"**規制情報は {data['latest_regulation_time']} 時点のものです**"
+        f"（配布は {data['latest_snapshot']} の回ですが、その回に入っている"
+        "道路規制情報は10:00時点のものです）。交通量は最新まで出るので、"
+        "この時点より後の規制の変化は地図に反映されていません。",
         unsafe_allow_html=False,
     )
 

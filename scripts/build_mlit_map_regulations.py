@@ -41,6 +41,13 @@ QUAKE_AT = datetime(2026, 7, 28, 16, 27)
 # 時刻がファイル名に無い回（配布元の notice.txt の記載による）
 DATE_ONLY_HOUR = {"260729": "0800"}
 
+# ファイル名の時刻と、中の道路規制情報の時点がずれている回。
+# 8/7 16:00 の回は、規制情報だけ10:00時点のものが入っている。
+# 「いつ時点の規制か」はこちらを使う（ファイル名の時刻ではない）。
+REGULATION_AS_OF = {
+    "2608071600data.zip": datetime(2026, 8, 7, 10, 0),
+}
+
 # 道路規制情報のGeoJSON（分割されていることがある）
 REG_FILE = re.compile(r"^dourokisei\d*\.geojson$", re.I)
 
@@ -138,6 +145,10 @@ def build() -> dict:
         raise RuntimeError("道路規制情報を含むZIPが見つからない")
 
     last_time = snapshots[-1][0]
+    # 「いつ時点の規制か」。ファイル名の時刻と中身の時点がずれる回がある
+    last_reg_time = REGULATION_AS_OF.get(
+        os.path.basename(snapshots[-1][1]), last_time
+    )
     items = {}
     for stamp, path, features in snapshots:
         for feature in features:
@@ -213,12 +224,16 @@ def build() -> dict:
         "quake_at": QUAKE_AT.strftime("%Y-%m-%d %H:%M"),
         "snapshots": [s.strftime("%Y-%m-%d %H:%M") for s, _, _ in snapshots],
         "latest_snapshot": last_time.strftime("%Y-%m-%d %H:%M"),
+        # 規制情報としての最新時点。上のファイル名の時刻とずれることがある
+        "latest_regulation_time": last_reg_time.strftime("%Y-%m-%d %H:%M"),
         "note": (
             "各時点のスナップショットを突き合わせて状態を決めている。"
             "「規制中」は最新時点にも残っているもの、「解除済み」は途中で"
             "消えたもの（解除の時刻はスナップショットの間隔ぶん粗い）。"
             "「災害前から」は規制開始_日時が本震より前かどうかで、"
             "開始日時を持たないレコードは null（不明）にしている。"
+            "最新の配布は latest_snapshot の回だが、その回の道路規制情報は"
+            "latest_regulation_time 時点のものが入っている。"
         ),
         "items": results,
     }
@@ -231,7 +246,8 @@ def main() -> None:
 
     items = data["items"]
     print(f'スナップショット {len(data["snapshots"])}時点'
-          f'（最新 {data["latest_snapshot"]}）')
+          f'（最新の配布 {data["latest_snapshot"]}／'
+          f'規制情報は {data["latest_regulation_time"]} 時点）')
     print(f"通算の規制 {len(items)}件")
     for level, _ in ROAD_LEVELS + [("不明", set())]:
         sub = [i for i in items if i["道路の段階"] == level]
