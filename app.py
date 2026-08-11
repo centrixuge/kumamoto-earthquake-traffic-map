@@ -224,7 +224,8 @@ def load_regulations() -> list:
 def load_mlit_regulations() -> dict:
     """
     直轄国道（国が管理する国道）の規制。熊本県「防災情報くまもと」の
-    通行規制情報は県・市町村が管理する道路が対象で、国道57号のような
+    通行規制情報は県・市町村が管理する道路が対象で（県が管理する補助国道も
+    含む。国道219号など）、国道57号のような
     直轄国道は載らない。そのため熊本河川国道事務所の公表PDFから
     手作業で転記したものを別ファイルで持つ。
     """
@@ -1061,7 +1062,8 @@ def build_base_map(
 
         # ((状態, データソース), レイヤ)。状態は 0=規制中 / 1=解除済み /
         # 2=地震前からの規制、データソースは 0=高速道路 / 1=直轄国道 /
-        # 2=県・市町村道（管理者ごとに公表の経路が違うので、それが区切り）。
+        # 2=県・市町村管理（管理者ごとに公表の経路が違うので、それが区切り）。
+        # 県・市町村管理には、県が管理する補助国道（国道219号など）も入る。
         # 規制中を上、解除済みをその下、地震前を一番下に並べ、
         # 同じ状態のなかでは直轄国道を先に置く。
         overlays = []
@@ -1073,15 +1075,15 @@ def build_base_map(
             # で分ける。記録している規制の多くはすでに解除済みなので、
             # 既定では規制中だけを出し、解除済みと地震前からの規制は
             # 地図の右下のレイヤ一覧でオンにしてもらう。
-            post_active_layer = folium.FeatureGroup(name="県・市町村道：規制中")
+            post_active_layer = folium.FeatureGroup(name="県・市町村管理：規制中")
             post_ended_layer = folium.FeatureGroup(
-                name="県・市町村道：解除済み", show=False
+                name="県・市町村管理：解除済み", show=False
             )
             # 名前は他のレイヤと同じ長さに収める。ここが1つだけ長いと
             # レイヤ一覧の幅がそれに引きずられて、地図の右下で場所を取る。
             # 「工事・過去の災害等」という中身は地図の上の凡例に書いてある。
             pre_layer = folium.FeatureGroup(
-                name="県・市町村道：地震前から", show=False
+                name="県・市町村管理：地震前から", show=False
             )
             for reg in regulations:
                 is_post = _regulation_is_post_quake(reg, quake_at)
@@ -1395,7 +1397,7 @@ def render_source_table(regulations: list, n_post: int,
 
     rows = [
         (
-            f"① 県・市町村道<br>{len(regulations)}件（地震後 {n_post}件）",
+            f"① 県・市町村管理の道路<br>（補助国道・県道・市町村道）<br>{len(regulations)}件（地震後 {n_post}件）",
             _cell("防災情報くまもと<br>通行規制情報",
                   "https://portal.bousai.pref.kumamoto.jp/?p=traffic"),
             "公開JSONを自動取得<br>"
@@ -2437,6 +2439,7 @@ def main():
                     unsafe_allow_html=True,
                 )
                 st.caption(
+                    "①には県が管理する補助国道（国道219号など）も入ります。"
                     "①は始点・終点の座標だけなので[OSRM](https://project-osrm.org/)で"
                     "道路網にスナップ、②③のPDFには座標がないため区間はOSMのIC座標から"
                     "線形を復元しています（キロポストだけのものは地名からの概略位置）。"
