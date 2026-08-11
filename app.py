@@ -1996,26 +1996,38 @@ def main():
         # 選んでいないタブを一段引っ込め、選んでいるタブを手前に浮かせる。
         # 入れ子のタブ（列定義書）にも同じ見た目が掛かるが、あちらも
         # 切り替えの操作なので揃っていて困らない。
-        'div[data-baseweb="tab-list"]'
+        #
+        # タブのDOMはStreamlitの版で変わる。手元の1.37は baseweb の属性
+        # （tab-list の中のbutton）、公開先の新しい版は role="tablist" と
+        # data-testid="stTab" になる。片方だけを指定すると、もう片方では
+        # 何も掛からず既定の見た目に戻ってしまうので、両方に当てる。
+        # 新しい版はタブ自身に padding:0 とクラスが当たっているため、
+        # competing する指定には !important を付ける。
+        'div[data-baseweb="tab-list"],[data-testid="stTabs"] [role="tablist"]'
         "{gap:6px;border-bottom:1px solid rgba(130,130,130,0.35);"
         "padding:4px 2px 0 2px;}"
-        'div[data-baseweb="tab-list"]>button'
-        "{border:1px solid rgba(130,130,130,0.35);border-bottom:none;"
-        "border-radius:7px 7px 0 0;padding:6px 14px;margin-bottom:-1px;"
-        "background:rgba(130,130,130,0.10);"
+        # 新しい版の下線は tablist の ::after（2px）で描かれている
+        '[data-testid="stTabs"] [role="tablist"]::after{display:none;}'
+        'div[data-baseweb="tab-list"]>button,[data-testid="stTab"]'
+        "{border:1px solid rgba(130,130,130,0.35) !important;"
+        "border-bottom:none !important;"
+        "border-radius:7px 7px 0 0 !important;padding:6px 14px !important;"
+        "margin-bottom:-1px;background:rgba(130,130,130,0.10) !important;"
         "box-shadow:inset 0 -3px 5px -4px rgba(0,0,0,0.45);"
         "transition:background .12s, transform .12s;}"
-        'div[data-baseweb="tab-list"]>button:hover'
-        "{background:rgba(130,130,130,0.18);}"
+        'div[data-baseweb="tab-list"]>button:hover,[data-testid="stTab"]:hover'
+        "{background:rgba(130,130,130,0.18) !important;}"
         # 選択中はページと地続きに見せる（下線を消して手前に出す）
-        'div[data-baseweb="tab-list"]>button[aria-selected="true"]'
-        "{background:var(--background-color,#ffffff);"
-        "border-color:rgba(130,130,130,0.55);font-weight:700;"
+        'div[data-baseweb="tab-list"]>button[aria-selected="true"],'
+        '[data-testid="stTab"][aria-selected="true"]'
+        "{background:var(--background-color,#ffffff) !important;"
+        "border-color:rgba(130,130,130,0.55) !important;font-weight:700;"
         "box-shadow:0 -2px 6px -2px rgba(0,0,0,0.30);transform:translateY(-1px);}"
         "@media (prefers-color-scheme: dark){"
-        'div[data-baseweb="tab-list"]>button[aria-selected="true"]'
-        "{background:var(--background-color,#0e1117);}}"
-        # 既定の下線（赤いハイライト）は枠と二重になるので消す
+        'div[data-baseweb="tab-list"]>button[aria-selected="true"],'
+        '[data-testid="stTab"][aria-selected="true"]'
+        "{background:var(--background-color,#0e1117) !important;}}"
+        # 旧い版の下線（赤いハイライト）は枠と二重になるので消す
         'div[data-baseweb="tab-highlight"],div[data-baseweb="tab-border"]'
         "{display:none;}"
         "</style>",
