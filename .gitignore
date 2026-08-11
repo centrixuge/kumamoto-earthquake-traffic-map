@@ -4,3 +4,7 @@ __pycache__/
 data/shelter/
 .streamlit/secrets.toml
 api_request.py
+new_reports.txt
+pr.md
+part.md
+check.log
