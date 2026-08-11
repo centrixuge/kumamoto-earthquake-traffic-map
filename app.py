@@ -23,6 +23,7 @@ import streamlit as st
 from streamlit_folium import st_folium
 
 from modules.holidays import WEEKDAY_LABELS
+from modules.mlit_map_view import render as render_mlit_map
 from modules.stations import attach_point_code, load_station_master
 
 DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
@@ -1910,8 +1911,8 @@ def main():
             "推計震度分布図は地震発生直後に発表されたもの（発表がない地震ではリンク先に情報がない場合があります）。"
         )
 
-    tab_overview, tab_list, tab_dl = st.tabs(
-        ["地図・時系列", "異常検知一覧", "データダウンロード"]
+    tab_overview, tab_list, tab_dl, tab_mlit = st.tabs(
+        ["地図・時系列", "異常検知一覧", "データダウンロード", "通れる道マップ版の規制"]
     )
 
     # ------------------------------------------------------------------
@@ -2398,6 +2399,12 @@ def main():
             "通行規制の経路は始点・終点座標を[OSRM](https://project-osrm.org/)で"
             "道路網にスナップした推定値であり、元データそのものではありません。"
         )
+
+    # ------------------------------------------------------------------
+    # 通れる道マップ版の規制タブ（別系統のデータで作った地図）
+    # ------------------------------------------------------------------
+    with tab_mlit:
+        render_mlit_map()
 
 
 if __name__ == "__main__":
