@@ -836,11 +836,6 @@ def _epicenter_icon(size: int = 30) -> folium.DivIcon:
     c = size / 2
     html = (
         f'<svg width="{size}" height="{size}" viewBox="0 0 {size} {size}">'
-        # 白い縁取りを下に敷く。背景が濃い色（震度の濃い部分や規制の赤い線）
-        # に重なっても×の形が消えないようにする。
-        f'<path d="M{c - d} {c - d} L{c + d} {c + d} M{c + d} {c - d} '
-        f'L{c - d} {c + d}" stroke="#ffffff" stroke-width="{round(sw * 2, 2)}" '
-        'stroke-linecap="butt" opacity="0.85"/>'
         f'<path d="M{c - d} {c - d} L{c + d} {c + d} M{c + d} {c - d} '
         f'L{c - d} {c + d}" stroke="#0000ff" stroke-width="{sw}" '
         'stroke-linecap="butt"/>'
