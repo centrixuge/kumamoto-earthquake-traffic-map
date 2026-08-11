@@ -913,6 +913,20 @@ POINT_LEGEND_CSS = (
 )
 
 
+LAYER_CONTROL_CSS = (
+    # レイヤ一覧はたたんだ状態で置き、アイコンに載せると開く（Leaflet標準）。
+    # 常に開いていると右下の規制の線にかぶって中身が読めないため。
+    # たたんだアイコンだけだと何のボタンか分からないので、少し大きめにして
+    # 「レイヤ」の字を入れる。
+    ".leaflet-control-layers-toggle{width:74px !important;height:26px !important;"
+    "background-image:none !important;background:rgba(255,255,255,0.92);"
+    "border:1px solid #bbb;border-radius:4px;"
+    "font:600 11.5px/26px sans-serif;color:#333;text-align:center;}"
+    ".leaflet-control-layers-toggle:after{content:'≡ レイヤ';}"
+    ".leaflet-control-layers-expanded .leaflet-control-layers-toggle{display:none;}"
+)
+
+
 def point_legend_html(point_summary: pd.DataFrame) -> str:
     """
     観測点の形（＝道路の種別）の凡例。地図を見ながら参照するものなので
@@ -1024,7 +1038,7 @@ def build_base_map(
             # 通行止めの×は目印だけなのでクリックを透過させ、下にある
             # 観測点マーカーを確実にクリックできるようにする。
             ".reg-x-mark{pointer-events:none !important;}"
-            + POINT_LEGEND_CSS +
+            + POINT_LEGEND_CSS + LAYER_CONTROL_CSS +
             # ツールチップは既定（white-space:nowrap）だと横に伸びて地図の外まで
             # はみ出す。かといって max-width だけを付けると、絶対配置の
             # 幅が「その位置から地図の端までの残り幅」に縮められ、
@@ -1340,7 +1354,7 @@ def build_base_map(
             # 左上・右上だと観測点マーカーに被るので右下に置く
             for _, layer in sorted(overlays, key=lambda x: x[0]):
                 layer.add_to(fmap)
-            folium.LayerControl(position="bottomright", collapsed=False).add_to(fmap)
+            folium.LayerControl(position="bottomright", collapsed=True).add_to(fmap)
 
         legend = point_legend_html(point_summary)
         if legend:
@@ -1870,7 +1884,7 @@ def render_mlit_beta_tab(point_summary: pd.DataFrame, point_labels: dict,
             epicenter=[mainshock["epicenter_lat"], mainshock["epicenter_lon"]],
             # 観測点の描き方は本家と同じなので、その凡例も同じものを出す
             point_legend=point_legend_html(point_summary),
-            point_legend_css=POINT_LEGEND_CSS,
+            point_legend_css=POINT_LEGEND_CSS + LAYER_CONTROL_CSS,
         )
         points_fg = build_points_feature_group(
             point_summary, point_labels, selected_points
@@ -1885,7 +1899,8 @@ def render_mlit_beta_tab(point_summary: pd.DataFrame, point_labels: dict,
         )
         st.markdown(mlit_map_view.summary_html(data), unsafe_allow_html=True)
         st.caption(
-            "既定では規制中だけを出しています（地図の右下のレイヤ一覧で切り替え。"
+            "既定では規制中だけを出しています（地図の右下の「≡ レイヤ」に"
+        "マウスを載せると一覧が開きます。"
             "一覧の「高速」「国道」「県・市町村道」は上の3段階の略記）。"
             "観測点の描き方は「地図・交通量の時系列変化」タブと同じです。"
         )
@@ -2419,7 +2434,8 @@ def main():
                     "道路網にスナップ、②③のPDFには座標がないため区間はOSMのIC座標から"
                     "線形を復元しています（キロポストだけのものは地名からの概略位置）。"
                     "描き分けは3つに共通で、色が規制の区分、破線が解除済みです。"
-                    "地図の右下のレイヤ一覧で、道路の管理者×状態ごとに表示を"
+                    "地図の右下の「≡ レイヤ」（マウスを載せると開きます）で、"
+                    "道路の管理者×状態ごとに表示を"
                     "切り替えられます（既定は規制中のみ）。"
                     "②③で転記した規制の一覧（区間・期間・根拠にした報・"
                     f"線形の作り方）は[こちら]({REPO_URL}/blob/main/docs/regulations.md)にまとめています。"

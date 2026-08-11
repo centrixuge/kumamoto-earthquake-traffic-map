@@ -153,7 +153,8 @@ def build_map(data: dict, center=None, zoom: int = None,
         ).add_to(fmap)
     if point_legend:
         fmap.get_root().html.add_child(folium.Element(point_legend))
-    folium.LayerControl(position="bottomright", collapsed=False).add_to(fmap)
+    # 一覧が規制の線にかぶるので、たたんだ状態で置く（本家と同じ）
+    folium.LayerControl(position="bottomright", collapsed=True).add_to(fmap)
     return fmap
 
 
