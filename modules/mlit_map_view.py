@@ -245,6 +245,40 @@ def regulation_table(data: dict) -> pd.DataFrame:
     ])
 
 
+def regulation_csv(data: dict) -> bytes:
+    """
+    一覧をCSVにする。画面の表は幅の都合で列を削っているので、CSVには
+    識別子や初出時点も入れる（線形＝geometryだけは、CSVに入れても
+    扱えないので外す）。Excelでそのまま開けるよう BOM 付きにする。
+    """
+    df = pd.DataFrame([
+        {
+            "id": i["id"],
+            "道路の段階": i["道路の段階"],
+            "道路種別（元データ）": i["道路種別"],
+            "路線名": i["路線名"],
+            "区間": i["区間"],
+            "市町村": i["市町村"],
+            "規制内容": i["規制内容"],
+            "規制種別": i["規制種別"],
+            "規制理由": i["規制理由"],
+            "開始日時": i["開始日時"],
+            "状態": i["状態"],
+            "初出時点": i["初出時点"],
+            "最終確認時点": i["最終確認時点"],
+            "解除の確認時点": i["解除確認時点"],
+            "出現時点数": i["出現時点数"],
+        }
+        for i in data["items"]
+    ])
+    return df.to_csv(index=False).encode("utf-8-sig")
+
+
+def csv_file_name(data: dict) -> str:
+    stamp = data["latest_snapshot"].replace("-", "").replace(" ", "_").replace(":", "")
+    return f"kumamoto_mlit_map_regulations_{stamp}.csv"
+
+
 def source_note(data: dict) -> str:
     return (
         f"[{data['source_name']}]({data['source_url']})が配布する各時点のGeoJSON "
