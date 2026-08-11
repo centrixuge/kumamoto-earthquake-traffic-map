@@ -34,6 +34,32 @@ LEVELS = [
 ]
 LEVEL_COLOR = {name: color for name, color, _ in LEVELS}
 LEVEL_WEIGHT = {name: weight for name, _, weight in LEVELS}
+
+# 色は規制の内容で分ける（「地図・交通量の時系列変化」タブと同じ考え方）。
+# 道路の段階はレイヤと線の太さで分かるので、色は内容に使う。
+# 元の地図の橙は「片側交互など」だが、この配布データには片側交互が
+# 1件も無く、104件すべて全面通行止め系だった。橙は緊急車両のみ通行可
+# （＝一部だけ通れる）に当てている。
+CONTENT_CLASSES = [
+    ("全面通行止め", "#e60000",
+     lambda t: "通行止" in t and "緊急車両" not in t and "解除" not in t),
+    ("うち緊急車両のみ通行可", "#e67e22", lambda t: "緊急車両" in t),
+    ("通行止め解除の記録", "#95a5a6", lambda t: "解除" in t),
+    ("内容の記載なし", "#b0b7c3", lambda t: not t),
+]
+CONTENT_COLOR = {name: color for name, color, _ in CONTENT_CLASSES}
+
+
+def content_class(item: dict) -> str:
+    """
+    規制内容の文字列を、色分けの区分に振り分ける。
+    「全面通行止」「全面通行止め」「前面通行止め」のような表記ゆれがある。
+    """
+    text = (item.get("規制内容") or "").strip()
+    for name, _, matches in CONTENT_CLASSES:
+        if matches(text):
+            return name
+    return "内容の記載なし"
 # レイヤ一覧に出す短い名前。正式な呼び方は凡例と件数の表に出している。
 SHORT_LEVEL = {
     "高速自動車国道": "高速",
@@ -54,10 +80,14 @@ def load_regulations() -> dict:
 
 
 def _style(item: dict) -> dict:
-    """色＝道路の段階、実線／破線＝規制中／解除済み。現在の地図と同じ考え方。"""
+    """
+    色＝規制の内容、太さ＝道路の段階、実線／破線＝規制中／解除済み。
+    色の意味を「地図・交通量の時系列変化」タブと揃え、道路の段階は
+    レイヤと線の太さで分かるようにする。
+    """
     ended = item["状態"] == "解除済み"
     return {
-        "color": LEVEL_COLOR.get(item["道路の段階"], "#718096"),
+        "color": CONTENT_COLOR.get(content_class(item), "#b0b7c3"),
         "weight": LEVEL_WEIGHT.get(item["道路の段階"], 4),
         "opacity": 0.45 if ended else 0.95,
         "dashArray": "6,8" if ended else None,
@@ -174,22 +204,47 @@ def _counts(data: dict) -> pd.DataFrame:
 
 
 def legend_html(data: dict) -> str:
-    """地図の上に置く、色と線の凡例。件数は下の表に出すのでここには入れない。"""
-    present = {i["道路の段階"] for i in data["items"]}
-    marks = " ".join(
+    """
+    地図の上に置く凡例。件数は下の表に出すのでここには入れない。
+
+    行は2つ。色＝規制の内容（「地図・交通量の時系列変化」タブと同じ意味）、
+    太さ＝道路の段階（レイヤの区切りと同じ）。実際に出てくる区分だけを
+    並べる（この配布データには片側交互が無いなど、区分は時期で変わる）。
+    """
+    present_content = {content_class(i) for i in data["items"]}
+    present_level = {i["道路の段階"] for i in data["items"]}
+
+    def _row(head: str, marks: str) -> str:
+        return (
+            '<div style="display:flex;flex-wrap:wrap;gap:1px 12px;'
+            'align-items:center;">'
+            f'<b style="white-space:nowrap;">{head}:</b>{marks}</div>'
+        )
+
+    color_marks = " ".join(
         f'<span style="white-space:nowrap;">'
-        f'<span style="display:inline-block;width:20px;height:4px;'
+        f'<span style="display:inline-block;width:20px;height:5px;'
         f'background:{color};vertical-align:middle;"></span> {name}</span>'
-        for name, color, _ in LEVELS if name in present
+        for name, color, _ in CONTENT_CLASSES if name in present_content
+    )
+    width_marks = " ".join(
+        f'<span style="white-space:nowrap;">'
+        f'<span style="display:inline-block;width:20px;height:{weight}px;'
+        f'background:#8a94a6;vertical-align:middle;"></span> {name}</span>'
+        for name, _, weight in LEVELS if name in present_level
     )
     return (
-        '<div style="font-size:0.79rem;line-height:1.45;margin:0 0 4px 0;'
-        'display:flex;flex-wrap:wrap;gap:1px 12px;align-items:center;">'
-        f'<b style="white-space:nowrap;">道路の段階:</b>{marks}'
-        '<span style="white-space:nowrap;">'
-        '<span style="display:inline-block;width:20px;height:0;'
-        'border-top:4px dashed #888;vertical-align:middle;"></span>'
-        ' 破線は解除済み</span></div>'
+        '<div style="font-size:0.79rem;line-height:1.45;margin:0 0 4px 0;">'
+        + _row("規制の色", color_marks)
+        + _row(
+            "線の太さ（道路の段階）",
+            width_marks
+            + '<span style="white-space:nowrap;">'
+            '<span style="display:inline-block;width:20px;height:0;'
+            'border-top:4px dashed #888;vertical-align:middle;"></span>'
+            " 破線は解除済み</span>",
+        )
+        + "</div>"
     )
 
 

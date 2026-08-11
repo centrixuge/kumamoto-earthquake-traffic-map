@@ -1900,9 +1900,16 @@ def render_mlit_beta_tab(point_summary: pd.DataFrame, point_labels: dict,
         st.markdown(mlit_map_view.summary_html(data), unsafe_allow_html=True)
         st.caption(
             "既定では規制中だけを出しています（地図の右下の「≡ レイヤ」に"
-        "マウスを載せると一覧が開きます。"
-            "一覧の「高速」「国道」「県・市町村道」は上の3段階の略記）。"
+            "マウスを載せると一覧が開きます。一覧の「高速」「国道」"
+            "「県・市町村道」は上の3段階の略記）。"
             "観測点の描き方は「地図・交通量の時系列変化」タブと同じです。"
+        )
+        st.caption(
+            "色の意味は「地図・交通量の時系列変化」タブと揃えていますが、"
+            "**この配布データには片側交互通行の規制が1件もありません**"
+            "（104件すべて全面通行止め系で、赤84件・緊急車両のみ通行可3件・"
+            "解除の記録2件・内容の記載なし15件）。そのため橙の「片側交互など」は"
+            "出てきません。"
         )
         note = mlit_map_view.unknown_level_note(data)
         if note:
