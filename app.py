@@ -1862,6 +1862,9 @@ def render_mlit_beta_tab(point_summary: pd.DataFrame, point_labels: dict,
             "一覧の「高速」「国道」「県・市町村道」は上の3段階の略記）。"
             "観測点の描き方は「地図・時系列」タブと同じです。"
         )
+        note = mlit_map_view.unknown_level_note(data)
+        if note:
+            st.caption(note)
 
     # クリックされたのが観測点マーカーのときだけ選択を切り替える
     click_count = map_state.get("last_object_clicked_count") if map_state else None

@@ -204,6 +204,29 @@ def summary_html(data: dict) -> str:
     )
 
 
+def unknown_level_note(data: dict) -> str:
+    """
+    段階が「不明」の規制についての断り書き。
+
+    ダウンロードできるGeoJSONに道路の線形（LineString）だけが入っていて
+    属性が無いレコードで、何の規制かは元データから分からない。件数を
+    黙って混ぜると「道路種別が取れなかった」ように見えるので、
+    地図の下でそのことを明記する。
+    """
+    items = [i for i in data["items"] if i["道路の段階"] == "不明"]
+    if not items:
+        return ""
+    stamps = sorted({i["初出時点"] for i in items})
+    return (
+        f"**道路種別「不明」の{len(items)}件について**: "
+        "配布されているGeoJSONに道路の線形（LineString）だけが入っていて、"
+        "道路種別・路線名・区間・規制内容・開始日時などの属性を一切持たない"
+        "通行規制です。そのため、どの道路のどんな規制なのかは元データから"
+        f"分かりません（{stamps[0]} 以降の配布分に現れ、いずれも解除済み）。"
+        "各件の中身は、このページ下の「規制の一覧」で確認できます。"
+    )
+
+
 def regulation_table(data: dict) -> pd.DataFrame:
     return pd.DataFrame([
         {
