@@ -54,7 +54,7 @@ SELECTION_ALT_COLORS = ["#ff5fa2", "#7ac70c"]  # ピンク / ライムグリー�
 # 観測点マーカーのツールチップに必ず入れる定型句。クリックされた図形が
 # 観測点マーカーかどうかを、この文字列で判定する（point_id_from_tooltip）。
 # 表示と判定でずれないよう1か所に置く。
-POINT_TOOLTIP_HINT = "（クリックで時系列に表示/解除）"
+POINT_TOOLTIP_HINT = "（クリックで交通量のグラフに表示/解除）"
 # 交通量API利用規約（2025-05-12施行）が求める記載。
 #   第5条1項: サービス提供時、エンドユーザーが利用の度に確認できる位置に明示
 #   第5条2項: 加工して利用する場合の出典
@@ -1593,7 +1593,7 @@ def render_timeseries(
     StreamlitDuplicateElementId で落ちる（新しめのStreamlitで顕在化する）。
     """
     if not selected_points:
-        st.info("上のプルダウンから選ぶか、地図上の丸いマーカーをクリックして観測点を選ぶと、ここに時系列が表示されます（最大2地点まで比較可）。")
+        st.info("上のプルダウンから選ぶか、地図上の丸いマーカーをクリックして観測点を選ぶと、ここに交通量の時系列変化が表示されます（最大2地点まで比較可）。")
         return
     if observations.empty:
         st.warning("このビューのデータがまだ生成されていません。`python fetch_and_prepare.py` を実行してください。")
@@ -1774,8 +1774,8 @@ def render_mlit_beta_tab(point_summary: pd.DataFrame, point_labels: dict,
     st.caption(
         "**ベータ版**です。地図の通行規制を"
         f"[{data['source_name']}]({data['source_url']})の配布データだけで作り直し、"
-        "それ以外（観測点・異常度・時系列）は「地図・時系列」タブと同じものを"
-        "出しています。規制の収録範囲が違うので、同じ観測点でも見え方が変わります。",
+        "それ以外（観測点・異常度・交通量のグラフ）は「地図・交通量の時系列変化」タブと"
+        "同じものを出しています。規制の収録範囲が違うので、同じ観測点でも見え方が変わります。",
         unsafe_allow_html=False,
     )
 
@@ -1820,7 +1820,7 @@ def render_mlit_beta_tab(point_summary: pd.DataFrame, point_labels: dict,
         range_names = list(TIMESERIES_RANGES.keys())
         saved_range = st.session_state.get("_ts_range_beta", TIMESERIES_DEFAULT_RANGE)
         range_name = st.selectbox(
-            "時系列の表示期間", range_names,
+            "交通量のグラフの表示期間", range_names,
             index=(
                 range_names.index(saved_range) if saved_range in range_names
                 else range_names.index(TIMESERIES_DEFAULT_RANGE)
@@ -1840,7 +1840,7 @@ def render_mlit_beta_tab(point_summary: pd.DataFrame, point_labels: dict,
 
     col_map, col_ts = st.columns([2, 3], gap="large")
     with col_ts:
-        st.subheader("選択観測点の時系列（平常時 vs 観測実績）")
+        st.subheader("選択観測点の交通量の時系列変化（平常時 vs 観測実績）")
     with col_map:
         st.subheader("常時観測点別の異常度 × 通行規制")
         # 地図の上は色分けだけにする。件数の表は縦に場所を取って地図を
@@ -1868,7 +1868,7 @@ def render_mlit_beta_tab(point_summary: pd.DataFrame, point_labels: dict,
         st.caption(
             "既定では規制中だけを出しています（地図の右下のレイヤ一覧で切り替え。"
             "一覧の「高速」「国道」「県・市町村道」は上の3段階の略記）。"
-            "観測点の描き方は「地図・時系列」タブと同じです。"
+            "観測点の描き方は「地図・交通量の時系列変化」タブと同じです。"
         )
         note = mlit_map_view.unknown_level_note(data)
         if note:
@@ -2158,8 +2158,8 @@ def main():
 
     tab_overview, tab_mlit, tab_dl = st.tabs(
         [
-            "地図・時系列",
-            "地図・時系列（通れる道マップ版・ベータ）",
+            "地図・交通量の時系列変化",
+            "地図・交通量の時系列変化（通れる道マップ版・ベータ）",
             "データダウンロード",
         ]
     )
@@ -2216,7 +2216,7 @@ def main():
                     "_timeseries_range_choice", TIMESERIES_DEFAULT_RANGE
                 )
                 range_name = st.selectbox(
-                    "時系列の表示期間",
+                    "交通量のグラフの表示期間",
                     range_names,
                     index=(
                         range_names.index(saved_range) if saved_range in range_names
@@ -2251,7 +2251,7 @@ def main():
             # あわせて、選択内容をウィジェット以外のキーにも控えておき、
             # 状態が落ちても index で復元できるようにする。
             with col_ts:
-                st.subheader("選択観測点の時系列（平常時 vs 観測実績）")
+                st.subheader("選択観測点の交通量の時系列変化（平常時 vs 観測実績）")
 
             with col_map:
                 st.subheader("常時観測点別の異常度 × 通行規制")
