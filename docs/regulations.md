@@ -121,7 +121,7 @@
 
 ### 規制を追加するとき
 
-高速道路（NEXCO西日本）については、**新しい報が出ていないかを1日2回（日本時間9:00と19:00）自動で見に行きます**（[`.github/workflows/check-nexco-reports.yml`](../.github/workflows/check-nexco-reports.yml)）。NEXCO西日本のトップページに並ぶPDFの表題から「第○報」を拾い、手元に無い番号があれば `data/nexco_west_regulations/` に保存してコミットし、転記が必要なことをIssueに出します。手で確認するときは次を実行します。
+高速道路（NEXCO西日本）については、**新しい報が出ていないかを1日2回（日本時間9:00と19:00）自動で見に行きます**（[`.github/workflows/check-nexco-reports.yml`](../.github/workflows/check-nexco-reports.yml)）。NEXCO西日本のトップページに並ぶPDFの表題から「第○報」を拾い、手元に無い番号があれば `data/nexco_west_regulations/` に保存し、`auto/nexco-report` ブランチから**mainへのプルリクエストを出します**（mainへ直接コミットはしません）。出先からでも中身を見てマージできるようにするためです。すでに開いているPRがあるときは、そこに追記します。手で確認するときは次を実行します。
 
 ```bash
 python scripts/check_nexco_reports.py --dry-run   # 見るだけ

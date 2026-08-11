@@ -10,7 +10,7 @@ on:
 
 permissions:
   contents: write
-  issues: write
+  pull-requests: write
 
 jobs:
   check:
@@ -28,34 +28,43 @@ jobs:
         id: check
         run: python scripts/check_nexco_reports.py | tee check.log
 
-      - name: Commit new PDFs
-        if: steps.check.outputs.new_count != '0'
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add data/nexco_west_regulations
-          git commit -m "NEXCO西日本の新しい報を保存（${{ steps.check.outputs.new_list }}）"
-          git push
-
-      # 転記が必要なことを課題として残す。PDFを置いただけでは
-      # 地図に反映されないので、気づける形にしておく。
-      - name: Open an issue for transcription
+      # mainへ直接コミットせず、専用ブランチに載せてプルリクエストにする。
+      # 出先からでも中身を見て、スマホのGitHubアプリでマージできる。
+      - name: Open a pull request
         if: steps.check.outputs.new_count != '0'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BRANCH: auto/nexco-report
         run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git checkout -B "$BRANCH"
+          git add data/nexco_west_regulations
+          git commit -m "NEXCO西日本の新しい報を保存（${{ steps.check.outputs.new_list }}）"
+          git push --force-with-lease -u origin "$BRANCH"
+
           {
             echo "NEXCO西日本のニュースリリースに新しい報が出ていたので、PDFを"
-            echo "\`data/nexco_west_regulations/\` に保存しました（${{ steps.check.outputs.new_list }}）。"
+            echo "\`data/nexco_west_regulations/\` に追加しました"
+            echo "（${{ steps.check.outputs.new_list }}）。"
             echo ""
-            echo "**この時点では地図に反映されていません。** 通行止めの区間・日時・"
-            echo "緊急車両の通行可能区間を読み取って \`data/nexco_regulations.json\` に"
-            echo "転記すると反映されます（手順は docs/regulations.md）。"
+            echo "**このPRをマージしても、地図の規制はまだ変わりません。**"
+            echo "通行止めの区間・日時・緊急車両の通行可能区間を読み取って"
+            echo "\`data/nexco_regulations.json\` に転記すると反映されます"
+            echo "（手順は docs/regulations.md）。PDFを先に取り込んでおくのは、"
+            echo "配布元から消えても後から転記できるようにするためです。"
             echo ""
+            echo "実行ログ:"
             echo '```'
             cat check.log
             echo '```'
-          } > issue.md
-          gh issue create \
-            --title "NEXCO西日本の新しい報の転記（${{ steps.check.outputs.new_list }}）" \
-            --body-file issue.md
+          } > pr.md
+
+          if [ -n "$(gh pr list --head "$BRANCH" --state open --json number -q '.[].number')" ]; then
+            # すでに開いているPRがあれば、そこに追記する（PRを増やさない）
+            gh pr comment "$BRANCH" --body-file pr.md
+          else
+            gh pr create --base main --head "$BRANCH" \
+              --title "NEXCO西日本の新しい報（${{ steps.check.outputs.new_list }}）" \
+              --body-file pr.md
+          fi
