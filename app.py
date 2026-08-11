@@ -1835,10 +1835,9 @@ def render_mlit_beta_tab(point_summary: pd.DataFrame, point_labels: dict,
         st.subheader("選択観測点の時系列（平常時 vs 観測実績）")
     with col_map:
         st.subheader("常時観測点別の異常度 × 通行規制")
-        st.markdown(
-            mlit_map_view.legend_html(data) + mlit_map_view.summary_html(data),
-            unsafe_allow_html=True,
-        )
+        # 地図の上は色分けだけにする。件数の表は縦に場所を取って地図を
+        # 押し下げるので、地図の下に置く。
+        st.markdown(mlit_map_view.legend_html(data), unsafe_allow_html=True)
         base_map = mlit_map_view.build_map(
             data,
             center=_map_center(point_summary, mainshock),
@@ -1857,10 +1856,10 @@ def render_mlit_beta_tab(point_summary: pd.DataFrame, point_labels: dict,
             ],
             key="mlit_beta_map_v1",
         )
+        st.markdown(mlit_map_view.summary_html(data), unsafe_allow_html=True)
         st.caption(
-            "色が道路の段階（高速自動車国道／一般国道／県道・市区町村道）、"
-            "破線が解除済みです。既定では規制中だけを出しています"
-            "（地図の右下のレイヤ一覧で切り替え）。"
+            "既定では規制中だけを出しています（地図の右下のレイヤ一覧で切り替え。"
+            "一覧の「高速」「国道」「県・市町村道」は上の3段階の略記）。"
             "観測点の描き方は「地図・時系列」タブと同じです。"
         )
 
@@ -1954,6 +1953,33 @@ def main():
         "@media (max-width: 900px){"
         '[data-testid="stHorizontalBlock"]:has([data-testid="stMultiSelect"])'
         "{position:static;border-bottom:none;}}"
+        # ページ切り替えのタブ。既定は文字の下に細い線が付くだけで、
+        # どれが選べるのか・いまどれを見ているのかが分かりにくい。
+        # 選んでいないタブを一段引っ込め、選んでいるタブを手前に浮かせる。
+        # 入れ子のタブ（列定義書）にも同じ見た目が掛かるが、あちらも
+        # 切り替えの操作なので揃っていて困らない。
+        'div[data-baseweb="tab-list"]'
+        "{gap:6px;border-bottom:1px solid rgba(130,130,130,0.35);"
+        "padding:4px 2px 0 2px;}"
+        'div[data-baseweb="tab-list"]>button'
+        "{border:1px solid rgba(130,130,130,0.35);border-bottom:none;"
+        "border-radius:7px 7px 0 0;padding:6px 14px;margin-bottom:-1px;"
+        "background:rgba(130,130,130,0.10);"
+        "box-shadow:inset 0 -3px 5px -4px rgba(0,0,0,0.45);"
+        "transition:background .12s, transform .12s;}"
+        'div[data-baseweb="tab-list"]>button:hover'
+        "{background:rgba(130,130,130,0.18);}"
+        # 選択中はページと地続きに見せる（下線を消して手前に出す）
+        'div[data-baseweb="tab-list"]>button[aria-selected="true"]'
+        "{background:var(--background-color,#ffffff);"
+        "border-color:rgba(130,130,130,0.55);font-weight:700;"
+        "box-shadow:0 -2px 6px -2px rgba(0,0,0,0.30);transform:translateY(-1px);}"
+        "@media (prefers-color-scheme: dark){"
+        'div[data-baseweb="tab-list"]>button[aria-selected="true"]'
+        "{background:var(--background-color,#0e1117);}}"
+        # 既定の下線（赤いハイライト）は枠と二重になるので消す
+        'div[data-baseweb="tab-highlight"],div[data-baseweb="tab-border"]'
+        "{display:none;}"
         "</style>",
         unsafe_allow_html=True,
     )
@@ -1964,7 +1990,7 @@ def main():
         )
         st.stop()
 
-    # 異常検知（zスコア・地図の色分け・異常検知一覧）は1時間値ベースで定義する。
+    # 異常検知（zスコア・地図の色分け）は1時間値ベースで定義する。
     # 時系列図の実績は既定で5分間値を使う（load_observationsで別途読み込む）。
     observations = load_observations("observations_hourly.parquet")
     quake_info = load_quake_info()
@@ -2080,11 +2106,10 @@ def main():
             "推計震度分布図は地震発生直後に発表されたもの（発表がない地震ではリンク先に情報がない場合があります）。"
         )
 
-    tab_overview, tab_mlit, tab_list, tab_dl = st.tabs(
+    tab_overview, tab_mlit, tab_dl = st.tabs(
         [
             "地図・時系列",
             "地図・時系列（通れる道マップ版・ベータ）",
-            "異常検知一覧",
             "データダウンロード",
         ]
     )
@@ -2404,32 +2429,6 @@ def main():
                 )
 
     # ------------------------------------------------------------------
-    # 異常検知一覧タブ
-    # ------------------------------------------------------------------
-    with tab_list:
-        st.subheader("異常検知結果一覧（地震発生後・1時間値ベース）")
-        anomalies = observations[observations["is_anomaly"]].sort_values("datetime")
-        st.write(f"検知件数: {len(anomalies)} 件")
-        st.caption(
-            "1時間値の実績と、同じ日区分の平常時（月/火/水/木/金/土/日祝の各8日分）の"
-            "1時間値の平均・標準偏差を比べ、|zスコア| >= 2 を異常としています。"
-            "地図の色分けもこの判定に基づきます。"
-        )
-        display_cols = [
-            "point_code", "point_id", "datetime", "traffic_up", "traffic_down",
-            "baseline_mean_up", "baseline_mean_down", "z_up", "z_down",
-            "distance_km_from_epicenter",
-        ]
-        display_cols = [c for c in display_cols if c in anomalies.columns]
-        st.dataframe(anomalies[display_cols], use_container_width=True, height=500)
-        st.download_button(
-            "CSVダウンロード",
-            anomalies[display_cols].to_csv(index=False).encode("utf-8-sig"),
-            file_name="kumamoto_traffic_anomalies.csv",
-            mime="text/csv",
-        )
-
-    # ------------------------------------------------------------------
     # データダウンロードタブ
     # ------------------------------------------------------------------
     with tab_dl:
@@ -2477,7 +2476,7 @@ def main():
                 "異常検知の入力データ（1時間値＋平常時＋zスコア）",
                 observations,
                 "kumamoto_observations_hourly.csv",
-                "地図の色分けと異常検知一覧の根拠になっている表そのものです。",
+                "地図の色分けの根拠になっている表そのものです。",
             ),
         ]
 

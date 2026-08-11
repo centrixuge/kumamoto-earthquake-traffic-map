@@ -34,6 +34,12 @@ LEVELS = [
 ]
 LEVEL_COLOR = {name: color for name, color, _ in LEVELS}
 LEVEL_WEIGHT = {name: weight for name, _, weight in LEVELS}
+# レイヤ一覧に出す短い名前。正式な呼び方は凡例と件数の表に出している。
+SHORT_LEVEL = {
+    "高速自動車国道": "高速",
+    "一般国道": "国道",
+    "県道・市区町村道": "県・市町村道",
+}
 
 MAP_CENTER = [32.72, 130.85]
 MAP_ZOOM = 9
@@ -93,19 +99,34 @@ def build_map(data: dict, center=None, zoom: int = None,
     folium.TileLayer(
         "OpenStreetMap", name="OpenStreetMap", opacity=0.55, control=False,
     ).add_to(fmap)
-    # 規制の線に載っているツールチップが、下の観測点マーカーのクリックを
-    # 奪わないようにする（本家の ⊗ と同じ扱い）。
+    # 「地図・時系列」タブと同じCSSを当てる。これが無いと、st_folium が
+    # 地図divに焼き込む固定幅と実際のiframe幅がずれ、右下のレイヤ一覧が
+    # 地図の外へはみ出す（レイヤ名が長いほど顕著に出る）。
     fmap.get_root().header.add_child(folium.Element(
-        "<style>.leaflet-tooltip{pointer-events:none;}</style>"
+        "<style>"
+        "#map_div{width:100% !important;}"
+        # 規制の線のツールチップが、下にある観測点マーカーのクリックを
+        # 奪わないようにする
+        ".leaflet-tooltip{pointer-events:none;width:max-content;max-width:260px;"
+        "white-space:normal;font-size:11.5px;line-height:1.5;padding:5px 8px;}"
+        ".leaflet-control-layers{font-size:12px;max-width:calc(100vw - 28px);}"
+        ".leaflet-control-layers-overlays label,"
+        ".leaflet-control-layers-overlays label>span{white-space:nowrap;}"
+        ".leaflet-control-layers-overlays label>span>span"
+        "{white-space:normal;overflow-wrap:anywhere;}"
+        "</style>"
     ))
 
     # レイヤは「道路の段階 × 状態」。規制中を上、解除済みをその下に置き、
     # 既定では規制中だけを出す（現在の地図と同じ並べ方）。
+    # 名前は短くする。長いとレイヤ一覧の幅がそれに引きずられて、
+    # 地図の右下で場所を取る（本家で県・市町村道の行を詰めたのと同じ理由）。
     layers = {}
     for state in ("規制中", "解除済み"):
         for level, _, _ in LEVELS:
             layers[(level, state)] = folium.FeatureGroup(
-                name=f"{level}：{state}", show=(state == "規制中")
+                name=f"{SHORT_LEVEL.get(level, level)}：{state}",
+                show=(state == "規制中"),
             )
 
     used = set()
