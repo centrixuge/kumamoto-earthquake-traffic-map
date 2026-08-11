@@ -274,9 +274,55 @@ def regulation_csv(data: dict) -> bytes:
     return df.to_csv(index=False).encode("utf-8-sig")
 
 
+def regulation_geojson(data: dict) -> bytes:
+    """
+    一覧をGeoJSON（FeatureCollection）にする。
+
+    配布元のGeoJSONは時点ごとに分かれていて、属性の並びも時点で違う。
+    こちらは時点をまたいで突き合わせた結果なので、1件に線形と、
+    状態（規制中／解除済み）・初出／最終確認の時点まで入る。
+    GISでそのまま開ける形にしておく。
+    """
+    # 「災害前から」は画面に出していない（この配布データは今回の災害に
+    # 限ったもので該当が0件、開始日時を持たないレコードもあるため）。
+    # 出す側と出さない側で中身が食い違わないよう、書き出しからも外す。
+    drop = {"geometry", "災害前から"}
+    # 項目名はCSVと揃える（並べて見たときに同じものだと分かるように）
+    rename = {"道路種別": "道路種別（元データ）", "解除確認時点": "解除の確認時点"}
+    features = []
+    for item in data["items"]:
+        props = {
+            rename.get(k, k): v for k, v in item.items() if k not in drop
+        }
+        features.append({
+            "type": "Feature",
+            "geometry": item["geometry"],
+            "properties": props,
+        })
+    body = {
+        "type": "FeatureCollection",
+        # 出典と作り方をファイル自体に残す（GeoJSONの仕様外の項目だが、
+        # 読み込み側は無視するだけなので害がない）
+        "source_name": data["source_name"],
+        "source_url": data["source_url"],
+        "snapshots": data["snapshots"],
+        "latest_snapshot": data["latest_snapshot"],
+        "note": data["note"],
+        "features": features,
+    }
+    return json.dumps(body, ensure_ascii=False).encode("utf-8")
+
+
+def _stamp(data: dict) -> str:
+    return data["latest_snapshot"].replace("-", "").replace(" ", "_").replace(":", "")
+
+
 def csv_file_name(data: dict) -> str:
-    stamp = data["latest_snapshot"].replace("-", "").replace(" ", "_").replace(":", "")
-    return f"kumamoto_mlit_map_regulations_{stamp}.csv"
+    return f"kumamoto_mlit_map_regulations_{_stamp(data)}.csv"
+
+
+def geojson_file_name(data: dict) -> str:
+    return f"kumamoto_mlit_map_regulations_{_stamp(data)}.geojson"
 
 
 def source_note(data: dict) -> str:

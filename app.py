@@ -1911,17 +1911,29 @@ def render_mlit_beta_tab(point_summary: pd.DataFrame, point_labels: dict,
             mlit_map_view.regulation_table(data),
             use_container_width=True, height=320,
         )
-        st.download_button(
-            f"CSVダウンロード（{len(data['items'])}件）",
-            mlit_map_view.regulation_csv(data),
-            file_name=mlit_map_view.csv_file_name(data),
-            mime="text/csv",
-            key="mlit_map_csv",
-        )
+        col_csv, col_geo = st.columns(2)
+        with col_csv:
+            st.download_button(
+                f"CSVダウンロード（{len(data['items'])}件）",
+                mlit_map_view.regulation_csv(data),
+                file_name=mlit_map_view.csv_file_name(data),
+                mime="text/csv",
+                key="mlit_map_csv",
+            )
+        with col_geo:
+            st.download_button(
+                f"GeoJSONダウンロード（{len(data['items'])}件）",
+                mlit_map_view.regulation_geojson(data),
+                file_name=mlit_map_view.geojson_file_name(data),
+                mime="application/geo+json",
+                key="mlit_map_geojson",
+            )
         st.caption(
-            "CSVには、画面の表に出していない識別子（id）・市町村・規制種別・"
-            "初出時点も入れています。区間の線形（GeoJSONのLineString）は"
-            "CSVに収まらないので入れていません。"
+            "どちらにも、画面の表に出していない識別子（id）・市町村・規制種別・"
+            "初出時点を入れています。**区間の線形が入るのはGeoJSONだけ**です"
+            "（CSVの1セルには収まらないため）。GeoJSONは配布元のものと違い、"
+            "時点をまたいで突き合わせた結果なので、1件ごとに状態"
+            "（規制中／解除済み）と初出・最終確認の時点まで入ります。"
         )
         st.caption(mlit_map_view.source_note(data))
 
