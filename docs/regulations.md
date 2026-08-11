@@ -121,6 +121,15 @@
 
 ### 規制を追加するとき
 
+高速道路（NEXCO西日本）については、**新しい報が出ていないかを1日2回（日本時間9:00と19:00）自動で見に行きます**（[`.github/workflows/check-nexco-reports.yml`](../.github/workflows/check-nexco-reports.yml)）。NEXCO西日本のトップページに並ぶPDFの表題から「第○報」を拾い、手元に無い番号があれば `data/nexco_west_regulations/` に保存してコミットし、転記が必要なことをIssueに出します。手で確認するときは次を実行します。
+
+```bash
+python scripts/check_nexco_reports.py --dry-run   # 見るだけ
+python scripts/check_nexco_reports.py             # 新しい報のPDFを保存
+```
+
+**自動化するのはここまでで、中身の転記はしません。** 区間・日時・緊急車両の通行可能区間の読み取りには判断が要り、取り違えたまま自動で公開されるほうが、気づくのが遅れるより害が大きいためです。報番号の付いていないお知らせ（お盆の交通混雑、無料措置など）も対象外にしていますが、実行ログには残るので見落としにはなりません。
+
 新しい報が出たら、PDFを `data/qsr_regulations/`（直轄国道）または `data/nexco_west_regulations/`（高速道路）に置き、本文を確認して `data/mlit_regulations.json` / `data/nexco_regulations.json` の `items` に追記します。本文の確認には補助スクリプトを使えます（`pymupdf` が必要です。ダッシュボードの動作には不要）。
 
 ```bash

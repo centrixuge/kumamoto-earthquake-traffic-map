@@ -81,7 +81,7 @@ data/nexco_west_regulations/   NEXCO西日本の規制PDF（転記元。手動�
 data/mlit_r8kumamoto_map/      「通れる道マップ」の各時点の配布ZIP（ベータ版タブ用。手動で追加）
 data/archive/                  恒久アーカイブ（追記専用）: 5分値・1時間値・通行規制
 data/                          前処理済みデータ（parquet/json）のスナップショット
-.github/workflows/             定期自動取得（GitHub Actions）
+.github/workflows/             定期自動取得と、NEXCO西日本の新しい報の確認（GitHub Actions）
 requirements.txt               app.py 実行用の軽量な依存関係
 requirements-fetch.txt         fetch_and_prepare.py 実行用の追加依存関係（geopandas等）
 ```

@@ -1,0 +1,61 @@
+name: Check NEXCO reports
+
+on:
+  schedule:
+    # 日本時間の 9:00 と 19:00（UTCの 0:00 と 10:00）。
+    # GitHub Actionsのcronは混み具合で数分〜十数分遅れることがある。
+    - cron: "0 0 * * *"
+    - cron: "0 10 * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+  issues: write
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      # 新しい報が出ていればPDFを保存する。中身の転記はしない
+      # （区間や日時の読み取りには判断が要るため、人が行う）。
+      - name: Check NEXCO news releases
+        id: check
+        run: python scripts/check_nexco_reports.py | tee check.log
+
+      - name: Commit new PDFs
+        if: steps.check.outputs.new_count != '0'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add data/nexco_west_regulations
+          git commit -m "NEXCO西日本の新しい報を保存（${{ steps.check.outputs.new_list }}）"
+          git push
+
+      # 転記が必要なことを課題として残す。PDFを置いただけでは
+      # 地図に反映されないので、気づける形にしておく。
+      - name: Open an issue for transcription
+        if: steps.check.outputs.new_count != '0'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          {
+            echo "NEXCO西日本のニュースリリースに新しい報が出ていたので、PDFを"
+            echo "\`data/nexco_west_regulations/\` に保存しました（${{ steps.check.outputs.new_list }}）。"
+            echo ""
+            echo "**この時点では地図に反映されていません。** 通行止めの区間・日時・"
+            echo "緊急車両の通行可能区間を読み取って \`data/nexco_regulations.json\` に"
+            echo "転記すると反映されます（手順は docs/regulations.md）。"
+            echo ""
+            echo '```'
+            cat check.log
+            echo '```'
+          } > issue.md
+          gh issue create \
+            --title "NEXCO西日本の新しい報の転記（${{ steps.check.outputs.new_list }}）" \
+            --body-file issue.md
