@@ -49,19 +49,22 @@ MANUAL_NOTES = {
 }
 
 # 道路規制情報のレコードは、属性の組み合わせが何通りかある。
-# 判定に使う目印の属性と、その型の呼び名・説明。上から順に当てはめる。
+# 名前は「どの属性を持つか」だけで付けている。データのどこにも出所は
+# 書かれていないので、県が出したものか国が出したものかは分からない。
+# どの道路種別が入るかは推測せず、実数を「道路種別の内訳」列に出す。
+# 判定に使う目印の属性と、呼び名・説明。上から順に当てはめる。
 RECORD_TYPES = [
-    ("拡張", lambda k: "地整番号" in k,
-     "県フォーマットに、整備局名・規制変更_日時・迂回路/孤立集落/人身/物損/停電_有無"
-     "などを足したもの"),
-    ("方向あり", lambda k: "規制方向" in k or "規制延長_Km" in k,
-     "規制方向と規制延長_Kmを持つ。高速道路・直轄国道のレコード"),
+    ("災害詳細つき", lambda k: "地整番号" in k,
+     "住所・座標・開始日時に加えて、地整番号・整備局名・県番号・規制変更_日時/内容・"
+     "迂回路/孤立集落/人身/物損/停電_有無を持つ"),
+    ("方向・規制延長つき", lambda k: "規制方向" in k or "規制延長_Km" in k,
+     "住所・座標・開始日時に加えて、規制方向と規制延長_Kmを持つ"),
     ("区間名のみ", lambda k: "始点" in k and "始点住所" not in k,
-     "始点・終点がIC名で、座標も日時も無い。高速道路のレコード"),
+     "始点・終点が地点名（IC名など）。住所・座標・開始日時のいずれも持たない"),
     ("属性なし", lambda k: k <= {"name"},
      "整理IDだけで属性が無い線（紫・半透明）。何の規制かはデータから分からない"),
-    ("県フォーマット", lambda k: True,
-     "住所・緯度経度・規制開始_日時・延長_Kmを持つ。都道府県道/補助国道/市区町村道"),
+    ("住所・座標・日時", lambda k: True,
+     "住所・緯度経度・規制開始_日時・延長_Kmを持つ、最も多い型"),
 ]
 
 # 表示スタイルの属性（Leafletの描画用で、規制の中身ではない）
@@ -108,15 +111,22 @@ def scan_regulations(rows: list, data_dir: str) -> None:
             continue
         features = read_regulations(os.path.join(data_dir, row["file"]))
         counts, types, geoms = Counter(), Counter(), Counter()
+        roads = {}
         for feature in features:
             props = feature.get("properties", {})
             counts.update(props.keys())
-            types[classify({
+            label = classify({
                 k for k in props if not k.startswith(STYLE_KEYS_PREFIX)
-            })] += 1
+            })
+            types[label] += 1
+            # 型ごとにどの道路種別が入っているかは、推測せず数える
+            roads.setdefault(label, Counter())[
+                props.get("道路種別") or "(値なし)"
+            ] += 1
             geoms[(feature.get("geometry") or {}).get("type", "なし")] += 1
         row["reg"] = {
-            "n": len(features), "keys": counts, "types": types, "geoms": geoms,
+            "n": len(features), "keys": counts, "types": types,
+            "roads": roads, "geoms": geoms,
         }
 
 
@@ -318,20 +328,37 @@ def build_type_sheet(wb, rows: list, border, head_fill) -> None:
     """レコードの型 × 時点。値はその型の地物の件数。"""
     rows = _reg_rows(rows)
     ws = wb.create_sheet("規制情報の型")
-    _matrix_header(ws, rows, "レコードの型", border, head_fill, ["説明"])
+    _matrix_header(
+        ws, rows, "レコードの型", border, head_fill,
+        ["持っている属性", "道路種別の内訳（全時点の合計）"],
+    )
+
+    # 型ごとの道路種別は、全時点を合算した実数を出す
+    totals = {}
+    for r in rows:
+        for label, counter in r["reg"]["roads"].items():
+            totals.setdefault(label, Counter()).update(counter)
 
     line = 2
     for label, _, desc in RECORD_TYPES:
         c = ws.cell(row=line, column=1, value=label)
         c.font = Font(name=FONT, size=9, bold=True)
         c.border = border
+        c.alignment = Alignment(vertical="center")
         c = ws.cell(row=line, column=2, value=desc)
+        c.font = Font(name=FONT, size=9)
+        c.border = border
+        c.alignment = Alignment(wrap_text=True, vertical="center")
+        breakdown = "、".join(
+            f"{k} {v}" for k, v in totals.get(label, Counter()).most_common()
+        )
+        c = ws.cell(row=line, column=3, value=breakdown or "－")
         c.font = Font(name=FONT, size=9)
         c.border = border
         c.alignment = Alignment(wrap_text=True, vertical="center")
         for j, r in enumerate(rows):
             n = r["reg"]["types"].get(label, 0)
-            c = ws.cell(row=line, column=3 + j, value=n if n else "－")
+            c = ws.cell(row=line, column=4 + j, value=n if n else "－")
             c.font = Font(name=FONT, size=9, color=None if n else "BFBFBF")
             c.alignment = Alignment(horizontal="center")
             c.border = border
@@ -341,11 +368,12 @@ def build_type_sheet(wb, rows: list, border, head_fill) -> None:
     c = ws.cell(row=line, column=1, value="合計")
     c.font = Font(name=FONT, size=9, bold=True)
     c.border = border
-    ws.cell(row=line, column=2).border = border
+    for col in (2, 3):
+        ws.cell(row=line, column=col).border = border
     for j in range(len(rows)):
-        letter = get_column_letter(3 + j)
+        letter = get_column_letter(4 + j)
         c = ws.cell(
-            row=line, column=3 + j,
+            row=line, column=4 + j,
             value=f"=SUM({letter}2:{letter}{line - 1})",
         )
         c.font = Font(name=FONT, size=9, bold=True)
@@ -356,34 +384,42 @@ def build_type_sheet(wb, rows: list, border, head_fill) -> None:
     c = ws.cell(row=line, column=1, value="ジオメトリ")
     c.font = Font(name=FONT, size=9, bold=True)
     c.border = border
-    ws.cell(row=line, column=2).border = border
+    for col in (2, 3):
+        ws.cell(row=line, column=col).border = border
     for j, r in enumerate(rows):
         geoms = r["reg"]["geoms"]
         text = "線" if set(geoms) == {"LineString"} else "＋".join(
             f'{"線" if g == "LineString" else "点" if g == "Point" else g}{n}'
             for g, n in geoms.items()
         )
-        c = ws.cell(row=line, column=3 + j, value=text)
+        c = ws.cell(row=line, column=4 + j, value=text)
         c.font = Font(name=FONT, size=9)
         c.alignment = Alignment(horizontal="center")
         c.border = border
 
     notes = [
-        "型は属性の組み合わせで判定している（上から順に当てはめる）。"
-        "道路種別の値ではないので、実際の管理者と1対1ではない。",
-        "「区間名のみ」は座標も規制開始日時も持たないため、線形と期間はこのデータからは作れない。",
+        "型の名前は「どの属性を持つか」だけで付けている。データのどこにも出所は"
+        "書かれていないので、県が出したものか国が出したものかは分からない。"
+        "どの道路種別が入るかも推測せず、実数をC列に出している。",
+        "判定は上から順に当てはめる（地整番号があれば「災害詳細つき」、"
+        "無くて規制方向があれば「方向・規制延長つき」…）。",
+        "「区間名のみ」は座標も規制開始日時も持たないため、線形と期間はこのデータからは作れない"
+        "（ジオメトリの線はあるので、地図に出すことはできる）。",
         "「属性なし」は整理IDだけの紫の線で、07/31〜08/01の3時点にだけ現れる。",
-        "「拡張」は08/04以降にだけ現れ、迂回路・孤立集落・人身・物損・停電の有無を持つ。",
+        "「災害詳細つき」は08/04以降の3件だけで、いずれも道路種別は補助国道。",
+        "道路種別の値そのものにも揺れがある（「一般国道」と「補助国道」「直轄国道」が混在、"
+        "路線名が入っている1件など）。",
     ]
     for j, text in enumerate(notes):
         c = ws.cell(row=line + 2 + j, column=1, value=text)
         c.font = Font(name=FONT, size=9, color="595959")
 
-    ws.column_dimensions["A"].width = 16
-    ws.column_dimensions["B"].width = 52
+    ws.column_dimensions["A"].width = 18
+    ws.column_dimensions["B"].width = 48
+    ws.column_dimensions["C"].width = 40
     for j in range(len(rows)):
-        ws.column_dimensions[get_column_letter(3 + j)].width = 6
-    ws.freeze_panes = "C2"
+        ws.column_dimensions[get_column_letter(4 + j)].width = 6
+    ws.freeze_panes = "D2"
 
 
 def main() -> None:
