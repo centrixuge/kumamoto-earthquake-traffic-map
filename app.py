@@ -2018,6 +2018,10 @@ def main():
                 # 凡例は3行に圧縮する。見出しを独立行にすると1項目ごとに
                 # 行が増えて余白ばかりになるので、見出しも同じ行に入れて
                 # 「分類: 項目 項目 …」の形にし、文字も小さくする。
+                # 件数はここには入れない。全ての項目に付けられるわけでは
+                # なく（色は区分ごとの数を数えていない）、付いたり付かなかったり
+                # すると何の数なのかがかえって分からなくなる。件数は地図の下の
+                # データソースの表と、リンク先の一覧のほうに置いている。
                 n_points = len(point_summary)
                 n_no_data = int(point_summary["max_abs_z"].isna().sum())
                 _mlit_items = (mlit or {}).get("items", [])
@@ -2027,16 +2031,9 @@ def main():
                     if not i.get("path") and i.get("affected_point_codes")
                 )
                 # 線も▲も出せない規制。PDFが区間をIC名で示していない
-                # （キロポストや地名だけの）ものがこれにあたる。黙って
-                # 落とすと、地図を見た人は「直轄国道の規制はこれで全部」と
-                # 受け取ってしまうので、件数を明示する。
+                # （キロポストや地名だけの）ものがこれにあたる。
                 n_mlit_spot = sum(
                     1 for i in _mlit_items if i.get("point") and not i.get("path")
-                )
-                _nexco_items = (nexco or {}).get("items", [])
-                n_nexco_line = sum(1 for i in _nexco_items if i.get("path"))
-                n_mlit_hidden = (
-                    len(_mlit_items) - n_mlit_line - n_mlit_point - n_mlit_spot
                 )
                 n_ended += sum(
                     1 for i in _mlit_items if i.get("path") and i.get("end_timestamp")
@@ -2054,7 +2051,7 @@ def main():
                 if n_pre:
                     color_items.append(
                         f'{_sw("width:20px;height:3px;background:#5b7c99;opacity:0.55;")}'
-                        f' 地震前からの規制 {n_pre}件（工事・過去の災害）'
+                        ' 地震前からの規制（工事・過去の災害）'
                     )
                 if n_mlit_line:
                     # 規制区間の端点となるICも点で置いている。
@@ -2068,41 +2065,39 @@ def main():
                 # 場所が区間で示されているか地点でしか分からないか。
                 shape_items = [
                     '<span style="color:#555;font-weight:700;">⊗</span>'
-                    f' 地震後に始まった規制（県 {n_post}件・直轄国道'
-                    f' {len(_mlit_items)}件・高速道路 {len(_nexco_items)}件。'
-                    '色は上の区分）',
+                    ' 地震後に始まった規制（色は上の区分）',
                     f'{_sw("width:20px;height:4px;background:#95a5a6;")} 実線・外円が実線は規制中',
                 ]
                 if n_ended:
                     shape_items.append(
                         f'{_sw("width:20px;height:0;border-top:4px dashed #95a5a6;")}'
-                        f' 破線・外円が点線は解除済み {n_ended}件'
+                        ' 破線・外円が点線は解除済み'
                     )
                 if n_mlit_spot:
                     shape_items.append(
-                        f'区間は線、地点だけ分かるものは⊗のみ {n_mlit_spot}件（位置は概略）'
+                        '区間は線、地点だけ分かるものは⊗のみ（位置は概略）'
                     )
                 if n_mlit_point:
                     shape_items.append(
                         '<span style="color:#b00000;font-weight:900;">▲</span>'
-                        f' 直轄国道で線形が作れないもの {n_mlit_point}件（該当観測点のすぐ上）'
+                        ' 直轄国道で線形が作れないもの（該当観測点のすぐ上）'
                     )
                 # 形（道路の種別）の凡例は地図の中に置いてあるのでここには出さない
                 point_items = [
                     f'{_sw("width:30px;height:11px;border-radius:6px;border:1px solid #aaa;"
                           "background:linear-gradient(to right,#deebf7,#08306b);")}'
-                    f' 濃く大きいほど異常度|z|が大きい {n_points - n_no_data}点',
+                    ' 濃く大きいほど異常度|z|が大きい',
                 ]
                 if n_no_data:
                     point_items.append(
                         f'{_sw("width:11px;height:11px;border-radius:50%;background:#f0f0f0;"
                               "border:2px dashed #777;")}'
-                        f' 枠が灰色の破線なら地震後が欠測 {n_no_data}点'
+                        ' 枠が灰色の破線なら地震後が欠測'
                     )
                 rows = [
                     ("規制の色", color_items),
                     ("規制の印と状態", shape_items),
-                    (f"観測点 {n_points}点", point_items),
+                    ("観測点", point_items),
                 ]
                 legend_html = "".join(
                     '<div style="display:flex;flex-wrap:wrap;gap:1px 12px;align-items:center;">'
