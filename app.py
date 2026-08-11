@@ -1437,18 +1437,21 @@ def build_points_feature_group(
             # 地図・異常判定は1時間値ベースなので、時刻も1時間値のものだと明示する
             detail = (
                 f"地震後のデータがありません（欠測）<br>"
-                f"最後に値があった時刻（1時間値）: {last_at:%Y-%m-%d %H:%M}"
+                f"最後に値があった時刻（1時間値）:<br>{last_at:%Y-%m-%d %H:%M}"
                 if pd.notna(last_at) else "地震後のデータがありません（欠測）"
             )
         else:
             detail = (
-                f"最大|zスコア|: {row['max_abs_z']:.2f} / 異常件数: {int(row['n_anomaly'])}"
+                f"最大|zスコア|: {row['max_abs_z']:.2f}<br>"
+                f"異常件数: {int(row['n_anomaly'])}"
             )
         radius = _point_radius(row["max_abs_z"], max_z, is_selected)
         weight = 4 if is_selected else (2 if no_data else 1)
         fill_color = "#f0f0f0" if no_data else _severity_color(frac)
         fill_opacity = 0.6 if no_data else 0.85
-        tooltip = f"{label}{POINT_TOOLTIP_HINT}<br>{detail}"
+        # 定型句は行を分ける。地点名と続けて1行にすると、その1行が
+        # ツールチップの幅を決めてしまい、横に長い吹き出しになる。
+        tooltip = f"{label}<br>{POINT_TOOLTIP_HINT}<br>{detail}"
 
         if _is_square_point(row.get("road_type")):
             # CircleMarkerに角を出す方法はないので、DivIconの四角で描く。
@@ -1525,12 +1528,14 @@ def point_id_from_tooltip(tooltip, point_labels: dict):
 
     ツールチップはHTMLタグを除いたテキストになる（コンポーネント側の
     extractContent が textContent を取る）ので、先頭がラベル＋定型句かで見る。
+    改行（<br>）が消えるか空白になるかはコンポーネントの実装次第なので、
+    空白を全て落としてから突き合わせる。
     """
     if not tooltip:
         return None
-    text = str(tooltip).strip()
+    text = "".join(str(tooltip).split())
     for pid, label in (point_labels or {}).items():
-        if text.startswith(f"{label}{POINT_TOOLTIP_HINT}"):
+        if text.startswith("".join(f"{label}{POINT_TOOLTIP_HINT}".split())):
             return pid
     return None
 
