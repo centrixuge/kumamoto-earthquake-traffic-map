@@ -23,7 +23,7 @@ DATA_PATH = os.path.join(
     "data", "mlit_map_regulations.json",
 )
 
-# 道路の段階。現在の地図の観測点の描き分け（JARTICの道路種別
+# 道路種別（3区分にまとめたもの）。現在の地図の観測点の描き分け（JARTICの道路種別
 # 1＝高速自動車国道 / 3＝一般国道）に合わせ、観測点の無い
 # 県道・市区町村道を3つ目に置く。色はこの3段階に割り当てる。
 LEVELS = [
@@ -36,7 +36,7 @@ LEVEL_COLOR = {name: color for name, color, _ in LEVELS}
 LEVEL_WEIGHT = {name: weight for name, _, weight in LEVELS}
 
 # 色は規制の内容で分ける（「地図・交通量の時系列変化」タブと同じ考え方）。
-# 道路の段階はレイヤと線の太さで分かるので、色は内容に使う。
+# 道路種別はレイヤと線の太さで分かるので、色は内容に使う。
 # 元の地図の橙は「片側交互など」だが、この配布データには片側交互が
 # 1件も無く、104件すべて全面通行止め系だった。橙は緊急車両のみ通行可
 # （＝一部だけ通れる）に当てている。
@@ -81,14 +81,14 @@ def load_regulations() -> dict:
 
 def _style(item: dict) -> dict:
     """
-    色＝規制の内容、太さ＝道路の段階、実線／破線＝規制中／解除済み。
-    色の意味を「地図・交通量の時系列変化」タブと揃え、道路の段階は
+    色＝規制の内容、太さ＝道路種別、実線／破線＝規制中／解除済み。
+    色の意味を「地図・交通量の時系列変化」タブと揃え、道路種別は
     レイヤと線の太さで分かるようにする。
     """
     ended = item["状態"] == "解除済み"
     return {
         "color": CONTENT_COLOR.get(content_class(item), "#b0b7c3"),
-        "weight": LEVEL_WEIGHT.get(item["道路の段階"], 4),
+        "weight": LEVEL_WEIGHT.get(item["道路種別"], 4),
         "opacity": 0.45 if ended else 0.95,
         "dashArray": "6,8" if ended else None,
     }
@@ -112,7 +112,7 @@ def _tooltip(item: dict) -> str:
         for k, v in rows
     )
     return (
-        f"<b>{item['道路の段階']}</b>"
+        f"<b>{item['道路種別']}</b>"
         f"<table style='font-size:11px;border-collapse:collapse;'>{body}</table>"
     )
 
@@ -151,7 +151,7 @@ def build_map(data: dict, center=None, zoom: int = None,
         "</style>"
     ))
 
-    # レイヤは「道路の段階 × 状態」。規制中を上、解除済みをその下に置き、
+    # レイヤは「道路種別 × 状態」。規制中を上、解除済みをその下に置き、
     # 既定では規制中だけを出す（現在の地図と同じ並べ方）。
     # 名前は短くする。長いとレイヤ一覧の幅がそれに引きずられて、
     # 地図の右下で場所を取る（本家で県・市町村道の行を詰めたのと同じ理由）。
@@ -165,7 +165,7 @@ def build_map(data: dict, center=None, zoom: int = None,
 
     used = set()
     for item in data["items"]:
-        key = (item["道路の段階"], item["状態"])
+        key = (item["道路種別"], item["状態"])
         style = _style(item)
         folium.GeoJson(
             {"type": "Feature", "geometry": item["geometry"], "properties": {}},
@@ -190,11 +190,11 @@ def build_map(data: dict, center=None, zoom: int = None,
 
 def _counts(data: dict) -> pd.DataFrame:
     df = pd.DataFrame([
-        {"道路の段階": i["道路の段階"], "状態": i["状態"]} for i in data["items"]
+        {"道路種別": i["道路種別"], "状態": i["状態"]} for i in data["items"]
     ])
     order = [n for n, _, _ in LEVELS]
     table = (
-        df.pivot_table(index="道路の段階", columns="状態", aggfunc="size", fill_value=0)
+        df.pivot_table(index="道路種別", columns="状態", aggfunc="size", fill_value=0)
         .reindex(order).dropna(how="all").astype(int)
     )
     for state in ("規制中", "解除済み"):
@@ -208,11 +208,11 @@ def legend_html(data: dict) -> str:
     地図の上に置く凡例。件数は下の表に出すのでここには入れない。
 
     行は2つ。色＝規制の内容（「地図・交通量の時系列変化」タブと同じ意味）、
-    太さ＝道路の段階（レイヤの区切りと同じ）。実際に出てくる区分だけを
+    太さ＝道路種別（レイヤの区切りと同じ）。実際に出てくる区分だけを
     並べる（この配布データには片側交互が無いなど、区分は時期で変わる）。
     """
     present_content = {content_class(i) for i in data["items"]}
-    present_level = {i["道路の段階"] for i in data["items"]}
+    present_level = {i["道路種別"] for i in data["items"]}
 
     def _row(head: str, marks: str) -> str:
         return (
@@ -237,7 +237,7 @@ def legend_html(data: dict) -> str:
         '<div style="font-size:0.79rem;line-height:1.45;margin:0 0 4px 0;">'
         + _row("規制の色", color_marks)
         + _row(
-            "線の太さ（道路の段階）",
+            "線の太さ（道路種別）",
             width_marks
             + '<span style="white-space:nowrap;">'
             '<span style="display:inline-block;width:20px;height:0;'
@@ -260,7 +260,7 @@ def summary_html(data: dict) -> str:
     )
     return (
         '<table style="font-size:0.75rem;border-collapse:collapse;margin:0 0 6px 0;">'
-        f'<tr><th style="{td}text-align:left;">道路の段階</th>'
+        f'<tr><th style="{td}text-align:left;">道路種別</th>'
         f'<th style="{td}">規制中</th>'
         f'<th style="{td}color:#888;">解除済み</th></tr>{body}</table>'
     )
@@ -275,7 +275,7 @@ def unknown_level_note(data: dict) -> str:
     黙って混ぜると「道路種別が取れなかった」ように見えるので、
     地図の下でそのことを明記する。
     """
-    items = [i for i in data["items"] if i["道路の段階"] == "不明"]
+    items = [i for i in data["items"] if i["道路種別"] == "不明"]
     if not items:
         return ""
     stamps = sorted({i["初出時点"] for i in items})
@@ -292,8 +292,8 @@ def unknown_level_note(data: dict) -> str:
 def regulation_table(data: dict) -> pd.DataFrame:
     return pd.DataFrame([
         {
-            "道路の段階": i["道路の段階"],
-            "道路種別（元データ）": i["道路種別"],
+            "道路種別": i["道路種別"],
+            "道路種別（元データ）": i["道路種別（元データ）"],
             "路線名": i["路線名"],
             "区間": i["区間"],
             "規制内容": i["規制内容"],
@@ -316,8 +316,8 @@ def regulation_csv(data: dict) -> bytes:
     df = pd.DataFrame([
         {
             "id": i["id"],
-            "道路の段階": i["道路の段階"],
-            "道路種別（元データ）": i["道路種別"],
+            "道路種別": i["道路種別"],
+            "道路種別（元データ）": i["道路種別（元データ）"],
             "路線名": i["路線名"],
             "区間": i["区間"],
             "市町村": i["市町村"],
@@ -350,7 +350,7 @@ def regulation_geojson(data: dict) -> bytes:
     # 出す側と出さない側で中身が食い違わないよう、書き出しからも外す。
     drop = {"geometry", "災害前から"}
     # 項目名はCSVと揃える（並べて見たときに同じものだと分かるように）
-    rename = {"道路種別": "道路種別（元データ）", "解除確認時点": "解除の確認時点"}
+    rename = {"解除確認時点": "解除の確認時点"}
     features = []
     for item in data["items"]:
         props = {
@@ -395,7 +395,7 @@ def source_note(data: dict) -> str:
         f"そこに入っている規制情報は {data['latest_regulation_time']} 時点）。"
         "最新時点にも残っていれば「規制中」、途中で消えていれば"
         "「解除済み」としています。解除の時刻は配布の間隔（半日〜3日）より"
-        "細かくは分かりません。道路の段階は元データの「道路種別」をまとめたもので、"
+        "細かくは分かりません。道路種別は元データの「道路種別」をまとめたもので、"
         "高速自動車国道＝高速道路、一般国道＝直轄国道・補助国道・一般国道、"
         "県道・市区町村道＝都道府県道・市区町村道です。"
     )

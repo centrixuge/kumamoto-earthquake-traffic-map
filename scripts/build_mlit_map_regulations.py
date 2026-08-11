@@ -51,9 +51,10 @@ REGULATION_AS_OF = {
 # 道路規制情報のGeoJSON（分割されていることがある）
 REG_FILE = re.compile(r"^dourokisei\d*\.geojson$", re.I)
 
-# データの「道路種別」を3つの段階にまとめる。段階は現在のダッシュボードの
+# 元データの「道路種別」を3つにまとめ直す。区分は現在のダッシュボードの
 # 観測点の描き分け（JARTICの道路種別 1＝高速自動車国道 / 3＝一般国道）に
-# 合わせ、観測点の無い県道・市区町村道を3つ目に置く。
+# 合わせ、観測点の無い県道・市区町村道を3つ目に置く。まとめる前の値は
+# 「道路種別（元データ）」として各件に残す。
 # 「一般国道」の中で直轄と補助が分かれるが、JARTIC側は区別しないので束ねる。
 ROAD_LEVELS = [
     ("高速自動車国道", {"高速道路"}),
@@ -190,8 +191,8 @@ def build() -> dict:
             before_quake = started < QUAKE_AT
         results.append({
             "id": item["id"],
-            "道路の段階": road_level(props),
-            "道路種別": props.get("道路種別"),
+            "道路種別": road_level(props),
+            "道路種別（元データ）": props.get("道路種別"),
             "路線名": props.get("路線名"),
             "区間": " 〜 ".join(x for x in [
                 props.get("始点住所") or props.get("始点"),
@@ -214,7 +215,7 @@ def build() -> dict:
         })
 
     results.sort(key=lambda r: (
-        [n for n, _ in ROAD_LEVELS + [("不明", set())]].index(r["道路の段階"]),
+        [n for n, _ in ROAD_LEVELS + [("不明", set())]].index(r["道路種別"]),
         r["状態"] != "規制中",
         r["開始日時"] or "",
     ))
@@ -250,7 +251,7 @@ def main() -> None:
           f'規制情報は {data["latest_regulation_time"]} 時点）')
     print(f"通算の規制 {len(items)}件")
     for level, _ in ROAD_LEVELS + [("不明", set())]:
-        sub = [i for i in items if i["道路の段階"] == level]
+        sub = [i for i in items if i["道路種別"] == level]
         if not sub:
             continue
         active = sum(1 for i in sub if i["状態"] == "規制中")

@@ -33,7 +33,7 @@ def main() -> None:
             returned_objects=[], key="mlit_map_standalone",
         )
     with col_side:
-        st.markdown("**道路の段階ごとの件数**")
+        st.markdown("**道路種別ごとの件数**")
         st.markdown(mlit_map_view.summary_html(data), unsafe_allow_html=True)
 
     st.dataframe(
