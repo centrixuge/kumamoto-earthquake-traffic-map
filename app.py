@@ -819,6 +819,38 @@ def _x_circle_icon(color: str, ended: bool, size: int = 18) -> folium.DivIcon:
     )
 
 
+def _epicenter_icon(size: int = 30) -> folium.DivIcon:
+    """
+    震源の印。気象庁の推計震度分布図と同じ、青い × で描く。
+
+    以前は青いピン（星）だったが、ピンは下端が指す位置になるうえ地図の
+    上に大きく張り出すため、震源の位置そのものが読みにくかった。
+    気象庁の図と同じ記号にすれば、あの図を見慣れている人にはそれだけで
+    震源だと分かる。
+
+    規制の ⊗ とは、丸が無いこと・色が青であること・線が太いことで
+    見分けられる。
+    """
+    sw = round(size * 0.13, 2)
+    d = size / 2 - sw
+    c = size / 2
+    html = (
+        f'<svg width="{size}" height="{size}" viewBox="0 0 {size} {size}">'
+        # 白い縁取りを下に敷く。背景が濃い色（震度の濃い部分や規制の赤い線）
+        # に重なっても×の形が消えないようにする。
+        f'<path d="M{c - d} {c - d} L{c + d} {c + d} M{c + d} {c - d} '
+        f'L{c - d} {c + d}" stroke="#ffffff" stroke-width="{round(sw * 2, 2)}" '
+        'stroke-linecap="butt" opacity="0.85"/>'
+        f'<path d="M{c - d} {c - d} L{c + d} {c + d} M{c + d} {c - d} '
+        f'L{c - d} {c + d}" stroke="#0000ff" stroke-width="{sw}" '
+        'stroke-linecap="butt"/>'
+        "</svg>"
+    )
+    return folium.DivIcon(
+        html=html, icon_size=(size, size), icon_anchor=(size // 2, size // 2),
+    )
+
+
 def _regulation_style(reg: dict, now: datetime, quake_at: datetime) -> dict:
     """
     線のスタイルを決める。色＝規制の区分、破線＝解除済み、で意味を分けている。
@@ -1309,11 +1341,15 @@ def build_base_map(
 
         folium.Marker(
             location=[mainshock["epicenter_lat"], mainshock["epicenter_lon"]],
-            icon=folium.Icon(color="blue", icon="star"),
+            icon=_epicenter_icon(),
             popup=folium.Popup(
                 f"震源（本震）: {mainshock['epicenter_name']}<br>"
                 f"M{mainshock['magnitude']} 最大震度{mainshock['max_intensity']}",
                 max_width=250,
+            ),
+            tooltip=(
+                f"震源（本震） M{mainshock['magnitude']}"
+                f" 最大震度{mainshock['max_intensity']}"
             ),
         ).add_to(fmap)
 
@@ -2133,7 +2169,8 @@ def main():
                 )
                 st.caption(
                     "観測点は色が濃いほど地震後の交通量変化（|zスコア|）が大きいことを示す（青系のグラデーション）。"
-                    "地点番号は異常度の大きい順。青いマーカーは震源。"
+                    "地点番号は異常度の大きい順。青い × は震源"
+                    "（気象庁の推計震度分布図と同じ記号）。"
                     "選択中の観測点は赤/緑の枠で強調表示されます（最大2地点）。"
                     "丸いマーカーをクリックしても選択できます（反映に1〜2秒かかります）。"
                     "すぐに切り替えたいときは上のプルダウンが速いです。"
