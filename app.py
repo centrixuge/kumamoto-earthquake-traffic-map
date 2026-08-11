@@ -1584,8 +1584,14 @@ def render_timeseries(
     other_event_times=(), point_labels: dict = None, baseline_windows=None,
     unit_label: str = "5分間値", extra_note: str = "",
     mlit_bands=(), baseline_daytypes: dict = None, series_mode: str = "total",
-    x_range=None,
+    x_range=None, key_prefix: str = "main",
 ) -> None:
+    """
+    key_prefix は、同じ図を複数のタブで出すときに分けるための接頭辞。
+    Streamlitは要素のidを中身から自動生成するため、地図・時系列タブと
+    ベータ版タブで同じ設定・同じデータの図を出すとidがぶつかり、
+    StreamlitDuplicateElementId で落ちる（新しめのStreamlitで顕在化する）。
+    """
     if not selected_points:
         st.info("上のプルダウンから選ぶか、地図上の丸いマーカーをクリックして観測点を選ぶと、ここに時系列が表示されます（最大2地点まで比較可）。")
         return
@@ -1729,7 +1735,9 @@ def render_timeseries(
         if series_mode == "vehicle":
             title += "　小型＝濃い色／大型＝明るい色"
         st.markdown(f"**{title}**")
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(
+            fig, use_container_width=True, key=f"ts_{key_prefix}_{label}",
+        )
 
     st.markdown(describe_baseline(baseline_windows, baseline_daytypes))
     st.caption(
@@ -1904,12 +1912,15 @@ def render_mlit_beta_tab(point_summary: pd.DataFrame, point_labels: dict,
             baseline_daytypes=quake_info.get("hourly_baseline_daytypes"),
             series_mode=cfg.get("series", "total"),
             x_range=TIMESERIES_RANGES[range_name](quake_at, last_at),
+            key_prefix="beta",
         )
 
     with st.expander(f"規制の一覧（{len(data['items'])}件）", expanded=False):
+        # 表やグラフにも明示のキーを振る。Streamlitは要素のidを中身から
+        # 自動生成するため、他のタブと同じ中身になるとidがぶつかる。
         st.dataframe(
             mlit_map_view.regulation_table(data),
-            use_container_width=True, height=320,
+            use_container_width=True, height=320, key="mlit_map_table",
         )
         col_csv, col_geo = st.columns(2)
         with col_csv:
