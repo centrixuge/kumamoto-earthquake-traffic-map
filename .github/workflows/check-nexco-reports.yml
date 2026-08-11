@@ -16,7 +16,12 @@ jobs:
   check:
     runs-on: ubuntu-latest
     steps:
+      # developで作業する。確認用アプリ（PREVIEW_APP_URL）がこのブランチを
+      # 映しているので、PRの内容をそのまま画面で確かめられる。
       - uses: actions/checkout@v4
+        with:
+          ref: develop
+          fetch-depth: 0
 
       - uses: actions/setup-python@v5
         with:
@@ -51,20 +56,19 @@ jobs:
             echo "" >> pr.md
           done < new_reports.txt
 
-      # mainへ直接コミットせず、専用ブランチに載せてプルリクエストにする。
-      # 出先からでも中身を見て、スマホのGitHubアプリでマージできる。
-      - name: Open a pull request
+      # mainへ直接コミットせず、developに載せてプルリクエストにする。
+      # 出先からでも確認用アプリで画面を見て、スマホのGitHubアプリで
+      # マージできる。
+      - name: Push and open a pull request
         if: steps.check.outputs.new_count != '0'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          BRANCH: auto/nexco-report
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git checkout -B "$BRANCH"
           git add data/nexco_west_regulations data/nexco_regulations.json
           git commit -m "NEXCO西日本の新しい報を反映（${{ steps.check.outputs.new_list }}）"
-          git push --force-with-lease -u origin "$BRANCH"
+          git push origin develop
 
           {
             echo ""
@@ -77,11 +81,11 @@ jobs:
             echo "</details>"
           } >> pr.md
 
-          if [ -n "$(gh pr list --head "$BRANCH" --state open --json number -q '.[].number')" ]; then
+          if [ -n "$(gh pr list --head develop --base main --state open --json number -q '.[].number')" ]; then
             # すでに開いているPRがあれば、そこに追記する（PRを増やさない）
-            gh pr comment "$BRANCH" --body-file pr.md
+            gh pr comment develop --body-file pr.md
           else
-            gh pr create --base main --head "$BRANCH" \
+            gh pr create --base main --head develop \
               --title "NEXCO西日本の新しい報（${{ steps.check.outputs.new_list }}）" \
               --body-file pr.md
           fi

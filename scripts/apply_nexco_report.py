@@ -176,13 +176,14 @@ def summary_md(report: dict, changes: list, checks: list, data: dict = None) -> 
         "## 確認用",
         "",
         f"- 元のPDF（NEXCO西日本のニュースリリース）: {SOURCE_URL}",
-        f"- このPRに入っているPDF: {REPO_URL}/blob/auto/nexco-report/"
+        f"- このPRに入っているPDF: {REPO_URL}/blob/develop/"
         f"data/nexco_west_regulations/{report['pdf'].replace(' ', '%20')}",
     ]
     if PREVIEW_URL:
         lines += [
             f"- **このPRの内容を映した確認用アプリ**: {PREVIEW_URL}",
-            "  マージ前の状態が見られます（このブランチを映しています）",
+            "  developブランチを映しているので、マージ前にこの変更を"
+            "画面で確かめられます（反映まで数分かかることがあります）",
         ]
     else:
         lines += [
