@@ -23,6 +23,7 @@ import streamlit as st
 from streamlit_folium import st_folium
 
 from modules.holidays import WEEKDAY_LABELS
+from modules.nexco_text import emergency_lines, emergency_note
 from modules import mlit_map_view
 from modules.stations import attach_point_code, load_station_master
 
@@ -852,49 +853,26 @@ def _emergency_access_html(item: dict) -> str:
     """
     「一般車両は通行止めだが、緊急車両は通れる」区間をツールチップに出す。
 
-    通行止めの区間まるごとではなく、その一部だけが通れる。線を分けて
+    通行止めの区間まるごとではなく、その一部だけのことがある。線を分けて
     描くと通行止めの線と重なって読みにくいうえ、PAなど端点の座標を
-    別に用意する必要もあるので、まずは属性として文字で出す。
-    いつ時点の情報かで内容が変わるため、時点と出典の報を必ず添える。
+    別に用意する必要もあるので、属性として文字で出す。
+    文言は modules/nexco_text.py に置き、新しい報を取り込むときのPRの
+    本文と同じものを使う（別々に書くと見た内容と地図がずれる）。
     """
-    ea = item.get("emergency_access")
-    if not ea or not ea.get("sections"):
+    lines = emergency_lines(item)
+    if not lines:
         return ""
-    text = (
-        '<span style="color:#c05621;">緊急車両は '
-        + "・".join(ea["sections"])
-        + f" で通行可（{ea['as_of']}時点）</span><br>"
-    )
-    for extra in (ea.get("planned"), ea.get("note")):
-        if extra:
-            text += f'<span style="color:#8a5a2b;">{extra}</span><br>'
-    if ea.get("source"):
-        text += f'<span style="color:#777;">出典: {ea["source"]}</span><br>'
-    return text
+    colors = ["#c05621", "#8a5a2b", "#8a5a2b", "#777"]
+    out = ""
+    for i, line in enumerate(lines):
+        color = colors[min(i, len(colors) - 1)]
+        out += f'<span style="color:{color};">{line}</span><br>'
+    return out
 
 
 def emergency_access_note(nexco: dict) -> str:
     """地図の下に出す1行。線を見ただけでは分からないので、ここでも触れる。"""
-    items = [
-        i for i in (nexco or {}).get("items", [])
-        if i.get("emergency_access") and not i.get("end_timestamp")
-    ]
-    if not items:
-        return ""
-    as_of = sorted({i["emergency_access"]["as_of"] for i in items})[-1]
-    # 通れる範囲は、通行止め区間の全部のこともあれば一部のこともある。
-    # 「一部で」と決め打ちにすると、全線が通れるようになったときに誤りになる。
-    detail = "／".join(
-        f"{i['route_name']}は{'・'.join(i['emergency_access']['sections'])}"
-        for i in items
-    )
-    return (
-        f"**規制中の高速道路{len(items)}区間では、緊急車両の通行ができます**"
-        f"（{as_of}時点）。{detail}。"
-        "一般車両は通行できません。通れる範囲が通行止めの区間と一致しないこと"
-        "があるため線では描き分けず、線にマウスを載せると出るツールチップに"
-        "区間名と出典の報を出しています。"
-    )
+    return emergency_note(nexco)
 
 
 def _regulation_style(reg: dict, now: datetime, quake_at: datetime) -> dict:

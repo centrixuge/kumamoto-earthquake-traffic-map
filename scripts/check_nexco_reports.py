@@ -100,7 +100,7 @@ def main() -> int:
     have = local_report_numbers(SAVE_DIR)
     print(f"ページ上の熊本地震のPDF {len(listed)}件 / 手元の報 {sorted(have)}")
 
-    new = []
+    new, saved = [], []
     for item in listed:
         if item["no"] is None:
             # 報番号の無いお知らせ（お盆の交通混雑など）は対象外
@@ -121,8 +121,16 @@ def main() -> int:
         data = fetch(item["url"], binary=True)
         with open(path, "wb") as f:
             f.write(data)
+        saved.append(path)
         print(f"       -> {os.path.relpath(path)} ({len(data) // 1024}KB)")
         time.sleep(1)   # 続けて取りに行かない
+
+    # 保存したPDFのパスを残す。取り直したものが既存と同一バイトだと
+    # git status には出ないので、後の処理はこのファイルを見る。
+    with open(os.path.join(SAVE_DIR, os.pardir, os.pardir, "new_reports.txt"),
+              "w", encoding="utf-8") as f:
+        # 改行はLF固定。Windowsで作ってもLinux側のシェルがそのまま読める
+        f.write("\n".join(saved))
 
     out = os.environ.get("GITHUB_OUTPUT")
     if out:
