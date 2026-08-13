@@ -35,19 +35,28 @@ LEVELS = [
 LEVEL_COLOR = {name: color for name, color, _ in LEVELS}
 LEVEL_WEIGHT = {name: weight for name, _, weight in LEVELS}
 
-# 色は規制の内容で分ける（「地図・交通量の時系列変化」タブと同じ考え方）。
-# 道路種別はレイヤと線の太さで分かるので、色は内容に使う。
-# 元の地図の橙は「片側交互など」だが、この配布データには片側交互が
-# 1件も無く、104件すべて全面通行止め系だった。橙は緊急車両のみ通行可
-# （＝一部だけ通れる）に当てている。
+# 色は規制の内容で分ける（道路種別はレイヤと線の太さで分かるので、
+# 色は内容に使う）。区分は「いまその区間がどういう状態か」で並べる。
+# 対面通行・片側交互は、通行止めが解除されたあとに残る規制として出てくる
+# （いまの配布データには記載が無いが、来たら拾えるようにしてある）。
 CONTENT_CLASSES = [
     ("全面通行止め", "#e60000",
-     lambda t: "通行止" in t and "緊急車両" not in t and "解除" not in t),
-    ("うち緊急車両のみ通行可", "#e67e22", lambda t: "緊急車両" in t),
-    ("通行止め解除の記録", "#95a5a6", lambda t: "解除" in t),
-    ("内容の記載なし", "#b0b7c3", lambda t: not t),
+     lambda t: "通行止" in t and "緊急車両" not in t and "対面" not in t),
+    ("緊急車両のみ通行可", "#e67e22", lambda t: "緊急車両" in t),
+    ("対面通行・片側交互など", "#d4a017",
+     lambda t: any(k in t for k in ("対面", "片側", "車線"))),
+    ("規制の内容が分からない", "#b0b7c3", lambda t: not t),
 ]
 CONTENT_COLOR = {name: color for name, color, _ in CONTENT_CLASSES}
+# 「通行止め解除」とだけ書かれたレコードは、規制ではなく解除の告知で、
+# 解除後に残る規制も書かれていない。色を割り当てても意味が無いので
+# 地図・凡例・件数からは外す（一覧には残す）。
+RELEASED = ("通行止め解除", "通行止解除")
+
+
+def is_release_record(item: dict) -> bool:
+    """解除だけを告知しているレコードか（規制ではないので地図に出さない）。"""
+    return (item.get("規制内容") or "").strip() in RELEASED
 
 
 def content_class(item: dict) -> str:
@@ -59,8 +68,15 @@ def content_class(item: dict) -> str:
     for name, _, matches in CONTENT_CLASSES:
         if matches(text):
             return name
-    return "内容の記載なし"
-# レイヤ一覧に出す短い名前。正式な呼び方は凡例と件数の表に出している。
+    return "規制の内容が分からない"
+
+
+def drawn_items(data: dict) -> list:
+    """地図に出す規制。解除の告知だけのレコードは除く。"""
+    return [i for i in data["items"] if not is_release_record(i)]
+
+
+# レイヤ一覧に出す短い名前。正式な呼び方は凡例に出している。
 SHORT_LEVEL = {
     "高速自動車国道": "高速",
     "一般国道": "国道",
@@ -164,7 +180,7 @@ def build_map(data: dict, center=None, zoom: int = None,
             )
 
     used = set()
-    for item in data["items"]:
+    for item in drawn_items(data):
         key = (item["道路種別"], item["状態"])
         style = _style(item)
         folium.GeoJson(
@@ -190,7 +206,7 @@ def build_map(data: dict, center=None, zoom: int = None,
 
 def _counts(data: dict) -> pd.DataFrame:
     df = pd.DataFrame([
-        {"道路種別": i["道路種別"], "状態": i["状態"]} for i in data["items"]
+        {"道路種別": i["道路種別"], "状態": i["状態"]} for i in drawn_items(data)
     ])
     order = [n for n, _, _ in LEVELS]
     table = (
@@ -211,8 +227,9 @@ def legend_html(data: dict) -> str:
     太さ＝道路種別（レイヤの区切りと同じ）。実際に出てくる区分だけを
     並べる（この配布データには片側交互が無いなど、区分は時期で変わる）。
     """
-    present_content = {content_class(i) for i in data["items"]}
-    present_level = {i["道路種別"] for i in data["items"]}
+    items = drawn_items(data)
+    present_content = {content_class(i) for i in items}
+    present_level = {i["道路種別"] for i in items}
 
     def _row(head: str, marks: str) -> str:
         return (
