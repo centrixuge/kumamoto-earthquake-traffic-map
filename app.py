@@ -1855,8 +1855,15 @@ def render_mlit_beta_tab(point_summary: pd.DataFrame, point_labels: dict,
         "同じものを出しています。規制の収録範囲が違うので、同じ観測点でも"
         "見え方が変わります。  \n"
         f"**規制情報は {data['latest_regulation_time']} 時点のものです**"
-        f"（配布は {data['latest_snapshot']} の回ですが、その回に入っている"
-        "道路規制情報は10:00時点のものです）。交通量は最新まで出るので、"
+        # 配布の回と、その回に入っている規制情報の時点がずれることがある
+        # （8/7 16:00 の回は規制情報だけ10:00時点だった）。ずれている
+        # ときだけ断りを入れる。
+        + (
+            f"（配布は {data['latest_snapshot']} の回ですが、そこに入っている"
+            "道路規制情報はこの時点のものです）"
+            if data["latest_snapshot"] != data["latest_regulation_time"] else ""
+        )
+        + "。交通量は最新まで出るので、"
         "この時点より後の規制の変化は地図に反映されていません。",
         unsafe_allow_html=False,
     )
