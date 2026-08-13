@@ -1609,6 +1609,34 @@ def render_source_table(regulations: list, n_post: int,
     )
 
 
+def build_plain_points_feature_group(
+    point_summary: pd.DataFrame, point_labels: dict, selected_points=()
+) -> folium.FeatureGroup:
+    """
+    人口の地図に置く観測点。異常度で色や大きさを変えず、小さな同じ印にする。
+
+    人口の地図で見たいのはメッシュの色と選択枠なので、大きく塗られた観測点が
+    その上に乗ると肝心のメッシュが読めない。ここでは「観測点がどこにあるか」と
+    「いま選んでいるか」だけ分かればよいので、異常度の凡例も出さない
+    （異常度で描き分けた地図は交通量のタブにある）。
+    """
+    fg = folium.FeatureGroup(name="観測点")
+    for _, row in point_summary.iterrows():
+        is_selected = row["point_id"] in selected_points
+        label = point_labels.get(row["point_id"], row["point_id"])
+        folium.CircleMarker(
+            location=[row["point_lat"], row["point_lon"]],
+            radius=6 if is_selected else 4,
+            color=SELECTION_COLORS[0] if is_selected else "#333333",
+            weight=3 if is_selected else 1,
+            fill=True,
+            fill_color="#ffffff",
+            fill_opacity=1.0,
+            tooltip=f"{label}<br>{POINT_TOOLTIP_HINT}",
+        ).add_to(fg)
+    return fg
+
+
 def build_points_feature_group(
     point_summary: pd.DataFrame, point_labels: dict, selected_points=()
 ) -> folium.FeatureGroup:
@@ -2318,10 +2346,8 @@ def _mesh_population_body(point_summary: pd.DataFrame, point_labels: dict,
         st.subheader("選択メッシュの人口推計値 × 選択観測点の交通量")
     with col_map:
         st.subheader(f"500mメッシュ別の人口の変化（{len(geojson['features']):,}メッシュ）")
-        st.markdown(
-            mesh_population.legend_html(metric) + point_z_legend_row(point_summary),
-            unsafe_allow_html=True,
-        )
+        # 観測点は同じ小さな印にしてあるので、異常度の凡例は出さない
+        st.markdown(mesh_population.legend_html(metric), unsafe_allow_html=True)
         fmap = folium.Map(
             # 県全体は1画面に入らないので、震源を中心に置いて熊本市・益城の
             # あたりから見てもらう（縮尺は他の地図と揃える）
@@ -2340,7 +2366,6 @@ def _mesh_population_body(point_summary: pd.DataFrame, point_labels: dict,
             # ようにする（他の地図と同じ扱い）
             ".leaflet-tooltip{pointer-events:none;width:max-content;"
             "max-width:240px;font-size:11.5px;line-height:1.5;padding:5px 8px;}"
-            + POINT_LEGEND_CSS +
             "</style>"
         ))
         mesh_population.add_mesh_layer(fmap, geojson, metric)
@@ -2357,12 +2382,8 @@ def _mesh_population_body(point_summary: pd.DataFrame, point_labels: dict,
             [mainshock["epicenter_lat"], mainshock["epicenter_lon"]],
             icon=_epicenter_icon(), tooltip="本震の震源",
         ).add_to(fmap)
-        # 観測点の凡例（形＝道路種別）は、他の地図と同じく地図の中に置く
-        fmap.get_root().html.add_child(folium.Element(
-            point_legend_html(point_summary)
-        ))
         add_map_size_fixer(fmap)
-        points_fg = build_points_feature_group(
+        points_fg = build_plain_points_feature_group(
             point_summary, point_labels, selected_points
         )
         map_state = st_folium(
@@ -2377,8 +2398,11 @@ def _mesh_population_body(point_summary: pd.DataFrame, point_labels: dict,
             "色は発災前後の平均人口の比です。"
             "**メッシュ（最大2つ）と観測点（1点）はどちらもクリックで選べ**、"
             "選んだものを右の図に重ねて出します（反映に1〜2秒かかります）。"
-            "メッシュの選択枠は紫・青緑、観測点の選択枠は赤・緑で、"
-            "図の線の色もこれに合わせています。"
+            "メッシュの選択枠は紫・青緑、選択中の観測点は赤で、"
+            "図の色もこれに合わせています。"
+            "観測点は白丸の小さな印で、メッシュの色を隠さないよう"
+            "異常度による描き分けはしていません"
+            "（異常度で描き分けた地図は交通量のタブにあります）。"
             "10人未満のメッシュは配信されないため、"
             f"「{list(MESH_COVERAGE)[0]}」以外を選ぶと、"
             "出たり出なかったりするメッシュも地図に出ます。"
@@ -2444,15 +2468,17 @@ def render_mesh_timeseries(selected, selected_points, summary, meta,
             mesh_population.series_for(mesh, meta), pd.Timestamp(quake_at), holidays
         )
         label = mesh_population.mesh_label(summary, mesh)
-        fig.add_trace(go.Scatter(
-            x=frame["datetime"], y=frame["baseline"],
-            mode="lines", line=dict(color=color, dash="dot", width=1),
-            opacity=0.6, name=f"{label} 人口 平常時",
+        # 人口は棒で出す。1時間ごとに「その時刻にそこに居た人数」を数えた値
+        # なので、時点の量として読むほうが分かりやすい（交通量は流れなので線）。
+        fig.add_trace(go.Bar(
+            x=frame["datetime"], y=frame["population"],
+            marker=dict(color=color, line=dict(width=0)),
+            opacity=0.75, name=f"{label} 人口",
         ))
         fig.add_trace(go.Scatter(
-            x=frame["datetime"], y=frame["population"],
-            mode="lines", line=dict(color=color, width=1.2),
-            name=f"{label} 人口",
+            x=frame["datetime"], y=frame["baseline"],
+            mode="lines", line=dict(color=color, dash="dot", width=1.2),
+            name=f"{label} 人口 平常時",
         ))
 
     # 横軸は交通量の図と同じ左端（本震の前日）から、モバイル空間統計の
@@ -2495,6 +2521,8 @@ def render_mesh_timeseries(selected, selected_points, summary, meta,
     )
     fig.update_layout(
         height=430,
+        # 2メッシュの棒は横に並べる。重ねると水準の低いほうが隠れる。
+        barmode="group", bargap=0.1, bargroupgap=0,
         margin=dict(l=10, r=10, t=26, b=CHART_BOTTOM_MARGIN),
         legend=dict(orientation="h", yref="container", yanchor="bottom", y=0.012,
                     xanchor="left", x=0, font=dict(size=10)),
@@ -2508,7 +2536,8 @@ def render_mesh_timeseries(selected, selected_points, summary, meta,
     )
     st.plotly_chart(fig, use_container_width=True, key="mesh_pop_ts")
     st.caption(
-        "**左の縦軸が人口推計値（人）、右の縦軸が交通量（台/時・上下合計）**です。"
+        "**左の縦軸が人口推計値（人・棒）、右の縦軸が交通量（台/時・上下合計・線）**です。"
+        "人口はその時刻にそこに居た人数なので棒、交通量は流れなので線にしています。"
         "交通量は人口に合わせて1時間値を使っています。"
         f"表示期間は交通量の図と同じ左端（本震の前日 {x_from:%m-%d %H:%M}）から、"
         f"モバイル空間統計の収録の終わり（{x_to:%m-%d %H:%M}）まで"
