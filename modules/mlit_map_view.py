@@ -13,6 +13,7 @@ data/mlit_map_regulations.json。
 """
 import json
 import os
+from collections import Counter
 
 import folium
 import pandas as pd
@@ -35,19 +36,28 @@ LEVELS = [
 LEVEL_COLOR = {name: color for name, color, _ in LEVELS}
 LEVEL_WEIGHT = {name: weight for name, _, weight in LEVELS}
 
-# 色は規制の内容で分ける（「地図・交通量の時系列変化」タブと同じ考え方）。
-# 道路種別はレイヤと線の太さで分かるので、色は内容に使う。
-# 元の地図の橙は「片側交互など」だが、この配布データには片側交互が
-# 1件も無く、104件すべて全面通行止め系だった。橙は緊急車両のみ通行可
-# （＝一部だけ通れる）に当てている。
+# 色は規制の内容で分ける（道路種別はレイヤと線の太さで分かるので、
+# 色は内容に使う）。区分は「いまその区間がどういう状態か」で並べる。
+# 対面通行・片側交互は、通行止めが解除されたあとに残る規制として出てくる
+# （いまの配布データには記載が無いが、来たら拾えるようにしてある）。
 CONTENT_CLASSES = [
     ("全面通行止め", "#e60000",
-     lambda t: "通行止" in t and "緊急車両" not in t and "解除" not in t),
-    ("うち緊急車両のみ通行可", "#e67e22", lambda t: "緊急車両" in t),
-    ("通行止め解除の記録", "#95a5a6", lambda t: "解除" in t),
-    ("内容の記載なし", "#b0b7c3", lambda t: not t),
+     lambda t: "通行止" in t and "緊急車両" not in t and "対面" not in t),
+    ("緊急車両のみ通行可", "#e67e22", lambda t: "緊急車両" in t),
+    ("対面通行・片側交互など", "#d4a017",
+     lambda t: any(k in t for k in ("対面", "片側", "車線"))),
+    ("規制内容不明", "#5b6470", lambda t: not t),
 ]
 CONTENT_COLOR = {name: color for name, color, _ in CONTENT_CLASSES}
+# 「通行止め解除」とだけ書かれたレコードは、規制ではなく解除の告知で、
+# 解除後に残る規制も書かれていない。色を割り当てても意味が無いので
+# 地図・凡例・件数からは外す（一覧には残す）。
+RELEASED = ("通行止め解除", "通行止解除")
+
+
+def is_release_record(item: dict) -> bool:
+    """解除だけを告知しているレコードか（規制ではないので地図に出さない）。"""
+    return (item.get("規制内容") or "").strip() in RELEASED
 
 
 def content_class(item: dict) -> str:
@@ -59,8 +69,15 @@ def content_class(item: dict) -> str:
     for name, _, matches in CONTENT_CLASSES:
         if matches(text):
             return name
-    return "内容の記載なし"
-# レイヤ一覧に出す短い名前。正式な呼び方は凡例と件数の表に出している。
+    return "規制内容不明"
+
+
+def drawn_items(data: dict) -> list:
+    """地図に出す規制。解除の告知だけのレコードは除く。"""
+    return [i for i in data["items"] if not is_release_record(i)]
+
+
+# レイヤ一覧に出す短い名前。正式な呼び方は凡例に出している。
 SHORT_LEVEL = {
     "高速自動車国道": "高速",
     "一般国道": "国道",
@@ -87,7 +104,7 @@ def _style(item: dict) -> dict:
     """
     ended = item["状態"] == "解除済み"
     return {
-        "color": CONTENT_COLOR.get(content_class(item), "#b0b7c3"),
+        "color": CONTENT_COLOR.get(content_class(item), "#5b6470"),
         "weight": LEVEL_WEIGHT.get(item["道路種別"], 4),
         "opacity": 0.45 if ended else 0.95,
         "dashArray": "6,8" if ended else None,
@@ -164,7 +181,7 @@ def build_map(data: dict, center=None, zoom: int = None,
             )
 
     used = set()
-    for item in data["items"]:
+    for item in drawn_items(data):
         key = (item["道路種別"], item["状態"])
         style = _style(item)
         folium.GeoJson(
@@ -190,7 +207,7 @@ def build_map(data: dict, center=None, zoom: int = None,
 
 def _counts(data: dict) -> pd.DataFrame:
     df = pd.DataFrame([
-        {"道路種別": i["道路種別"], "状態": i["状態"]} for i in data["items"]
+        {"道路種別": i["道路種別"], "状態": i["状態"]} for i in drawn_items(data)
     ])
     order = [n for n, _, _ in LEVELS]
     table = (
@@ -203,16 +220,18 @@ def _counts(data: dict) -> pd.DataFrame:
     return table[["規制中", "解除済み"]]
 
 
-def legend_html(data: dict) -> str:
+def legend_html(data: dict, point_row: str = "") -> str:
     """
     地図の上に置く凡例。件数は下の表に出すのでここには入れない。
 
-    行は2つ。色＝規制の内容（「地図・交通量の時系列変化」タブと同じ意味）、
-    太さ＝道路種別（レイヤの区切りと同じ）。実際に出てくる区分だけを
-    並べる（この配布データには片側交互が無いなど、区分は時期で変わる）。
+    行は3つ。色＝規制の内容、太さ＝道路種別（レイヤの区切りと同じ）、
+    観測点＝色の濃さが異常度。実際に出てくる区分だけを並べる
+    （配布データに片側交互が無いなど、区分は時期で変わる）。
+    観測点の行は呼び出し側から渡す（どちらの地図でも同じものを使うため）。
     """
-    present_content = {content_class(i) for i in data["items"]}
-    present_level = {i["道路種別"] for i in data["items"]}
+    items = drawn_items(data)
+    present_content = {content_class(i) for i in items}
+    present_level = {i["道路種別"] for i in items}
 
     def _row(head: str, marks: str) -> str:
         return (
@@ -244,6 +263,7 @@ def legend_html(data: dict) -> str:
             'border-top:4px dashed #888;vertical-align:middle;"></span>'
             " 破線は解除済み</span>",
         )
+        + (_row("観測点", point_row) if point_row else "")
         + "</div>"
     )
 
@@ -264,6 +284,38 @@ def summary_html(data: dict) -> str:
         f'<th style="{td}">規制中</th>'
         f'<th style="{td}color:#888;">解除済み</th></tr>{body}</table>'
     )
+
+
+def content_note(data: dict) -> str:
+    """
+    色分けの区分ごとの件数を、データから数えて書く。
+
+    以前はここに件数を直書きしていて、データが増えたあとも古い数字
+    （104件・赤84件…）が残っていた。数え直して出す。
+    """
+    items = drawn_items(data)
+    counts = Counter(content_class(i) for i in items)
+    detail = "、".join(
+        f"{name} {counts[name]}件"
+        for name, _, _ in CONTENT_CLASSES if counts.get(name)
+    )
+    released = [i for i in data["items"] if is_release_record(i)]
+    text = (
+        f"色は規制の内容で分けています（地図に出している{len(items)}件の内訳は"
+        f"{detail}）。"
+    )
+    if released:
+        text += (
+            f"このほかに「通行止め解除」とだけ書かれたレコードが{len(released)}件"
+            "ありますが、規制ではなく解除の告知で、解除後に残る規制も"
+            "書かれていないため地図には出していません（下の一覧には入っています）。"
+        )
+    if not counts.get("対面通行・片側交互など"):
+        text += (
+            "なお、この配布データには対面通行や片側交互の記載がまだ無く、"
+            "その色は出てきません。"
+        )
+    return text
 
 
 def unknown_level_note(data: dict) -> str:

@@ -32,6 +32,10 @@ MAX_SELECTED_POINTS = 2
 # 地図の大きさと縮尺。st_folium に渡す高さと、folium 側の zoom_start。
 # 中心を震源へ寄せる余地がどれだけあるかはこの2つで決まるので、
 # 定数として1か所に置く。
+# 異常検知（zスコアと地図の色分け）の対象期間。本震からこの長さだけ。
+# データの取得は本震+3週間まで伸びるが、その後半はお盆にかかり、
+# 地震前の平常時と比べる意味が薄い。
+ANOMALY_WINDOW = timedelta(days=7)
 MAP_HEIGHT_PX = 496
 MAP_ZOOM = 10
 # 中心を寄せるときに、観測点マーカーが端で欠けないよう空けておく余白。
@@ -72,7 +76,7 @@ JARTIC_TERMS_NOTICE = (
 
 # 時系列図の表示開始時刻（データ保持期間の先頭より後ろにしている）
 TIMESERIES_DISPLAY_START = pd.Timestamp("2026-07-27 12:00")
-# 表示期間の選択肢。データは復旧期（本震+2週間）まで伸び続けるので、
+# 表示期間の選択肢。データは復旧期（本震+3週間）まで伸び続けるので、
 # 常に最新まで出すと発災直後の変化が横に潰れて読めなくなる。
 # 区切りは本震発生時刻を起点にした経過時間で置く（日付で書くと
 # 何日目なのかが読み取れないため）。開始はどれも発災前からで
@@ -117,6 +121,7 @@ TIMESERIES_RANGES = {
     "発災後3日間": _since_quake(3),
     "発災後1週間": _since_quake(7),
     "発災後2週間": _since_quake(14),
+    "発災後3週間": _since_quake(21),
     "最新3日間": lambda quake, last: (last - pd.Timedelta(days=3), last),
 }
 # 既定は発災後1週間。発災直後の落ち込みと戻り始めが1枚で読める。
@@ -923,6 +928,36 @@ def _deterministic_branca_ids():
         branca_element.Element._generate_id = original
 
 
+def point_z_legend_html(point_summary) -> str:
+    """
+    観測点の色の濃さ（＝異常度）の凡例。地図の外に置く行として返す。
+
+    どちらの地図でも観測点は同じ描き方なので、凡例も同じものを使う。
+    以前は（参考）タブの中に直接書いていたため、通れる道マップ版の地図には
+    出ていなかった。
+    """
+    def _sw(style: str) -> str:
+        return (
+            '<span style="display:inline-block;vertical-align:middle;'
+            f'{style}"></span>'
+        )
+
+    items = [
+        _sw("width:30px;height:11px;border-radius:6px;border:1px solid #aaa;"
+            "background:linear-gradient(to right,#deebf7,#08306b);")
+        + " 濃く大きいほど異常度|z|が大きい",
+    ]
+    if int(point_summary["max_abs_z"].isna().sum()):
+        items.append(
+            _sw("width:11px;height:11px;border-radius:50%;background:#f0f0f0;"
+                "border:2px dashed #777;")
+            + " 枠が灰色の破線なら地震後が欠測"
+        )
+    return "".join(
+        f'<span style="white-space:nowrap;">{it}</span>' for it in items
+    )
+
+
 POINT_LEGEND_CSS = (
     # 地図内の観測点凡例（右上）。レイヤ一覧(bottomright)と重ならない
     # 位置に置き、クリックは下の地図に通す。
@@ -1254,18 +1289,21 @@ def build_base_map(
                     all(i.get("end_timestamp") for i in items)
                 )
                 for ep in items[0].get("endpoints") or []:
-                    key = (round(ep["lat"], 6), round(ep["lon"], 6), id(layer))
+                    # 同じICでも報によって座標が数十mずれていることがあり、
+                    # 座標で束ねると同じICが2つ描かれる。名前で束ねる。
+                    key = (ep["name"], id(layer))
                     entry = ic_points.setdefault(
                         key,
-                        {"name": ep["name"], "node": ep.get("osm_node"),
-                         "sections": [], "layer": layer},
+                        {"name": ep["name"], "lat": ep["lat"], "lon": ep["lon"],
+                         "node": ep.get("osm_node"), "sections": [],
+                         "layer": layer},
                     )
                     label = f"{route_name} {section}"
                     if label not in entry["sections"]:
                         entry["sections"].append(label)
-            for (lat, lon, _), info in ic_points.items():
+            for info in ic_points.values():
                 folium.CircleMarker(
-                    location=[lat, lon],
+                    location=[info["lat"], info["lon"]],
                     radius=5,
                     color="#333333",
                     weight=2,
@@ -1358,18 +1396,36 @@ def build_base_map(
                     icon=_x_circle_icon(color, ended),
                 ).add_to(layer)
                 for ep in item.get("endpoints") or []:
-                    key = (round(ep["lat"], 6), round(ep["lon"], 6), id(layer))
+                    # 座標ではなく名前で束ねる（上と同じ理由）
+                    key = (ep["name"], id(layer))
                     entry = nx_ic.setdefault(
                         key,
-                        {"name": ep["name"], "node": ep.get("osm_node"),
-                         "sections": [], "layer": layer},
+                        {"name": ep["name"], "lat": ep["lat"], "lon": ep["lon"],
+                         "node": ep.get("osm_node"), "sections": [],
+                         "layer": layer},
                     )
                     label = f"{item['route_name']} {item['section']}"
                     if label not in entry["sections"]:
                         entry["sections"].append(label)
-            for (lat, lon, _), info in nx_ic.items():
+                # 本文で言及されているIC・SA・PA。「川田橋（宇城氷川SIC〜
+                # 八代IC）」のように文章にだけ出てきて、どこの話なのかが
+                # 地図から追えなかったので、区間の端点と同じ描き方で置く。
+                for mp in item.get("mentioned_points") or []:
+                    folium.CircleMarker(
+                        location=[mp["lat"], mp["lon"]],
+                        radius=4, color="#555555", weight=2,
+                        fill=True, fill_color="#ffffff", fill_opacity=0.95,
+                        tooltip=(
+                            f"<b>{mp['name']}</b><br>"
+                            f"{item['route_name']}（{item['section']}）の本文で"
+                            f"言及<br>{mp['note']}<br>"
+                            f"位置はOpenStreetMap（{mp['osm']}）"
+                        ),
+                    ).add_to(layer)
+            for info in nx_ic.values():
                 folium.CircleMarker(
-                    location=[lat, lon], radius=5, color="#333333", weight=2,
+                    location=[info["lat"], info["lon"]], radius=5,
+                    color="#333333", weight=2,
                     fill=True, fill_color="#ffffff", fill_opacity=0.95,
                     tooltip=(
                         f"<b>{info['name']}</b><br>"
@@ -1643,8 +1699,8 @@ def render_timeseries(
 ) -> None:
     """
     key_prefix は、同じ図を複数のタブで出すときに分けるための接頭辞。
-    Streamlitは要素のidを中身から自動生成するため、地図・時系列タブと
-    ベータ版タブで同じ設定・同じデータの図を出すとidがぶつかり、
+    Streamlitは要素のidを中身から自動生成するため、2つの地図のタブで
+    2つのタブで同じ設定・同じデータの図を出すとidがぶつかり、
     StreamlitDuplicateElementId で落ちる（新しめのStreamlitで顕在化する）。
     """
     if not selected_points:
@@ -1808,15 +1864,15 @@ def render_timeseries(
 
 def render_mlit_beta_tab(point_summary: pd.DataFrame, point_labels: dict,
                          quake_at, other_event_times, quake_info: dict,
-                         mainshock: dict) -> None:
+                         mainshock: dict, anomaly_end=None) -> None:
     """
-    「地図・時系列」と同じ並びで、規制だけ「通れる道マップ」の配布データに
-    差し替えた版。地図と時系列を並べて見て、規制と交通量の変化を突き合わせる
-    ための画面なので、観測点の選択・集計方法・表示期間はそのまま用意する。
+    通れる道マップの配布データで規制を描く、既定のタブ。地図と交通量の
+    時系列変化を並べて見て、規制と交通量の変化を突き合わせるための画面なので、
+    観測点の選択・集計方法・表示期間はそのまま用意する。
 
-    ウィジェットのキーと選択状態は本家と別に持つ（同じ画面に2つのタブが
-    同時に描かれるため、同じキーは使えない。片方で選んだ地点がもう片方に
-    移らないほうが、見比べるときに都合もよい）。
+    ウィジェットのキーと選択状態は（参考）タブと別に持つ（同じ画面に2つの
+    タブが同時に描かれるため、同じキーは使えない。片方で選んだ地点がもう
+    片方に移らないほうが、見比べるときに都合もよい）。
     """
     data = mlit_map_view.load_regulations()
     if data is None:
@@ -1827,14 +1883,20 @@ def render_mlit_beta_tab(point_summary: pd.DataFrame, point_labels: dict,
         return
 
     st.caption(
-        "**ベータ版**です。地図の通行規制を"
-        f"[{data['source_name']}]({data['source_url']})の配布データだけで作り直し、"
-        "それ以外（観測点・異常度・交通量のグラフ）は「地図・交通量の時系列変化」タブと"
-        "同じものを出しています。規制の収録範囲が違うので、同じ観測点でも"
-        "見え方が変わります。  \n"
+        "地図の通行規制は"
+        f"[{data['source_name']}]({data['source_url']})の配布データで作っています。"
+        "県の公開JSONとPDFからの転記で集めた版は「地図・交通量の時系列変化（参考）」"
+        "タブにあり、規制の収録範囲が違うので同じ観測点でも見え方が変わります。  \n"
         f"**規制情報は {data['latest_regulation_time']} 時点のものです**"
-        f"（配布は {data['latest_snapshot']} の回ですが、その回に入っている"
-        "道路規制情報は10:00時点のものです）。交通量は最新まで出るので、"
+        # 配布の回と、その回に入っている規制情報の時点がずれることがある
+        # （8/7 16:00 の回は規制情報だけ10:00時点だった）。ずれている
+        # ときだけ断りを入れる。
+        + (
+            f"（配布は {data['latest_snapshot']} の回ですが、そこに入っている"
+            "道路規制情報はこの時点のものです）"
+            if data["latest_snapshot"] != data["latest_regulation_time"] else ""
+        )
+        + "。交通量は最新まで出ますが、"
         "この時点より後の規制の変化は地図に反映されていません。",
         unsafe_allow_html=False,
     )
@@ -1905,7 +1967,12 @@ def render_mlit_beta_tab(point_summary: pd.DataFrame, point_labels: dict,
         st.subheader("常時観測点別の異常度 × 通行規制")
         # 地図の上は色分けだけにする。件数の表は縦に場所を取って地図を
         # 押し下げるので、地図の下に置く。
-        st.markdown(mlit_map_view.legend_html(data), unsafe_allow_html=True)
+        st.markdown(
+            mlit_map_view.legend_html(
+                data, point_row=point_z_legend_html(point_summary)
+            ),
+            unsafe_allow_html=True,
+        )
         base_map = mlit_map_view.build_map(
             data,
             center=_map_center(point_summary, mainshock),
@@ -1927,19 +1994,16 @@ def render_mlit_beta_tab(point_summary: pd.DataFrame, point_labels: dict,
             ],
             key="mlit_beta_map_v1",
         )
-        st.markdown(mlit_map_view.summary_html(data), unsafe_allow_html=True)
         st.caption(
             "既定では規制中だけを出しています（地図の右下の「≡ レイヤ」に"
             "マウスを載せると一覧が開きます。一覧の「高速」「国道」"
             "「県・市町村道」は上の3段階の略記）。"
-            "観測点の描き方は「地図・交通量の時系列変化」タブと同じです。"
+            "観測点の描き方は（参考）タブと同じです"
+            f"（色の濃さ＝異常度は、発災後1週間 〜{anomaly_end:%m-%d %H:%M} を"
+            "対象に求めた値）。"
         )
         st.caption(
-            "色の意味は「地図・交通量の時系列変化」タブと揃えていますが、"
-            "**この配布データには片側交互通行の規制が1件もありません**"
-            "（104件すべて全面通行止め系で、赤84件・緊急車両のみ通行可3件・"
-            "解除の記録2件・内容の記載なし15件）。そのため橙の「片側交互など」は"
-            "出てきません。"
+            mlit_map_view.content_note(data)
         )
         note = mlit_map_view.unknown_level_note(data)
         if note:
@@ -2126,7 +2190,14 @@ def main():
         if e.get("eid") != mainshock.get("eid")
     ]
 
-    post = observations[observations["is_post_quake"]]
+    # 異常検知（地図の色分けの元）は発災後1週間だけを対象にする。
+    # 平常時は地震前の同じ日区分から作っているので、お盆のように
+    # そもそも交通の出方が違う時期を混ぜると「平常時との差」が
+    # 災害の影響なのか行事の影響なのか区別できなくなる。
+    anomaly_end = quake_at + ANOMALY_WINDOW
+    post = observations[
+        observations["is_post_quake"] & (observations["datetime"] < anomaly_end)
+    ]
     point_summary = build_point_summary(post, observations)
 
     if "selected_points" not in st.session_state:
@@ -2177,7 +2248,7 @@ def main():
         '<div class="dash-src">'
         f"{archive_period}"
         f"異常検知の対象期間: 本震（{period_start}）〜 {period_end}"
-        f"（本震+2週間または現在時刻の早い方）　｜　"
+        f"（本震+3週間または現在時刻の早い方）　｜　"
         f"データ生成: {quake_info.get('generated_at', '不明')}<br>"
         "データ源: "
         '<a href="https://www.jartic-open-traffic.org/" target="_blank">JARTIC 交通量オープンデータ</a>'
@@ -2227,16 +2298,20 @@ def main():
             "推計震度分布図は地震発生直後に発表されたもの（発表がない地震ではリンク先に情報がない場合があります）。"
         )
 
-    tab_overview, tab_mlit, tab_dl = st.tabs(
+    # 通れる道マップ版を先に置く。規制の収録が国の配信で揃っており、
+    # 高速道路の緊急車両の通行可能区間まで区間ごとの線で入るため、
+    # こちらを主に見てもらう。県のJSON＋PDF転記の版は（参考）に下げた。
+    tab_mlit, tab_overview, tab_dl = st.tabs(
         [
             "地図・交通量の時系列変化",
-            "地図・交通量の時系列変化（通れる道マップ版・ベータ）",
+            "地図・交通量の時系列変化（参考）",
             "データダウンロード",
         ]
     )
 
     # ------------------------------------------------------------------
-    # 地図・時系列タブ（統合ビュー）
+    # 地図・交通量の時系列変化（参考）タブ
+    # 県の公開JSON＋PDFからの転記で集めた規制の版
     # ------------------------------------------------------------------
     with tab_overview:
         if post.empty:
@@ -2344,7 +2419,6 @@ def main():
                 # すると何の数なのかがかえって分からなくなる。件数は地図の下の
                 # データソースの表と、リンク先の一覧のほうに置いている。
                 n_points = len(point_summary)
-                n_no_data = int(point_summary["max_abs_z"].isna().sum())
                 _mlit_items = (mlit or {}).get("items", [])
                 n_mlit_line = sum(1 for i in _mlit_items if i.get("path"))
                 n_mlit_point = sum(
@@ -2404,21 +2478,10 @@ def main():
                         ' 直轄国道で線形が作れないもの（該当観測点のすぐ上）'
                     )
                 # 形（道路の種別）の凡例は地図の中に置いてあるのでここには出さない
-                point_items = [
-                    f'{_sw("width:30px;height:11px;border-radius:6px;border:1px solid #aaa;"
-                          "background:linear-gradient(to right,#deebf7,#08306b);")}'
-                    ' 濃く大きいほど異常度|z|が大きい',
-                ]
-                if n_no_data:
-                    point_items.append(
-                        f'{_sw("width:11px;height:11px;border-radius:50%;background:#f0f0f0;"
-                              "border:2px dashed #777;")}'
-                        ' 枠が灰色の破線なら地震後が欠測'
-                    )
                 rows = [
                     ("規制の色", color_items),
                     ("規制の印と状態", shape_items),
-                    ("観測点", point_items),
+                    ("観測点", [point_z_legend_html(point_summary)]),
                 ]
                 legend_html = "".join(
                     '<div style="display:flex;flex-wrap:wrap;gap:1px 12px;align-items:center;">'
@@ -2490,6 +2553,9 @@ def main():
                 )
                 st.caption(
                     "観測点は色が濃いほど地震後の交通量変化（|zスコア|）が大きいことを示す（青系のグラデーション）。"
+                    f"**この異常度は発災後1週間（〜{anomaly_end:%m-%d %H:%M}）を"
+                    "対象に求めた値です**（それ以降はお盆にかかり、地震前の"
+                    "平常時と比べる意味が薄いため）。"
                     "地点番号は異常度の大きい順。青い × は震源"
                     "（気象庁の推計震度分布図と同じ記号）。"
                     "選択中の観測点は赤/緑の枠で強調表示されます（最大2地点）。"
@@ -2700,8 +2766,7 @@ def main():
         )
 
     # ------------------------------------------------------------------
-    # 地図・時系列（通れる道マップ版・ベータ）タブ
-    # 規制の出所だけを差し替えた、隣に並べて見比べるための版
+    # 地図・交通量の時系列変化タブ（通れる道マップの配布データ版・既定）
     # ------------------------------------------------------------------
     with tab_mlit:
         if post.empty:
@@ -2709,7 +2774,7 @@ def main():
         else:
             render_mlit_beta_tab(
                 point_summary, point_labels, quake_at, other_event_times,
-                quake_info, mainshock,
+                quake_info, mainshock, anomaly_end,
             )
 
 
