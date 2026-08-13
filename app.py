@@ -2197,6 +2197,17 @@ MAX_SELECTED_MESHES = 2
 MESH_SELECTION_COLORS = ["#6a3d9a", "#00857a"]  # 紫 / 青緑
 
 
+# このタブが modules/mesh_population.py に求めるもの。公開側で app.py だけが
+# 読み直され、モジュールが古いまま動くことが実際に2回起きている
+# （新しい関数を呼んで AttributeError になり、ページ全体が落ちた）。
+# 足りないものを名指しして、このタブだけ止める。
+MESH_MODULE_REQUIRES = (
+    "METRICS", "mesh_geojson", "selected_geojson", "add_mesh_layer",
+    "add_selection_layer", "legend_html", "mesh_bounds", "mesh_from_tooltip",
+    "mesh_label", "series_for", "with_baseline", "load_meta", "load_summary",
+)
+
+
 def render_mesh_population_tab(point_summary: pd.DataFrame, point_labels: dict,
                                quake_at, mainshock: dict,
                                other_event_times=()) -> None:
@@ -2210,7 +2221,35 @@ def render_mesh_population_tab(point_summary: pd.DataFrame, point_labels: dict,
 
     元データは公開できないため、公開repoにはファイルを置かず、集計済みの
     ファイルを非公開の置き場から読む（modules/mesh_population.py）。
+
+    この中の失敗は、このタブの中だけで止める。ここで例外を上げると、
+    交通量のタブごとページ全体が落ちてしまうため。
     """
+    missing = [n for n in MESH_MODULE_REQUIRES
+               if not hasattr(mesh_population, n)]
+    if missing:
+        st.error(
+            "`modules/mesh_population.py` が古いまま読み込まれています"
+            f"（{', '.join(missing)} がありません）。"
+            "アプリを再起動（Manage app → Reboot）すると直ります。"
+        )
+        return
+    try:
+        _mesh_population_body(
+            point_summary, point_labels, quake_at, mainshock, other_event_times
+        )
+    except mesh_population.MeshDataUnavailable as e:
+        st.error(f"モバイル空間統計の集計データを読めませんでした。\n\n{e}")
+    except Exception as e:
+        st.error(
+            f"人口のタブを描けませんでした（{type(e).__name__}: {e}）。"
+            "ほかのタブは通常どおり動きます。"
+        )
+
+
+def _mesh_population_body(point_summary: pd.DataFrame, point_labels: dict,
+                          quake_at, mainshock: dict,
+                          other_event_times=()) -> None:
     if not mesh_population.available():
         st.info(
             "モバイル空間統計の集計データが見つかりません。"
@@ -2219,20 +2258,8 @@ def render_mesh_population_tab(point_summary: pd.DataFrame, point_labels: dict,
         )
         return
 
-    # 置き場から読めないときは、このタブだけ理由を出して止める
-    # （そのまま例外を投げると、他のタブごとページが落ちる）。
-    try:
-        meta = mesh_population.load_meta()
-        summary = mesh_population.load_summary()
-    except mesh_population.MeshDataUnavailable as e:
-        st.error(f"モバイル空間統計の集計データを読めませんでした。\n\n{e}")
-        return
-    except Exception as e:  # 通信断・parquetの破損など
-        st.error(
-            "モバイル空間統計の集計データを読めませんでした"
-            f"（{type(e).__name__}）。"
-        )
-        return
+    meta = mesh_population.load_meta()
+    summary = mesh_population.load_summary()
     holidays = load_holiday_set()
     start = pd.Timestamp(meta["start"])
     end = pd.Timestamp(meta["end"])
@@ -2260,8 +2287,10 @@ def render_mesh_population_tab(point_summary: pd.DataFrame, point_labels: dict,
         metric = st.selectbox(
             "地図の色分け", list(mesh_population.METRICS),
             key=f"mesh_metric_{sel_version}",
-            help="夜間人口は3時、昼間人口は14時を代表値にしています"
-                 "（どちらも移動の途中が混じりにくい時刻）。",
+            help="夜間は3時、昼間は14時を代表時刻にしています"
+                 "（どちらも移動の途中が混じりにくい時刻）。"
+                 "国勢調査の夜間人口・昼間人口は常住地・従業地で数える"
+                 "別の定義なので、その語は使っていません。",
         )
     with col_cover:
         coverage = st.selectbox(
