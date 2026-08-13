@@ -72,7 +72,7 @@ JARTIC_TERMS_NOTICE = (
 
 # 時系列図の表示開始時刻（データ保持期間の先頭より後ろにしている）
 TIMESERIES_DISPLAY_START = pd.Timestamp("2026-07-27 12:00")
-# 表示期間の選択肢。データは復旧期（本震+2週間）まで伸び続けるので、
+# 表示期間の選択肢。データは復旧期（本震+3週間）まで伸び続けるので、
 # 常に最新まで出すと発災直後の変化が横に潰れて読めなくなる。
 # 区切りは本震発生時刻を起点にした経過時間で置く（日付で書くと
 # 何日目なのかが読み取れないため）。開始はどれも発災前からで
@@ -117,6 +117,7 @@ TIMESERIES_RANGES = {
     "発災後3日間": _since_quake(3),
     "発災後1週間": _since_quake(7),
     "発災後2週間": _since_quake(14),
+    "発災後3週間": _since_quake(21),
     "最新3日間": lambda quake, last: (last - pd.Timedelta(days=3), last),
 }
 # 既定は発災後1週間。発災直後の落ち込みと戻り始めが1枚で読める。
@@ -2177,7 +2178,7 @@ def main():
         '<div class="dash-src">'
         f"{archive_period}"
         f"異常検知の対象期間: 本震（{period_start}）〜 {period_end}"
-        f"（本震+2週間または現在時刻の早い方）　｜　"
+        f"（本震+3週間または現在時刻の早い方）　｜　"
         f"データ生成: {quake_info.get('generated_at', '不明')}<br>"
         "データ源: "
         '<a href="https://www.jartic-open-traffic.org/" target="_blank">JARTIC 交通量オープンデータ</a>'

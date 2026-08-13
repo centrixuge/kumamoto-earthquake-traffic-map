@@ -83,7 +83,9 @@ HOURLY_FETCH_STEP = timedelta(hours=1)
 TARGET_START = datetime(2026, 7, 27, 3, 0)
 # 復旧期（被災後72時間はもちろん、その後の交通パターンが平常に戻る過程まで）を
 # 動的取得の対象に含めるため、本震発生時刻からの経過期間で取得終了日時を決める。
-RECOVERY_PERIOD = timedelta(days=14)
+# 当初は2週間としていたが、8/14まで九州自動車道の通行止めが続き、その解除後の
+# 動きまで見たいので3週間に伸ばした（本震+3週間＝2026-08-18 16:27）。
+RECOVERY_PERIOD = timedelta(days=21)
 
 # 5分間値は過去1ヶ月しか遡れないため、これまでの平常時は直前2回の火曜だけだった。
 BASELINE_WINDOWS = [
