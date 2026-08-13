@@ -84,12 +84,18 @@ def _fetch(name: str) -> bytes:
         return local.read_bytes()
 
     cfg = _secrets()
-    # secretsの貼り付けで前後に空白や改行が入ることがあるので落としておく
-    token = str(cfg.get("token", "")).strip()
+    token = _clean_token(cfg.get("token", ""))
     if cfg.get("base_url"):
         url = str(cfg["base_url"]).strip().rstrip("/") + "/" + name
         headers = {"Authorization": f"Bearer {token}"} if token else {}
     elif cfg.get("repo"):
+        if not token:
+            raise MeshDataUnavailable(
+                "`token` が空です。secrets の `[mesh_population]` の中に "
+                "`token = \"github_pat_...\"` があるかご確認ください"
+                "（キー名の綴り違いや、別のセクションに入っている場合も"
+                "空になります）。"
+            )
         repo = str(cfg["repo"]).strip().strip("/")
         ref = str(cfg.get("ref", "main")).strip()
         url = f"https://api.github.com/repos/{repo}/contents/{name}?ref={ref}"
@@ -103,14 +109,49 @@ def _fetch(name: str) -> bytes:
 
     res = requests.get(url, headers=headers, timeout=120)
     if res.status_code != 200:
+        hint = _http_hint(res.status_code) + "\n\n" + _token_shape(token)
         # 例外をそのまま投げるとページ全体が落ちるうえ、公開環境では本文が
         # 伏せられて原因が分からない。状態コードと当たり先だけ残して返す
         # （トークンは出さない）。
         raise MeshDataUnavailable(
             f"{name} を取得できませんでした（HTTP {res.status_code}）。"
-            f"取得先: {url}\n\n" + _http_hint(res.status_code)
+            f"取得先: {url}\n\n" + hint
         )
     return res.content
+
+
+def _clean_token(value) -> str:
+    """
+    貼り付け事故に強くする。トークンに空白は入らないので全部落とし、
+    引用符や `Bearer ` が一緒に入ってしまった場合も剥がす。
+
+    secretsの入力欄で長い値が折り返されて改行が混ざると、見た目は正しくても
+    401になる。
+    """
+    token = "".join(str(value).split())
+    if token[:6].lower() == "bearer":
+        token = token[6:]
+    return token.strip("\"'")
+
+
+def _token_shape(token: str) -> str:
+    """トークンの中身は出さず、形だけ出す（欠けや取り違えの切り分け用）。"""
+    if not token:
+        return "設定されたトークン: **空**"
+    kinds = {
+        "github_pat_": "fine-grained PAT",
+        "ghp_": "classic PAT",
+        "gho_": "OAuthトークン",
+        "ghs_": "GitHub Appのトークン",
+    }
+    kind = next(
+        (v for k, v in kinds.items() if token.startswith(k)), "**未知の形式**"
+    )
+    return (
+        f"設定されたトークン: {kind}・{len(token)}文字"
+        "（fine-grained PATは `github_pat_` で始まり90文字前後です。"
+        "短ければ貼り付けが欠けています）"
+    )
 
 
 def _http_hint(status: int) -> str:
