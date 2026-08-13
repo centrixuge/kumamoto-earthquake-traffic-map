@@ -2,6 +2,14 @@ __pycache__/
 *.pyc
 *.log
 data/shelter/
+# モバイル空間統計（ドコモ・インサイトマーケティング提供）の元データと、
+# そこから作る中間物は公開repoに入れない。提供条件の第三者提供に当たるため。
+# 公開するのは、公開可能な粒度に集計したファイルだけで、それも非公開側に置く。
+data/mss/
+data/mss_build/
+# 世界測地系経緯度メッシュのDL物（500mメッシュはコードから計算できるので、
+# 公開repoに置く必要がない）
+data/mesh/
 .streamlit/secrets.toml
 api_request.py
 new_reports.txt

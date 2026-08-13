@@ -24,7 +24,7 @@ from streamlit_folium import st_folium
 
 from modules.holidays import WEEKDAY_LABELS
 from modules.nexco_text import emergency_lines, emergency_note
-from modules import mlit_map_view
+from modules import mesh_population, mlit_map_view
 from modules.stations import attach_point_code, load_station_master
 
 DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
@@ -2118,6 +2118,217 @@ def render_mlit_beta_tab(point_summary: pd.DataFrame, point_labels: dict,
         st.caption(mlit_map_view.source_note(data))
 
 
+# メッシュの表示範囲。データが出る時間数（336時点中）で絞る。
+# 10人未満のメッシュは配信されないため、山間部などは時間帯によって出たり
+# 出なかったりする。全部描くと2万件を超えて地図が重くなるので、
+# 既定は「常時10人以上」にしておく。
+@st.cache_data
+def load_holiday_set() -> set:
+    """祝日の一覧（日付文字列）。平常時の平均を取る日区分の判定に使う。"""
+    path = os.path.join(DATA_DIR, "holidays.json")
+    if not os.path.exists(path):
+        return set()
+    with open(path, encoding="utf-8") as f:
+        return set(json.load(f))
+
+
+MESH_COVERAGE = {
+    "常に10人以上（推奨）": 336,
+    "9割以上の時間で10人以上": 300,
+    "半分以上の時間で10人以上": 168,
+    "1時点でも10人以上（重い）": 1,
+}
+MAX_SELECTED_MESHES = 2
+
+
+def render_mesh_population_tab(quake_at, mainshock: dict,
+                               other_event_times=()) -> None:
+    """
+    モバイル空間統計の500mメッシュ人口を地図に出し、クリックしたメッシュの
+    時系列変化を右に並べるタブ。
+
+    元データは公開できないため、公開repoにはファイルを置かず、集計済みの
+    ファイルを非公開の置き場から読む（modules/mesh_population.py）。
+    """
+    if not mesh_population.available():
+        st.info(
+            "モバイル空間統計の集計データが見つかりません。"
+            "`python scripts/build_mesh_population.py` で作るか、"
+            "非公開の置き場を `st.secrets` に設定してください。"
+        )
+        return
+
+    meta = mesh_population.load_meta()
+    summary = mesh_population.load_summary()
+    holidays = load_holiday_set()
+    start = pd.Timestamp(meta["start"])
+    end = pd.Timestamp(meta["end"])
+
+    st.caption(
+        f"{meta['source']}（{meta['area']}・{meta['unit']}）。"
+        f"収録は **{start:%Y-%m-%d %H:%M} 〜 {end:%Y-%m-%d %H:%M}**"
+        f"（{meta['hours']}時点、{meta['meshes']:,}メッシュ）。"
+        f"{meta['suppressed_note']}。"
+    )
+
+    st.session_state.setdefault("selected_meshes", [])
+    sel_version = st.session_state.get("_sel_version_mesh", 0)
+    selected = list(st.session_state["selected_meshes"])
+
+    # 地図より前にウィジェットを作る（地図のクリックで st.rerun したときに、
+    # まだ作られていないウィジェットの状態が捨てられるのを避けるため）。
+    col_metric, col_cover, col_clear = st.columns([2, 2, 1])
+    with col_metric:
+        metric = st.selectbox(
+            "地図の色分け", list(mesh_population.METRICS),
+            key=f"mesh_metric_{sel_version}",
+            help="深夜（2〜4時）はほぼ滞在人口なので、"
+                 "昼間の移動に左右されずにその場所に残っているかを見られます。",
+        )
+    with col_cover:
+        coverage = st.selectbox(
+            "地図に出すメッシュ", list(MESH_COVERAGE),
+            key=f"mesh_cover_{sel_version}",
+        )
+    with col_clear:
+        st.write("")
+        if st.button("選択をクリア", disabled=not selected, key="clear_mesh"):
+            st.session_state["selected_meshes"] = []
+            st.session_state["_sel_version_mesh"] = sel_version + 1
+            st.rerun()
+
+    geojson = mesh_population.mesh_geojson(
+        summary, metric, MESH_COVERAGE[coverage]
+    )
+
+    col_map, col_ts = st.columns([2, 3], gap="large")
+    with col_ts:
+        st.subheader("選択メッシュの人口推計値の時系列変化")
+    with col_map:
+        st.subheader(f"500mメッシュ別の人口の変化（{len(geojson['features']):,}メッシュ）")
+        st.markdown(mesh_population.legend_html(metric), unsafe_allow_html=True)
+        fmap = folium.Map(
+            # 県全体は1画面に入らないので、震源を中心に置いて熊本市・益城の
+            # あたりから見てもらう（縮尺は他の地図と揃える）
+            location=[mainshock["epicenter_lat"], mainshock["epicenter_lon"]],
+            zoom_start=MAP_ZOOM, tiles=None,
+            # 数千のポリゴンを個別のDOM要素にするとブラウザが持たないので、
+            # canvasにまとめて描く
+            prefer_canvas=True,
+        )
+        folium.TileLayer(
+            "OpenStreetMap", name="OpenStreetMap", opacity=0.45, control=False,
+        ).add_to(fmap)
+        fmap.get_root().header.add_child(folium.Element(
+            "<style>#map_div{width:100% !important;}"
+            ".leaflet-tooltip{width:max-content;max-width:240px;font-size:11.5px;"
+            "line-height:1.5;padding:5px 8px;}</style>"
+        ))
+        mesh_population.add_mesh_layer(fmap, geojson, metric)
+        for mesh, color in zip(selected, SELECTION_COLORS):
+            south, west, north, east = mesh_population.mesh_bounds(mesh)
+            folium.Rectangle(
+                [[south, west], [north, east]],
+                color=color, weight=3, fill=False,
+            ).add_to(fmap)
+        folium.Marker(
+            [mainshock["epicenter_lat"], mainshock["epicenter_lon"]],
+            icon=_epicenter_icon(), tooltip="本震の震源",
+        ).add_to(fmap)
+        map_state = st_folium(
+            fmap, height=MAP_HEIGHT_PX, width=550,
+            returned_objects=[
+                "last_object_clicked_tooltip", "last_object_clicked_count",
+            ],
+            key="mesh_pop_map_v1",
+        )
+        st.caption(
+            "色は発災前後の平均人口の比です。"
+            "メッシュをクリックすると右に時系列変化が出ます"
+            "（最大2メッシュまで、反映に1〜2秒かかります）。"
+            "10人未満のメッシュは配信されないため、"
+            f"「{list(MESH_COVERAGE)[0]}」以外を選ぶと、"
+            "出たり出なかったりするメッシュも地図に出ます。"
+        )
+
+    click_count = map_state.get("last_object_clicked_count") if map_state else None
+    if click_count is not None and click_count != st.session_state.get(
+        "_last_click_count_mesh"
+    ):
+        st.session_state["_last_click_count_mesh"] = click_count
+        mesh = mesh_population.mesh_from_tooltip(
+            map_state.get("last_object_clicked_tooltip")
+        )
+        if mesh is not None:
+            if mesh in selected:
+                selected.remove(mesh)
+            else:
+                if len(selected) >= MAX_SELECTED_MESHES:
+                    selected.pop(0)
+                selected.append(mesh)
+            st.session_state["selected_meshes"] = selected
+            st.session_state["_sel_version_mesh"] = sel_version + 1
+            st.rerun()
+
+    with col_ts:
+        render_mesh_timeseries(
+            selected, summary, meta, quake_at, holidays, other_event_times
+        )
+
+
+def render_mesh_timeseries(selected, summary, meta, quake_at, holidays,
+                           other_event_times=()) -> None:
+    """選択メッシュの人口推計値を、平常時（発災前の同じ日区分・時刻）と並べる。"""
+    if not selected:
+        st.info(
+            "地図のメッシュをクリックすると、そのメッシュの人口推計値の"
+            "時系列変化がここに出ます（最大2メッシュまで比較可）。"
+        )
+        return
+
+    fig = go.Figure()
+    for mesh, color in zip(selected, SELECTION_COLORS):
+        frame = mesh_population.with_baseline(
+            mesh_population.series_for(mesh, meta), pd.Timestamp(quake_at), holidays
+        )
+        label = mesh_population.mesh_label(summary, mesh)
+        fig.add_trace(go.Scatter(
+            x=frame["datetime"], y=frame["baseline"],
+            mode="lines", line=dict(color=color, dash="dot", width=1),
+            opacity=0.6, name=f"{label} 平常時",
+        ))
+        fig.add_trace(go.Scatter(
+            x=frame["datetime"], y=frame["population"],
+            mode="lines", line=dict(color=color, width=1.2),
+            name=f"{label} 実績",
+        ))
+    for t in other_event_times:
+        fig.add_vline(x=t, line_dash="dot", line_color="lightgray",
+                      line_width=1, opacity=0.7)
+    fig.add_vline(x=quake_at, line_dash="dot", line_color="black", line_width=2)
+    fig.add_annotation(
+        x=quake_at, y=1, yref="paper", yanchor="bottom",
+        text="地震発生 16:27", showarrow=False, font=dict(size=11, color="black"),
+    )
+    fig.update_layout(
+        height=430,
+        margin=dict(l=10, r=10, t=26, b=CHART_BOTTOM_MARGIN),
+        legend=dict(orientation="h", yref="container", yanchor="bottom", y=0.012,
+                    xanchor="left", x=0, font=dict(size=10)),
+        yaxis=dict(title="人口推計値（人）", rangemode="tozero"),
+        xaxis=dict(title=""),
+        hovermode="x unified",
+    )
+    st.plotly_chart(fig, use_container_width=True, key="mesh_pop_ts")
+    st.caption(
+        "平常時＝発災前（"
+        f"{pd.Timestamp(meta['start']):%m-%d} 〜 本震まで）の、同じ日区分"
+        "（平日／土／日祝）・同じ時刻の平均。発災前は8日分しかないため、"
+        "土・日祝はそれぞれ1日分の値です。"
+        "線が切れているのは、その時間帯に10人未満で配信されなかったところです。"
+    )
+
+
 def main():
     st.markdown(
         "<style>"
@@ -2335,9 +2546,10 @@ def main():
     # 通れる道マップ版を先に置く。規制の収録が国の配信で揃っており、
     # 高速道路の緊急車両の通行可能区間まで区間ごとの線で入るため、
     # こちらを主に見てもらう。県のJSON＋PDF転記の版は（参考）に下げた。
-    tab_mlit, tab_overview, tab_dl = st.tabs(
+    tab_mlit, tab_mesh, tab_overview, tab_dl = st.tabs(
         [
             "地図・交通量の時系列変化",
+            "地図・人口の時系列変化",
             "地図・交通量の時系列変化（参考）",
             "データダウンロード",
         ]
@@ -2800,6 +3012,12 @@ def main():
                 point_summary, point_labels, quake_at, other_event_times,
                 quake_info, mainshock, anomaly_end,
             )
+
+    # ------------------------------------------------------------------
+    # 地図・人口の時系列変化タブ（モバイル空間統計）
+    # ------------------------------------------------------------------
+    with tab_mesh:
+        render_mesh_population_tab(quake_at, mainshock, other_event_times)
 
 
 if __name__ == "__main__":
