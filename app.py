@@ -1627,7 +1627,7 @@ def build_plain_points_feature_group(
         folium.CircleMarker(
             location=[row["point_lat"], row["point_lon"]],
             radius=6 if is_selected else 4,
-            color=SELECTION_COLORS[0] if is_selected else "#333333",
+            color=POINT_SELECTION_COLOR if is_selected else "#333333",
             weight=3 if is_selected else 1,
             fill=True,
             fill_color="#ffffff",
@@ -2223,9 +2223,11 @@ MAX_SELECTED_MESHES = 2
 # この地図で選べる観測点は1点だけ。メッシュ2つ＋観測点で、実績と平常時を
 # 出すと図が6本になる。これ以上増やすとどの線がどれか追えなくなる。
 MAX_SELECTED_POINTS_ON_MESH_MAP = 1
-# メッシュの選択枠の色。観測点の選択色（赤・緑）と別にして、
-# 図の中でどちらの線がメッシュでどちらが観測点か分かるようにする。
-MESH_SELECTION_COLORS = ["#6a3d9a", "#00857a"]  # 紫 / 青緑
+# 選択したものの色。地図の塗り分けが青〜赤なので、その上でも沈まない色を
+# 選ぶ（紫は赤の塗りに埋もれ、赤と並ぶと見分けにくかった）。
+# 色覚の型によらず区別しやすい配色（岡部・伊藤）から3色を取っている。
+MESH_SELECTION_COLORS = ["#000000", "#009E73"]  # 黒 / 青緑
+POINT_SELECTION_COLOR = "#E69F00"              # 橙（観測点）
 
 
 # このタブが modules/mesh_population.py に求めるもの。公開側で app.py だけが
@@ -2398,7 +2400,7 @@ def _mesh_population_body(point_summary: pd.DataFrame, point_labels: dict,
             "色は発災前後の平均人口の比です。"
             "**メッシュ（最大2つ）と観測点（1点）はどちらもクリックで選べ**、"
             "選んだものを右の図に重ねて出します（反映に1〜2秒かかります）。"
-            "メッシュの選択枠は紫・青緑、選択中の観測点は赤で、"
+            "メッシュの選択枠は黒・青緑、選択中の観測点は橙で、"
             "図の色もこれに合わせています。"
             "観測点は白丸の小さな印で、メッシュの色を隠さないよう"
             "異常度による描き分けはしていません"
@@ -2473,11 +2475,14 @@ def render_mesh_timeseries(selected, selected_points, summary, meta,
         fig.add_trace(go.Bar(
             x=frame["datetime"], y=frame["population"],
             marker=dict(color=color, line=dict(width=0)),
-            opacity=0.75, name=f"{label} 人口",
+            opacity=0.6, name=f"{label} 人口",
         ))
+        # 平常時は、棒と同じ1時間ごとの水準なので階段（hv）で描く。
+        # なめらかな破線だと棒の刻みと合わず、どの棒と比べる線なのかが
+        # 読み取れなかった。
         fig.add_trace(go.Scatter(
             x=frame["datetime"], y=frame["baseline"],
-            mode="lines", line=dict(color=color, dash="dot", width=1.2),
+            mode="lines", line=dict(color=color, width=1.6, shape="hv"),
             name=f"{label} 人口 平常時",
         ))
 
@@ -2487,7 +2492,7 @@ def render_mesh_timeseries(selected, selected_points, summary, meta,
     x_from, x_to = TIMESERIES_DISPLAY_START, pd.Timestamp(meta["end"])
     if selected_points:
         hourly = load_observations("observations_hourly.parquet")
-        for pid, color in zip(selected_points, SELECTION_COLORS):
+        for pid, color in zip(selected_points, [POINT_SELECTION_COLOR]):
             sub = hourly[
                 (hourly["point_id"] == pid)
                 & hourly["datetime"].between(x_from, x_to)
@@ -2543,7 +2548,7 @@ def render_mesh_timeseries(selected, selected_points, summary, meta,
         f"モバイル空間統計の収録の終わり（{x_to:%m-%d %H:%M}）まで"
         "（人口はこれより前、交通量はこれより後までデータがありますが、"
         "重ねて読む図なので両方が揃っている範囲に合わせています）。"
-        "**点線はどちらも平常時**です。"
+        "**平常時は、人口が棒と同じ刻みの階段線、交通量が点線**です。"
         "交通量の平常時は交通量のタブと同じもの（地震前の同じ日区分・同じ時刻の"
         "平均。曜日ごとに各8日分）で、上下を足しています。"
         "人口の平常時＝発災前（"
