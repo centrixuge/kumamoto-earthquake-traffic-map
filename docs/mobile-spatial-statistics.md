@@ -31,22 +31,25 @@
 | `mesh_population_summary.parquet` | メッシュごとの位置・市区町村名・発災前後の平均 | 1.0 MB |
 | `mesh_population_meta.json` | 期間・件数・出典・秘匿の扱い | 数KB |
 
-置き場の設定は `st.secrets` に書きます（[`modules/mesh_population.py`](../modules/mesh_population.py)）。手元に `data/mss_build/` があるときはそちらが優先されるので、開発中は設定なしで動きます。
+置き場は**非公開のGitHubリポジトリ** `centrixuge/kumamoto-mesh-population-data`（private）で、この3ファイルだけを置いています。アプリはGitHubのcontents APIで実行時に読みます（[`modules/mesh_population.py`](../modules/mesh_population.py)）。手元に `data/mss_build/` があるときはそちらが優先されるので、開発中は設定なしで動きます。
+
+Streamlit Cloud側の設定（公開アプリとdevelop確認用アプリの両方に必要）:
 
 ```toml
-# 非公開のGitHubリポジトリから読む場合
 [mesh_population]
-repo  = "owner/name"
+repo  = "centrixuge/kumamoto-mesh-population-data"
 ref   = "main"
-token = "github_pat_..."   # contents:read だけの fine-grained PAT
-
-# オブジェクトストレージから読む場合
-[mesh_population]
-base_url = "https://.../"
-token    = "..."           # 要るときだけ。Bearerで送る
+token = "github_pat_..."
 ```
 
-どちらも無い場合、このタブは「集計データが見つかりません」と出るだけで、ほかのタブは通常どおり動きます。
+トークンは **fine-grained PAT** を使います（[設定ページ](https://github.com/settings/personal-access-tokens/new)）。
+
+- Resource owner: `centrixuge` / Repository access: **Only select repositories** → `kumamoto-mesh-population-data`
+- Repository permissions: **Contents: Read-only** のみ（他は付けない）
+
+設定が無い場合、このタブは「集計データが見つかりません」と出るだけで、ほかのタブは通常どおり動きます。
+
+新しい時点のデータを足したときは、`scripts/build_mesh_population.py` を回し直して、出力3ファイルを非公開リポジトリに push すれば反映されます（アプリ側のキャッシュは1時間）。
 
 **画面に出した値そのものは、ブラウザ側から取り出せます。** グラフの系列も地図のメッシュ属性もクライアントに渡るためで、ダウンロードボタンを付けないことは一括配布をしないという意味しかありません。公開してよい粒度に落としたものだけを置く、という上の2番目がここでの実質的な担保です。
 
