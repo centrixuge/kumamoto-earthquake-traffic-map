@@ -2158,8 +2158,20 @@ def render_mesh_population_tab(quake_at, mainshock: dict,
         )
         return
 
-    meta = mesh_population.load_meta()
-    summary = mesh_population.load_summary()
+    # 置き場から読めないときは、このタブだけ理由を出して止める
+    # （そのまま例外を投げると、他のタブごとページが落ちる）。
+    try:
+        meta = mesh_population.load_meta()
+        summary = mesh_population.load_summary()
+    except mesh_population.MeshDataUnavailable as e:
+        st.error(f"モバイル空間統計の集計データを読めませんでした。\n\n{e}")
+        return
+    except Exception as e:  # 通信断・parquetの破損など
+        st.error(
+            "モバイル空間統計の集計データを読めませんでした"
+            f"（{type(e).__name__}）。"
+        )
+        return
     holidays = load_holiday_set()
     start = pd.Timestamp(meta["start"])
     end = pd.Timestamp(meta["end"])

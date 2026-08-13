@@ -84,23 +84,50 @@ def _fetch(name: str) -> bytes:
         return local.read_bytes()
 
     cfg = _secrets()
+    # secretsの貼り付けで前後に空白や改行が入ることがあるので落としておく
+    token = str(cfg.get("token", "")).strip()
     if cfg.get("base_url"):
-        url = cfg["base_url"].rstrip("/") + "/" + name
-        headers = {"Authorization": f"Bearer {cfg['token']}"} if cfg.get("token") else {}
+        url = str(cfg["base_url"]).strip().rstrip("/") + "/" + name
+        headers = {"Authorization": f"Bearer {token}"} if token else {}
     elif cfg.get("repo"):
-        ref = cfg.get("ref", "main")
-        url = f"https://api.github.com/repos/{cfg['repo']}/contents/{name}?ref={ref}"
+        repo = str(cfg["repo"]).strip().strip("/")
+        ref = str(cfg.get("ref", "main")).strip()
+        url = f"https://api.github.com/repos/{repo}/contents/{name}?ref={ref}"
         headers = {
             "Accept": "application/vnd.github.raw",
-            "Authorization": f"Bearer {cfg['token']}",
+            "Authorization": f"Bearer {token}",
             "X-GitHub-Api-Version": "2022-11-28",
         }
     else:
-        raise MeshDataUnavailable(name)
+        raise MeshDataUnavailable("置き場が設定されていません。")
 
     res = requests.get(url, headers=headers, timeout=120)
-    res.raise_for_status()
+    if res.status_code != 200:
+        # 例外をそのまま投げるとページ全体が落ちるうえ、公開環境では本文が
+        # 伏せられて原因が分からない。状態コードと当たり先だけ残して返す
+        # （トークンは出さない）。
+        raise MeshDataUnavailable(
+            f"{name} を取得できませんでした（HTTP {res.status_code}）。"
+            f"取得先: {url}\n\n" + _http_hint(res.status_code)
+        )
     return res.content
+
+
+def _http_hint(status: int) -> str:
+    if status == 404:
+        return (
+            "**404** はトークンにそのリポジトリの権限が無いときにも出ます"
+            "（存在しない場合と区別が付きません）。fine-grained PAT の "
+            "Repository access で対象リポジトリを選んでいるか、"
+            "Repository permissions の **Contents: Read-only** が付いているか、"
+            "`repo` と `ref`（ブランチ名）の綴りをご確認ください。"
+        )
+    if status in (401, 403):
+        return (
+            f"**{status}** はトークンが無効・期限切れ・権限不足のときに出ます。"
+            "fine-grained PAT の有効期限と Contents: Read-only をご確認ください。"
+        )
+    return "GitHubの応答をご確認ください。"
 
 
 @st.cache_data(ttl=3600, show_spinner="モバイル空間統計を読み込み中")
