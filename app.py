@@ -2192,6 +2192,9 @@ MESH_COVERAGE = {
     "1時点でも10人以上（重い）": 1,
 }
 MAX_SELECTED_MESHES = 2
+# この地図で選べる観測点は1点だけ。メッシュ2つ＋観測点で、実績と平常時を
+# 出すと図が6本になる。これ以上増やすとどの線がどれか追えなくなる。
+MAX_SELECTED_POINTS_ON_MESH_MAP = 1
 # メッシュの選択枠の色。観測点の選択色（赤・緑）と別にして、
 # 図の中でどちらの線がメッシュでどちらが観測点か分かるようにする。
 MESH_SELECTION_COLORS = ["#6a3d9a", "#00857a"]  # 紫 / 青緑
@@ -2372,7 +2375,7 @@ def _mesh_population_body(point_summary: pd.DataFrame, point_labels: dict,
         )
         st.caption(
             "色は発災前後の平均人口の比です。"
-            "**メッシュ（最大2つ）と観測点（最大2点）はどちらもクリックで選べ**、"
+            "**メッシュ（最大2つ）と観測点（1点）はどちらもクリックで選べ**、"
             "選んだものを右の図に重ねて出します（反映に1〜2秒かかります）。"
             "メッシュの選択枠は紫・青緑、観測点の選択枠は赤・緑で、"
             "図の線の色もこれに合わせています。"
@@ -2403,7 +2406,7 @@ def _mesh_population_body(point_summary: pd.DataFrame, point_labels: dict,
             if pid in selected_points:
                 selected_points.remove(pid)
             else:
-                if len(selected_points) >= MAX_SELECTED_POINTS:
+                while len(selected_points) >= MAX_SELECTED_POINTS_ON_MESH_MAP:
                     selected_points.pop(0)
                 selected_points.append(pid)
             st.session_state["selected_points_mesh"] = selected_points
@@ -2430,7 +2433,7 @@ def render_mesh_timeseries(selected, selected_points, summary, meta,
     """
     if not selected and not selected_points:
         st.info(
-            "地図のメッシュ（最大2つ）や観測点（最大2点）をクリックすると、"
+            "地図のメッシュ（最大2つ）や観測点（1点）をクリックすると、"
             "人口推計値と交通量がここに重ねて出ます。"
         )
         return
@@ -2465,11 +2468,21 @@ def render_mesh_timeseries(selected, selected_points, summary, meta,
             ].sort_values("datetime")
             if sub.empty:
                 continue
-            total = sub["traffic_up"] + sub["traffic_down"]
+            label = point_labels.get(pid, pid)
+            # 上下を足して1本にする。平常時も同じ足し方（交通量のタブと
+            # 同じ、同じ日区分・同じ時刻の平均）。
             fig.add_trace(go.Scatter(
-                x=sub["datetime"], y=total, yaxis="y2",
-                mode="lines", line=dict(color=color, width=1.2),
-                name=f"{point_labels.get(pid, pid)} 交通量",
+                x=sub["datetime"],
+                y=sub["baseline_mean_up"] + sub["baseline_mean_down"],
+                yaxis="y2", mode="lines",
+                line=dict(color=color, dash="dot", width=1),
+                opacity=0.6, name=f"{label} 交通量 平常時",
+            ))
+            fig.add_trace(go.Scatter(
+                x=sub["datetime"],
+                y=sub["traffic_up"] + sub["traffic_down"],
+                yaxis="y2", mode="lines", line=dict(color=color, width=1.2),
+                name=f"{label} 交通量",
             ))
 
     for t in other_event_times:
@@ -2501,12 +2514,14 @@ def render_mesh_timeseries(selected, selected_points, summary, meta,
         f"モバイル空間統計の収録の終わり（{x_to:%m-%d %H:%M}）まで"
         "（人口はこれより前、交通量はこれより後までデータがありますが、"
         "重ねて読む図なので両方が揃っている範囲に合わせています）。"
-        "平常時（点線）はメッシュの人口だけに出しています"
-        "（交通量の平常時との比較は「地図・交通量の時系列変化」タブが本体です）。"
+        "**点線はどちらも平常時**です。"
+        "交通量の平常時は交通量のタブと同じもの（地震前の同じ日区分・同じ時刻の"
+        "平均。曜日ごとに各8日分）で、上下を足しています。"
         "人口の平常時＝発災前（"
         f"{pd.Timestamp(meta['start']):%m-%d} 〜 本震まで）の、同じ日区分"
-        "（平日／土／日祝）・同じ時刻の平均。発災前は8日分しかないため、"
-        "土・日祝はそれぞれ1日分の値です。"
+        "（平日／土／日祝）・同じ時刻の平均。**発災前が8日分しかないため、"
+        "人口側は曜日ごとではなく3区分で平均し、土・日祝はそれぞれ1日分の値です**"
+        "（交通量側とは平常時の作り方が違います）。"
         "線が切れているのは、その時間帯に10人未満で配信されなかったところです。"
     )
 
