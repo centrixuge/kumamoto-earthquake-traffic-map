@@ -2139,13 +2139,21 @@ MESH_COVERAGE = {
     "1時点でも10人以上（重い）": 1,
 }
 MAX_SELECTED_MESHES = 2
+# メッシュの選択枠の色。観測点の選択色（赤・緑）と別にして、
+# 図の中でどちらの線がメッシュでどちらが観測点か分かるようにする。
+MESH_SELECTION_COLORS = ["#6a3d9a", "#00857a"]  # 紫 / 青緑
 
 
-def render_mesh_population_tab(quake_at, mainshock: dict,
+def render_mesh_population_tab(point_summary: pd.DataFrame, point_labels: dict,
+                               quake_at, mainshock: dict,
                                other_event_times=()) -> None:
     """
-    モバイル空間統計の500mメッシュ人口を地図に出し、クリックしたメッシュの
-    時系列変化を右に並べるタブ。
+    モバイル空間統計の500mメッシュ人口と、常時観測点の交通量を重ねて見るタブ。
+
+    地図にはメッシュと観測点の両方を置き、どちらもクリックで選べる
+    （メッシュ2つ・観測点2点まで）。選んだものを1つの図に重ねて出し、
+    人がどれだけ残っている場所で交通量がどう動いたかを突き合わせられる
+    ようにしている。単位が違うので縦軸は左（人）と右（台/時）に分ける。
 
     元データは公開できないため、公開repoにはファイルを置かず、集計済みの
     ファイルを非公開の置き場から読む（modules/mesh_population.py）。
@@ -2184,8 +2192,13 @@ def render_mesh_population_tab(quake_at, mainshock: dict,
     )
 
     st.session_state.setdefault("selected_meshes", [])
+    st.session_state.setdefault("selected_points_mesh", [])
     sel_version = st.session_state.get("_sel_version_mesh", 0)
     selected = list(st.session_state["selected_meshes"])
+    selected_points = [
+        p for p in st.session_state["selected_points_mesh"]
+        if p in set(point_summary["point_id"])
+    ]
 
     # 地図より前にウィジェットを作る（地図のクリックで st.rerun したときに、
     # まだ作られていないウィジェットの状態が捨てられるのを避けるため）。
@@ -2194,8 +2207,8 @@ def render_mesh_population_tab(quake_at, mainshock: dict,
         metric = st.selectbox(
             "地図の色分け", list(mesh_population.METRICS),
             key=f"mesh_metric_{sel_version}",
-            help="深夜（2〜4時）はほぼ滞在人口なので、"
-                 "昼間の移動に左右されずにその場所に残っているかを見られます。",
+            help="夜間人口は3時、昼間人口は14時を代表値にしています"
+                 "（どちらも移動の途中が混じりにくい時刻）。",
         )
     with col_cover:
         coverage = st.selectbox(
@@ -2204,8 +2217,10 @@ def render_mesh_population_tab(quake_at, mainshock: dict,
         )
     with col_clear:
         st.write("")
-        if st.button("選択をクリア", disabled=not selected, key="clear_mesh"):
+        if st.button("選択をクリア", key="clear_mesh",
+                     disabled=not (selected or selected_points)):
             st.session_state["selected_meshes"] = []
+            st.session_state["selected_points_mesh"] = []
             st.session_state["_sel_version_mesh"] = sel_version + 1
             st.rerun()
 
@@ -2215,10 +2230,13 @@ def render_mesh_population_tab(quake_at, mainshock: dict,
 
     col_map, col_ts = st.columns([2, 3], gap="large")
     with col_ts:
-        st.subheader("選択メッシュの人口推計値の時系列変化")
+        st.subheader("選択メッシュの人口推計値 × 選択観測点の交通量")
     with col_map:
         st.subheader(f"500mメッシュ別の人口の変化（{len(geojson['features']):,}メッシュ）")
-        st.markdown(mesh_population.legend_html(metric), unsafe_allow_html=True)
+        st.markdown(
+            mesh_population.legend_html(metric) + point_z_legend_row(point_summary),
+            unsafe_allow_html=True,
+        )
         fmap = folium.Map(
             # 県全体は1画面に入らないので、震源を中心に置いて熊本市・益城の
             # あたりから見てもらう（縮尺は他の地図と揃える）
@@ -2233,11 +2251,15 @@ def render_mesh_population_tab(quake_at, mainshock: dict,
         ).add_to(fmap)
         fmap.get_root().header.add_child(folium.Element(
             "<style>#map_div{width:100% !important;}"
-            ".leaflet-tooltip{width:max-content;max-width:240px;font-size:11.5px;"
-            "line-height:1.5;padding:5px 8px;}</style>"
+            # メッシュのツールチップが下の観測点マーカーのクリックを奪わない
+            # ようにする（他の地図と同じ扱い）
+            ".leaflet-tooltip{pointer-events:none;width:max-content;"
+            "max-width:240px;font-size:11.5px;line-height:1.5;padding:5px 8px;}"
+            + POINT_LEGEND_CSS +
+            "</style>"
         ))
         mesh_population.add_mesh_layer(fmap, geojson, metric)
-        for mesh, color in zip(selected, SELECTION_COLORS):
+        for mesh, color in zip(selected, MESH_SELECTION_COLORS):
             south, west, north, east = mesh_population.mesh_bounds(mesh)
             folium.Rectangle(
                 [[south, west], [north, east]],
@@ -2247,8 +2269,16 @@ def render_mesh_population_tab(quake_at, mainshock: dict,
             [mainshock["epicenter_lat"], mainshock["epicenter_lon"]],
             icon=_epicenter_icon(), tooltip="本震の震源",
         ).add_to(fmap)
+        # 観測点の凡例（形＝道路種別）は、他の地図と同じく地図の中に置く
+        fmap.get_root().html.add_child(folium.Element(
+            point_legend_html(point_summary)
+        ))
+        points_fg = build_points_feature_group(
+            point_summary, point_labels, selected_points
+        )
         map_state = st_folium(
             fmap, height=MAP_HEIGHT_PX, width=550,
+            feature_group_to_add=points_fg,
             returned_objects=[
                 "last_object_clicked_tooltip", "last_object_clicked_count",
             ],
@@ -2256,8 +2286,10 @@ def render_mesh_population_tab(quake_at, mainshock: dict,
         )
         st.caption(
             "色は発災前後の平均人口の比です。"
-            "メッシュをクリックすると右に時系列変化が出ます"
-            "（最大2メッシュまで、反映に1〜2秒かかります）。"
+            "**メッシュ（最大2つ）と観測点（最大2点）はどちらもクリックで選べ**、"
+            "選んだものを右の図に重ねて出します（反映に1〜2秒かかります）。"
+            "メッシュの選択枠は紫・青緑、観測点の選択枠は赤・緑で、"
+            "図の線の色もこれに合わせています。"
             "10人未満のメッシュは配信されないため、"
             f"「{list(MESH_COVERAGE)[0]}」以外を選ぶと、"
             "出たり出なかったりするメッシュも地図に出ます。"
@@ -2268,9 +2300,9 @@ def render_mesh_population_tab(quake_at, mainshock: dict,
         "_last_click_count_mesh"
     ):
         st.session_state["_last_click_count_mesh"] = click_count
-        mesh = mesh_population.mesh_from_tooltip(
-            map_state.get("last_object_clicked_tooltip")
-        )
+        tooltip = map_state.get("last_object_clicked_tooltip")
+        mesh = mesh_population.mesh_from_tooltip(tooltip)
+        pid = point_id_from_tooltip(tooltip, point_labels)
         if mesh is not None:
             if mesh in selected:
                 selected.remove(mesh)
@@ -2281,25 +2313,44 @@ def render_mesh_population_tab(quake_at, mainshock: dict,
             st.session_state["selected_meshes"] = selected
             st.session_state["_sel_version_mesh"] = sel_version + 1
             st.rerun()
+        elif pid is not None:
+            if pid in selected_points:
+                selected_points.remove(pid)
+            else:
+                if len(selected_points) >= MAX_SELECTED_POINTS:
+                    selected_points.pop(0)
+                selected_points.append(pid)
+            st.session_state["selected_points_mesh"] = selected_points
+            st.session_state["_sel_version_mesh"] = sel_version + 1
+            st.rerun()
 
     with col_ts:
         render_mesh_timeseries(
-            selected, summary, meta, quake_at, holidays, other_event_times
+            selected, selected_points, summary, meta, point_labels,
+            quake_at, holidays, other_event_times,
         )
 
 
-def render_mesh_timeseries(selected, summary, meta, quake_at, holidays,
+def render_mesh_timeseries(selected, selected_points, summary, meta,
+                           point_labels: dict, quake_at, holidays,
                            other_event_times=()) -> None:
-    """選択メッシュの人口推計値を、平常時（発災前の同じ日区分・時刻）と並べる。"""
-    if not selected:
+    """
+    選択メッシュの人口推計値と、選択観測点の交通量を1つの図に重ねる。
+
+    単位が違うので縦軸を分ける（左＝人、右＝台/時）。交通量は人口に合わせて
+    1時間値の上下合計で、平常時の線はメッシュ側だけに出す（8本になると
+    どの線を追っているのか分からなくなるため。交通量の平常時との比較は
+    「地図・交通量の時系列変化」タブが本体）。
+    """
+    if not selected and not selected_points:
         st.info(
-            "地図のメッシュをクリックすると、そのメッシュの人口推計値の"
-            "時系列変化がここに出ます（最大2メッシュまで比較可）。"
+            "地図のメッシュ（最大2つ）や観測点（最大2点）をクリックすると、"
+            "人口推計値と交通量がここに重ねて出ます。"
         )
         return
 
     fig = go.Figure()
-    for mesh, color in zip(selected, SELECTION_COLORS):
+    for mesh, color in zip(selected, MESH_SELECTION_COLORS):
         frame = mesh_population.with_baseline(
             mesh_population.series_for(mesh, meta), pd.Timestamp(quake_at), holidays
         )
@@ -2307,13 +2358,36 @@ def render_mesh_timeseries(selected, summary, meta, quake_at, holidays,
         fig.add_trace(go.Scatter(
             x=frame["datetime"], y=frame["baseline"],
             mode="lines", line=dict(color=color, dash="dot", width=1),
-            opacity=0.6, name=f"{label} 平常時",
+            opacity=0.6, name=f"{label} 人口 平常時",
         ))
         fig.add_trace(go.Scatter(
             x=frame["datetime"], y=frame["population"],
             mode="lines", line=dict(color=color, width=1.2),
-            name=f"{label} 実績",
+            name=f"{label} 人口",
         ))
+
+    traffic_start = None
+    if selected_points:
+        hourly = load_observations("observations_hourly.parquet")
+        start, end = pd.Timestamp(meta["start"]), pd.Timestamp(meta["end"])
+        # 交通量の加工データは人口より後から始まる。図の左端に線が無い理由が
+        # 分かるよう、実際の開始時刻を下の注記に出す。
+        if not hourly.empty and hourly["datetime"].min() > start:
+            traffic_start = hourly["datetime"].min()
+        for pid, color in zip(selected_points, SELECTION_COLORS):
+            sub = hourly[
+                (hourly["point_id"] == pid)
+                & hourly["datetime"].between(start, end)
+            ].sort_values("datetime")
+            if sub.empty:
+                continue
+            total = sub["traffic_up"] + sub["traffic_down"]
+            fig.add_trace(go.Scatter(
+                x=sub["datetime"], y=total, yaxis="y2",
+                mode="lines", line=dict(color=color, width=1.2),
+                name=f"{point_labels.get(pid, pid)} 交通量",
+            ))
+
     for t in other_event_times:
         fig.add_vline(x=t, line_dash="dot", line_color="lightgray",
                       line_width=1, opacity=0.7)
@@ -2328,12 +2402,29 @@ def render_mesh_timeseries(selected, summary, meta, quake_at, holidays,
         legend=dict(orientation="h", yref="container", yanchor="bottom", y=0.012,
                     xanchor="left", x=0, font=dict(size=10)),
         yaxis=dict(title="人口推計値（人）", rangemode="tozero"),
-        xaxis=dict(title=""),
+        yaxis2=dict(
+            title="交通量（台/時・上下合計）", overlaying="y", side="right",
+            rangemode="tozero", showgrid=False,
+        ),
+        xaxis=dict(
+            title="",
+            # 交通量は最新まであるが、人口は配信のある期間しかない。
+            # 重ねて見る図なので、人口の期間に合わせて切る。
+            range=[pd.Timestamp(meta["start"]), pd.Timestamp(meta["end"])],
+        ),
         hovermode="x unified",
     )
     st.plotly_chart(fig, use_container_width=True, key="mesh_pop_ts")
     st.caption(
-        "平常時＝発災前（"
+        "**左の縦軸が人口推計値（人）、右の縦軸が交通量（台/時・上下合計）**です。"
+        + (f"交通量の線は **{traffic_start:%m-%d %H:%M}** から始まります"
+           "（それ以前は交通量の加工データを持っていないため）。"
+           if traffic_start is not None else "")
+        + "交通量は人口に合わせて1時間値を使い、表示期間もモバイル空間統計の"
+        "収録期間に合わせています（交通量自体はこれより後まであります）。"
+        "平常時（点線）はメッシュの人口だけに出しています"
+        "（交通量の平常時との比較は「地図・交通量の時系列変化」タブが本体です）。"
+        "人口の平常時＝発災前（"
         f"{pd.Timestamp(meta['start']):%m-%d} 〜 本震まで）の、同じ日区分"
         "（平日／土／日祝）・同じ時刻の平均。発災前は8日分しかないため、"
         "土・日祝はそれぞれ1日分の値です。"
@@ -3029,7 +3120,10 @@ def main():
     # 地図・人口の時系列変化タブ（モバイル空間統計）
     # ------------------------------------------------------------------
     with tab_mesh:
-        render_mesh_population_tab(quake_at, mainshock, other_event_times)
+        render_mesh_population_tab(
+            point_summary, build_point_labels(point_summary), quake_at,
+            mainshock, other_event_times,
+        )
 
 
 if __name__ == "__main__":

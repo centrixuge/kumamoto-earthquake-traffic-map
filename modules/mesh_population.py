@@ -58,9 +58,12 @@ RATIO_CLASSES = [
 ]
 NO_DATA_COLOR = "#9aa0a6"
 
+# 地図の色分けの単位。夜間人口・昼間人口の代表値として3時・14時を使う
+# （どちらも移動の途中が混じりにくい時刻）。
 METRICS = {
     "全時間帯": ("pre_mean", "post_mean", "ratio"),
-    "深夜（2〜4時）": ("pre_night", "post_night", "ratio_night"),
+    "夜間人口（3時）": ("pre_h3", "post_h3", "ratio_h3"),
+    "昼間人口（14時）": ("pre_h14", "post_h14", "ratio_h14"),
 }
 
 
@@ -283,7 +286,7 @@ def legend_html(metric: str) -> str:
     return (
         '<div style="font-size:0.79rem;line-height:1.45;margin:0 0 4px 0;">'
         '<div style="display:flex;flex-wrap:wrap;gap:1px 12px;align-items:center;">'
-        f'<b style="white-space:nowrap;">発災後/発災前（{metric}）:</b>{marks}</div>'
+        f'<b style="white-space:nowrap;">発災後/発災前・{metric}:</b>{marks}</div>'
         "</div>"
     )
 

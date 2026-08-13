@@ -47,6 +47,9 @@ QUAKE_AT = pd.Timestamp("2026-07-28 16:27")
 # 提供データの秘匿処理。10人未満のメッシュは配信されない
 MIN_POPULATION = 10
 
+# 夜間人口・昼間人口の代表時刻
+REPRESENTATIVE_HOURS = (3, 14)
+
 # 熊本市の行政区。N03の名称欄には「熊本市」としか入らないため、
 # 行政区域コードから補う（2,030メッシュが全部「熊本市」では場所が分からない）
 KUMAMOTO_WARDS = {
@@ -212,29 +215,33 @@ def build_summary(df: pd.DataFrame, mesh: pd.DataFrame) -> pd.DataFrame:
     """
     メッシュごとの発災前後の水準。地図の色分けに使う。
 
-    深夜（2〜4時）を分けて出すのは、その時間帯がほぼ滞在（就寝）人口で、
-    昼夜の移動に左右されずに「そこに残っているか」を見られるため。
+    全時間帯の平均のほかに、夜間人口・昼間人口の代表値として3時・14時を
+    別に出す。3時はほぼ就寝中の滞在人口、14時は通勤通学が済んだ後の
+    滞在人口で、どちらも移動の途中が混じりにくい時刻。
     """
     pre = df[df["datetime"] < QUAKE_AT]
     post = df[df["datetime"] >= QUAKE_AT]
-    night = df["datetime"].dt.hour.isin([2, 3, 4])
+    hour = df["datetime"].dt.hour
 
     def _mean(frame: pd.DataFrame, name: str) -> pd.Series:
         return frame.groupby("mesh")["population"].mean().rename(name)
 
-    out = mesh.set_index("mesh").join(
-        [
-            _mean(pre, "pre_mean"),
-            _mean(post, "post_mean"),
-            _mean(pre[night.loc[pre.index]], "pre_night"),
-            _mean(post[night.loc[post.index]], "post_night"),
-            df.groupby("mesh")["population"].max().rename("max_population"),
-            df.groupby("mesh")["datetime"].count().rename("n_hours"),
-        ],
-        how="left",
-    )
+    joins = [_mean(pre, "pre_mean"), _mean(post, "post_mean")]
+    for h in REPRESENTATIVE_HOURS:
+        at_hour = hour == h
+        joins += [
+            _mean(pre[at_hour.loc[pre.index]], f"pre_h{h}"),
+            _mean(post[at_hour.loc[post.index]], f"post_h{h}"),
+        ]
+    joins += [
+        df.groupby("mesh")["population"].max().rename("max_population"),
+        df.groupby("mesh")["datetime"].count().rename("n_hours"),
+    ]
+
+    out = mesh.set_index("mesh").join(joins, how="left")
     out["ratio"] = out["post_mean"] / out["pre_mean"]
-    out["ratio_night"] = out["post_night"] / out["pre_night"]
+    for h in REPRESENTATIVE_HOURS:
+        out[f"ratio_h{h}"] = out[f"post_h{h}"] / out[f"pre_h{h}"]
     return out.reset_index()
 
 
@@ -274,6 +281,7 @@ def main() -> None:
         "meshes": int(df["mesh"].nunique()),
         "rows": int(len(df)),
         "min_population": MIN_POPULATION,
+        "representative_hours": list(REPRESENTATIVE_HOURS),
         "suppressed_note": f"{MIN_POPULATION}人未満のメッシュは配信されないため、"
                            "値が無い時間帯は0ではなく「10人未満または欠測」",
         "day_type_days": {
