@@ -17,6 +17,7 @@ from datetime import datetime, timedelta, timezone
 
 import branca.element as branca_element
 import folium
+import jinja2
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
@@ -956,6 +957,57 @@ def point_z_legend_html(point_summary) -> str:
     return "".join(
         f'<span style="white-space:nowrap;">{it}</span>' for it in items
     )
+
+
+class MapSizeFixer(folium.MacroElement):
+    """
+    隠れたタブの中で作られた地図に、正しい大きさを覚え直させる。
+
+    Leafletは初期化時のコンテナの大きさを覚える。タブが選ばれていない間は
+    その中身の大きさが0なので、地図は0×0のつもりのまま動く。すると
+      ・背景地図のタイルが1枚しか読み込まれない
+      ・クリック位置の判定が画面の半分ほどずれる（canvasで描く図形は
+        DOM要素ではないので、この判定でしか拾えず、クリックが効かなくなる）
+    という状態になる。実測で、既定でないタブの地図はどれも 0×0 だった。
+
+    大きさが変わったときに invalidateSize を呼んで直す。JSはMacroElementの
+    script マクロとして地図の子に付ける。streamlit-folium は地図とその子の
+    script マクロだけを集めてJSを組み立てるので、Figureのheader/html/script
+    に足したものは実行されない。
+    """
+    _template = jinja2.Template("""
+        {% macro script(this, kwargs) %}
+            (function () {
+                var m = {{ this._parent.get_name() }};
+                var box = m.getContainer();
+                var fix = function () {
+                    var s = m.getSize();
+                    if (s.x !== box.clientWidth || s.y !== box.clientHeight) {
+                        m.invalidateSize(false);
+                    }
+                };
+                if (window.ResizeObserver) {
+                    new ResizeObserver(fix).observe(box);
+                }
+                window.addEventListener("resize", fix);
+                // ResizeObserver に頼らない道も用意する。地図に触れた時点で
+                // 直せば、クリックの当たり判定はその後に行われる。
+                // pointerdown は capture で拾う（Leafletの判定より先に走らせる。
+                // 指で操作する端末では mouseenter が来ない）。
+                box.addEventListener("mouseenter", fix);
+                box.addEventListener("pointerdown", fix, true);
+                setTimeout(fix, 200);
+            })();
+        {% endmacro %}
+    """)
+
+    def __init__(self):
+        super().__init__()
+        self._name = "MapSizeFixer"
+
+
+def add_map_size_fixer(fmap: folium.Map) -> None:
+    MapSizeFixer().add_to(fmap)
 
 
 def point_z_legend_row(point_summary) -> str:
@@ -2018,6 +2070,7 @@ def render_mlit_beta_tab(point_summary: pd.DataFrame, point_labels: dict,
             point_legend=point_legend_html(point_summary),
             point_legend_css=POINT_LEGEND_CSS + LAYER_CONTROL_CSS,
         )
+        add_map_size_fixer(base_map)
         points_fg = build_points_feature_group(
             point_summary, point_labels, selected_points
         )
@@ -2259,12 +2312,15 @@ def render_mesh_population_tab(point_summary: pd.DataFrame, point_labels: dict,
             "</style>"
         ))
         mesh_population.add_mesh_layer(fmap, geojson, metric)
-        for mesh, color in zip(selected, MESH_SELECTION_COLORS):
-            south, west, north, east = mesh_population.mesh_bounds(mesh)
-            folium.Rectangle(
-                [[south, west], [north, east]],
-                color=color, weight=3, fill=False,
-            ).add_to(fmap)
+        # 選択中のメッシュは、同じ形・同じツールチップの図形を太枠で重ねる。
+        # 枠だけのRectangleを乗せると、canvasの当たり判定は塗りの有無を見ない
+        # ので、その枠が下のメッシュのクリックを奪って解除できなくなる。
+        mesh_population.add_selection_layer(
+            fmap,
+            mesh_population.selected_geojson(
+                summary, metric, selected, MESH_SELECTION_COLORS
+            ),
+        )
         folium.Marker(
             [mainshock["epicenter_lat"], mainshock["epicenter_lon"]],
             icon=_epicenter_icon(), tooltip="本震の震源",
@@ -2273,6 +2329,7 @@ def render_mesh_population_tab(point_summary: pd.DataFrame, point_labels: dict,
         fmap.get_root().html.add_child(folium.Element(
             point_legend_html(point_summary)
         ))
+        add_map_size_fixer(fmap)
         points_fg = build_points_feature_group(
             point_summary, point_labels, selected_points
         )
@@ -2366,18 +2423,16 @@ def render_mesh_timeseries(selected, selected_points, summary, meta,
             name=f"{label} 人口",
         ))
 
-    traffic_start = None
+    # 横軸は交通量の図と同じ左端（本震の前日）から、モバイル空間統計の
+    # 収録の終わりまで。人口は07-21から、交通量はこれより後まであるが、
+    # 重ねて読む図なので両方が揃っている範囲に合わせる。
+    x_from, x_to = TIMESERIES_DISPLAY_START, pd.Timestamp(meta["end"])
     if selected_points:
         hourly = load_observations("observations_hourly.parquet")
-        start, end = pd.Timestamp(meta["start"]), pd.Timestamp(meta["end"])
-        # 交通量の加工データは人口より後から始まる。図の左端に線が無い理由が
-        # 分かるよう、実際の開始時刻を下の注記に出す。
-        if not hourly.empty and hourly["datetime"].min() > start:
-            traffic_start = hourly["datetime"].min()
         for pid, color in zip(selected_points, SELECTION_COLORS):
             sub = hourly[
                 (hourly["point_id"] == pid)
-                & hourly["datetime"].between(start, end)
+                & hourly["datetime"].between(x_from, x_to)
             ].sort_values("datetime")
             if sub.empty:
                 continue
@@ -2406,22 +2461,17 @@ def render_mesh_timeseries(selected, selected_points, summary, meta,
             title="交通量（台/時・上下合計）", overlaying="y", side="right",
             rangemode="tozero", showgrid=False,
         ),
-        xaxis=dict(
-            title="",
-            # 交通量は最新まであるが、人口は配信のある期間しかない。
-            # 重ねて見る図なので、人口の期間に合わせて切る。
-            range=[pd.Timestamp(meta["start"]), pd.Timestamp(meta["end"])],
-        ),
+        xaxis=dict(title="", range=[x_from, x_to]),
         hovermode="x unified",
     )
     st.plotly_chart(fig, use_container_width=True, key="mesh_pop_ts")
     st.caption(
         "**左の縦軸が人口推計値（人）、右の縦軸が交通量（台/時・上下合計）**です。"
-        + (f"交通量の線は **{traffic_start:%m-%d %H:%M}** から始まります"
-           "（それ以前は交通量の加工データを持っていないため）。"
-           if traffic_start is not None else "")
-        + "交通量は人口に合わせて1時間値を使い、表示期間もモバイル空間統計の"
-        "収録期間に合わせています（交通量自体はこれより後まであります）。"
+        "交通量は人口に合わせて1時間値を使っています。"
+        f"表示期間は交通量の図と同じ左端（本震の前日 {x_from:%m-%d %H:%M}）から、"
+        f"モバイル空間統計の収録の終わり（{x_to:%m-%d %H:%M}）まで"
+        "（人口はこれより前、交通量はこれより後までデータがありますが、"
+        "重ねて読む図なので両方が揃っている範囲に合わせています）。"
         "平常時（点線）はメッシュの人口だけに出しています"
         "（交通量の平常時との比較は「地図・交通量の時系列変化」タブが本体です）。"
         "人口の平常時＝発災前（"
@@ -2843,6 +2893,7 @@ def main():
                     point_summary, mainshock, regulations, mlit, point_labels,
                     nexco=nexco,
                 )
+                add_map_size_fixer(base_map)
                 points_fg = build_points_feature_group(
                     point_summary, point_labels, selected_points
                 )

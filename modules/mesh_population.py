@@ -218,36 +218,66 @@ def ratio_color(ratio: float | None) -> str:
     return RATIO_CLASSES[-1][1]
 
 
+def _feature(row, pre_col: str, post_col: str, ratio_col: str,
+             outline: str = "") -> dict:
+    south, west, north, east = mesh_bounds(row.mesh)
+    ratio = getattr(row, ratio_col)
+    return {
+        "type": "Feature",
+        "geometry": {
+            "type": "Polygon",
+            "coordinates": [[
+                [round(west, 6), round(south, 6)],
+                [round(east, 6), round(south, 6)],
+                [round(east, 6), round(north, 6)],
+                [round(west, 6), round(north, 6)],
+                [round(west, 6), round(south, 6)],
+            ]],
+        },
+        "properties": {
+            "mesh": f"{MESH_TOOLTIP_KEY} {row.mesh}",
+            "city": row.city,
+            "pre": _fmt(getattr(row, pre_col)),
+            "post": _fmt(getattr(row, post_col)),
+            "ratio": "—" if pd.isna(ratio) else f"{ratio:.2f} 倍",
+            "color": ratio_color(ratio),
+            "outline": outline,
+        },
+    }
+
+
 @st.cache_data(ttl=3600, show_spinner=False)
 def mesh_geojson(summary: pd.DataFrame, metric: str, min_hours: int) -> dict:
     """地図に載せるメッシュのFeatureCollectionを作る。"""
     pre_col, post_col, ratio_col = METRICS[metric]
     sub = summary[summary["n_hours"] >= min_hours]
+    return {
+        "type": "FeatureCollection",
+        "features": [
+            _feature(row, pre_col, post_col, ratio_col)
+            for row in sub.itertuples(index=False)
+        ],
+    }
+
+
+def selected_geojson(summary: pd.DataFrame, metric: str,
+                     selected, colors) -> dict:
+    """
+    選択中のメッシュを太枠で描くためのFeatureCollection。
+
+    枠だけを別のRectangleで重ねると、canvasの当たり判定は塗りの有無を見ない
+    ため、その枠が下のメッシュのクリックを奪って選択を解除できなくなる。
+    選択の表示も同じ形・同じツールチップの図形にして、押せば解除できるよう
+    にしている。
+    """
+    pre_col, post_col, ratio_col = METRICS[metric]
+    rows = summary.set_index("mesh")
     features = []
-    for row in sub.itertuples(index=False):
-        south, west, north, east = mesh_bounds(row.mesh)
-        ratio = getattr(row, ratio_col)
-        features.append({
-            "type": "Feature",
-            "geometry": {
-                "type": "Polygon",
-                "coordinates": [[
-                    [round(west, 6), round(south, 6)],
-                    [round(east, 6), round(south, 6)],
-                    [round(east, 6), round(north, 6)],
-                    [round(west, 6), round(north, 6)],
-                    [round(west, 6), round(south, 6)],
-                ]],
-            },
-            "properties": {
-                "mesh": f"{MESH_TOOLTIP_KEY} {row.mesh}",
-                "city": row.city,
-                "pre": _fmt(getattr(row, pre_col)),
-                "post": _fmt(getattr(row, post_col)),
-                "ratio": "—" if pd.isna(ratio) else f"{ratio:.2f} 倍",
-                "color": ratio_color(ratio),
-            },
-        })
+    for mesh, color in zip(selected, colors):
+        if mesh not in rows.index:
+            continue
+        row = rows.loc[[mesh]].reset_index().itertuples(index=False).__next__()
+        features.append(_feature(row, pre_col, post_col, ratio_col, outline=color))
     return {"type": "FeatureCollection", "features": features}
 
 
@@ -266,6 +296,28 @@ def add_mesh_layer(fmap: folium.Map, geojson: dict, metric: str) -> None:
             "fillOpacity": 0.55,
         },
         highlight_function=lambda f: {"weight": 2, "color": "#111"},
+        tooltip=folium.GeoJsonTooltip(
+            fields=["mesh", "city", "pre", "post", "ratio"],
+            aliases=["", "", "発災前の平均:", "発災後の平均:", "発災後/発災前:"],
+            sticky=False,
+        ),
+        smooth_factor=0,
+    ).add_to(fmap)
+
+
+def add_selection_layer(fmap: folium.Map, geojson: dict) -> None:
+    """選択中のメッシュを太枠で重ねる。押せば解除できるよう、同じツールチップを持たせる。"""
+    if not geojson["features"]:
+        return
+    folium.GeoJson(
+        geojson,
+        name="選択中のメッシュ",
+        style_function=lambda f: {
+            "fillColor": f["properties"]["color"],
+            "color": f["properties"]["outline"],
+            "weight": 3,
+            "fillOpacity": 0.55,
+        },
         tooltip=folium.GeoJsonTooltip(
             fields=["mesh", "city", "pre", "post", "ratio"],
             aliases=["", "", "発災前の平均:", "発災後の平均:", "発災後/発災前:"],
