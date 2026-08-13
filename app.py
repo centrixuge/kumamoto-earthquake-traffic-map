@@ -958,6 +958,21 @@ def point_z_legend_html(point_summary) -> str:
     )
 
 
+def point_z_legend_row(point_summary) -> str:
+    """
+    上の凡例を、地図の上の規制の凡例（mlit_map_view.legend_html）の続きの
+    行として出す。フォントと行間は legend_html の枠と同じ値にし、枠の
+    下マージン分だけ上に詰めて1つの凡例に見せる。
+    """
+    return (
+        '<div style="font-size:0.79rem;line-height:1.45;margin:-4px 0 4px 0;'
+        'display:flex;flex-wrap:wrap;gap:1px 12px;align-items:center;">'
+        '<b style="white-space:nowrap;">観測点:</b>'
+        + point_z_legend_html(point_summary)
+        + "</div>"
+    )
+
+
 POINT_LEGEND_CSS = (
     # 地図内の観測点凡例（右上）。レイヤ一覧(bottomright)と重ならない
     # 位置に置き、クリックは下の地図に通す。
@@ -1968,9 +1983,8 @@ def render_mlit_beta_tab(point_summary: pd.DataFrame, point_labels: dict,
         # 地図の上は色分けだけにする。件数の表は縦に場所を取って地図を
         # 押し下げるので、地図の下に置く。
         st.markdown(
-            mlit_map_view.legend_html(
-                data, point_row=point_z_legend_html(point_summary)
-            ),
+            mlit_map_view.legend_html(data)
+            + point_z_legend_row(point_summary),
             unsafe_allow_html=True,
         )
         base_map = mlit_map_view.build_map(
