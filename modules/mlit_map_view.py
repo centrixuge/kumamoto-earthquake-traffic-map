@@ -220,13 +220,14 @@ def _counts(data: dict) -> pd.DataFrame:
     return table[["規制中", "解除済み"]]
 
 
-def legend_html(data: dict) -> str:
+def legend_html(data: dict, point_row: str = "") -> str:
     """
     地図の上に置く凡例。件数は下の表に出すのでここには入れない。
 
-    行は2つ。色＝規制の内容（「地図・交通量の時系列変化」タブと同じ意味）、
-    太さ＝道路種別（レイヤの区切りと同じ）。実際に出てくる区分だけを
-    並べる（この配布データには片側交互が無いなど、区分は時期で変わる）。
+    行は3つ。色＝規制の内容、太さ＝道路種別（レイヤの区切りと同じ）、
+    観測点＝色の濃さが異常度。実際に出てくる区分だけを並べる
+    （配布データに片側交互が無いなど、区分は時期で変わる）。
+    観測点の行は呼び出し側から渡す（どちらの地図でも同じものを使うため）。
     """
     items = drawn_items(data)
     present_content = {content_class(i) for i in items}
@@ -262,6 +263,7 @@ def legend_html(data: dict) -> str:
             'border-top:4px dashed #888;vertical-align:middle;"></span>'
             " 破線は解除済み</span>",
         )
+        + (_row("観測点", point_row) if point_row else "")
         + "</div>"
     )
 

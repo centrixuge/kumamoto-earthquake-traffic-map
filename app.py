@@ -928,6 +928,36 @@ def _deterministic_branca_ids():
         branca_element.Element._generate_id = original
 
 
+def point_z_legend_html(point_summary) -> str:
+    """
+    観測点の色の濃さ（＝異常度）の凡例。地図の外に置く行として返す。
+
+    どちらの地図でも観測点は同じ描き方なので、凡例も同じものを使う。
+    以前は（参考）タブの中に直接書いていたため、通れる道マップ版の地図には
+    出ていなかった。
+    """
+    def _sw(style: str) -> str:
+        return (
+            '<span style="display:inline-block;vertical-align:middle;'
+            f'{style}"></span>'
+        )
+
+    items = [
+        _sw("width:30px;height:11px;border-radius:6px;border:1px solid #aaa;"
+            "background:linear-gradient(to right,#deebf7,#08306b);")
+        + " 濃く大きいほど異常度|z|が大きい",
+    ]
+    if int(point_summary["max_abs_z"].isna().sum()):
+        items.append(
+            _sw("width:11px;height:11px;border-radius:50%;background:#f0f0f0;"
+                "border:2px dashed #777;")
+            + " 枠が灰色の破線なら地震後が欠測"
+        )
+    return "".join(
+        f'<span style="white-space:nowrap;">{it}</span>' for it in items
+    )
+
+
 POINT_LEGEND_CSS = (
     # 地図内の観測点凡例（右上）。レイヤ一覧(bottomright)と重ならない
     # 位置に置き、クリックは下の地図に通す。
@@ -1937,7 +1967,12 @@ def render_mlit_beta_tab(point_summary: pd.DataFrame, point_labels: dict,
         st.subheader("常時観測点別の異常度 × 通行規制")
         # 地図の上は色分けだけにする。件数の表は縦に場所を取って地図を
         # 押し下げるので、地図の下に置く。
-        st.markdown(mlit_map_view.legend_html(data), unsafe_allow_html=True)
+        st.markdown(
+            mlit_map_view.legend_html(
+                data, point_row=point_z_legend_html(point_summary)
+            ),
+            unsafe_allow_html=True,
+        )
         base_map = mlit_map_view.build_map(
             data,
             center=_map_center(point_summary, mainshock),
@@ -2384,7 +2419,6 @@ def main():
                 # すると何の数なのかがかえって分からなくなる。件数は地図の下の
                 # データソースの表と、リンク先の一覧のほうに置いている。
                 n_points = len(point_summary)
-                n_no_data = int(point_summary["max_abs_z"].isna().sum())
                 _mlit_items = (mlit or {}).get("items", [])
                 n_mlit_line = sum(1 for i in _mlit_items if i.get("path"))
                 n_mlit_point = sum(
@@ -2444,21 +2478,10 @@ def main():
                         ' 直轄国道で線形が作れないもの（該当観測点のすぐ上）'
                     )
                 # 形（道路の種別）の凡例は地図の中に置いてあるのでここには出さない
-                point_items = [
-                    f'{_sw("width:30px;height:11px;border-radius:6px;border:1px solid #aaa;"
-                          "background:linear-gradient(to right,#deebf7,#08306b);")}'
-                    ' 濃く大きいほど異常度|z|が大きい',
-                ]
-                if n_no_data:
-                    point_items.append(
-                        f'{_sw("width:11px;height:11px;border-radius:50%;background:#f0f0f0;"
-                              "border:2px dashed #777;")}'
-                        ' 枠が灰色の破線なら地震後が欠測'
-                    )
                 rows = [
                     ("規制の色", color_items),
                     ("規制の印と状態", shape_items),
-                    ("観測点", point_items),
+                    ("観測点", [point_z_legend_html(point_summary)]),
                 ]
                 legend_html = "".join(
                     '<div style="display:flex;flex-wrap:wrap;gap:1px 12px;align-items:center;">'
