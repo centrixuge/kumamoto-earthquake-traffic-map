@@ -1255,18 +1255,21 @@ def build_base_map(
                     all(i.get("end_timestamp") for i in items)
                 )
                 for ep in items[0].get("endpoints") or []:
-                    key = (round(ep["lat"], 6), round(ep["lon"], 6), id(layer))
+                    # 同じICでも報によって座標が数十mずれていることがあり、
+                    # 座標で束ねると同じICが2つ描かれる。名前で束ねる。
+                    key = (ep["name"], id(layer))
                     entry = ic_points.setdefault(
                         key,
-                        {"name": ep["name"], "node": ep.get("osm_node"),
-                         "sections": [], "layer": layer},
+                        {"name": ep["name"], "lat": ep["lat"], "lon": ep["lon"],
+                         "node": ep.get("osm_node"), "sections": [],
+                         "layer": layer},
                     )
                     label = f"{route_name} {section}"
                     if label not in entry["sections"]:
                         entry["sections"].append(label)
-            for (lat, lon, _), info in ic_points.items():
+            for info in ic_points.values():
                 folium.CircleMarker(
-                    location=[lat, lon],
+                    location=[info["lat"], info["lon"]],
                     radius=5,
                     color="#333333",
                     weight=2,
@@ -1359,18 +1362,36 @@ def build_base_map(
                     icon=_x_circle_icon(color, ended),
                 ).add_to(layer)
                 for ep in item.get("endpoints") or []:
-                    key = (round(ep["lat"], 6), round(ep["lon"], 6), id(layer))
+                    # 座標ではなく名前で束ねる（上と同じ理由）
+                    key = (ep["name"], id(layer))
                     entry = nx_ic.setdefault(
                         key,
-                        {"name": ep["name"], "node": ep.get("osm_node"),
-                         "sections": [], "layer": layer},
+                        {"name": ep["name"], "lat": ep["lat"], "lon": ep["lon"],
+                         "node": ep.get("osm_node"), "sections": [],
+                         "layer": layer},
                     )
                     label = f"{item['route_name']} {item['section']}"
                     if label not in entry["sections"]:
                         entry["sections"].append(label)
-            for (lat, lon, _), info in nx_ic.items():
+                # 本文で言及されているIC・SA・PA。「川田橋（宇城氷川SIC〜
+                # 八代IC）」のように文章にだけ出てきて、どこの話なのかが
+                # 地図から追えなかったので、区間の端点と同じ描き方で置く。
+                for mp in item.get("mentioned_points") or []:
+                    folium.CircleMarker(
+                        location=[mp["lat"], mp["lon"]],
+                        radius=4, color="#555555", weight=2,
+                        fill=True, fill_color="#ffffff", fill_opacity=0.95,
+                        tooltip=(
+                            f"<b>{mp['name']}</b><br>"
+                            f"{item['route_name']}（{item['section']}）の本文で"
+                            f"言及<br>{mp['note']}<br>"
+                            f"位置はOpenStreetMap（{mp['osm']}）"
+                        ),
+                    ).add_to(layer)
+            for info in nx_ic.values():
                 folium.CircleMarker(
-                    location=[lat, lon], radius=5, color="#333333", weight=2,
+                    location=[info["lat"], info["lon"]], radius=5,
+                    color="#333333", weight=2,
                     fill=True, fill_color="#ffffff", fill_opacity=0.95,
                     tooltip=(
                         f"<b>{info['name']}</b><br>"
