@@ -13,6 +13,7 @@ data/mlit_map_regulations.json。
 """
 import json
 import os
+from collections import Counter
 
 import folium
 import pandas as pd
@@ -281,6 +282,38 @@ def summary_html(data: dict) -> str:
         f'<th style="{td}">規制中</th>'
         f'<th style="{td}color:#888;">解除済み</th></tr>{body}</table>'
     )
+
+
+def content_note(data: dict) -> str:
+    """
+    色分けの区分ごとの件数を、データから数えて書く。
+
+    以前はここに件数を直書きしていて、データが増えたあとも古い数字
+    （104件・赤84件…）が残っていた。数え直して出す。
+    """
+    items = drawn_items(data)
+    counts = Counter(content_class(i) for i in items)
+    detail = "、".join(
+        f"{name} {counts[name]}件"
+        for name, _, _ in CONTENT_CLASSES if counts.get(name)
+    )
+    released = [i for i in data["items"] if is_release_record(i)]
+    text = (
+        f"色は規制の内容で分けています（地図に出している{len(items)}件の内訳は"
+        f"{detail}）。"
+    )
+    if released:
+        text += (
+            f"このほかに「通行止め解除」とだけ書かれたレコードが{len(released)}件"
+            "ありますが、規制ではなく解除の告知で、解除後に残る規制も"
+            "書かれていないため地図には出していません（下の一覧には入っています）。"
+        )
+    if not counts.get("対面通行・片側交互など"):
+        text += (
+            "なお、この配布データには対面通行や片側交互の記載がまだ無く、"
+            "その色は出てきません。"
+        )
+    return text
 
 
 def unknown_level_note(data: dict) -> str:

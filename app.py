@@ -32,6 +32,10 @@ MAX_SELECTED_POINTS = 2
 # 地図の大きさと縮尺。st_folium に渡す高さと、folium 側の zoom_start。
 # 中心を震源へ寄せる余地がどれだけあるかはこの2つで決まるので、
 # 定数として1か所に置く。
+# 異常検知（zスコアと地図の色分け）の対象期間。本震からこの長さだけ。
+# データの取得は本震+3週間まで伸びるが、その後半はお盆にかかり、
+# 地震前の平常時と比べる意味が薄い。
+ANOMALY_WINDOW = timedelta(days=7)
 MAP_HEIGHT_PX = 496
 MAP_ZOOM = 10
 # 中心を寄せるときに、観測点マーカーが端で欠けないよう空けておく余白。
@@ -1830,7 +1834,7 @@ def render_timeseries(
 
 def render_mlit_beta_tab(point_summary: pd.DataFrame, point_labels: dict,
                          quake_at, other_event_times, quake_info: dict,
-                         mainshock: dict) -> None:
+                         mainshock: dict, anomaly_end=None) -> None:
     """
     通れる道マップの配布データで規制を描く、既定のタブ。地図と交通量の
     時系列変化を並べて見て、規制と交通量の変化を突き合わせるための画面なので、
@@ -1959,14 +1963,12 @@ def render_mlit_beta_tab(point_summary: pd.DataFrame, point_labels: dict,
             "既定では規制中だけを出しています（地図の右下の「≡ レイヤ」に"
             "マウスを載せると一覧が開きます。一覧の「高速」「国道」"
             "「県・市町村道」は上の3段階の略記）。"
-            "観測点の描き方は（参考）タブと同じです。"
+            "観測点の描き方は（参考）タブと同じです"
+            f"（色の濃さ＝異常度は、発災後1週間 〜{anomaly_end:%m-%d %H:%M} を"
+            "対象に求めた値）。"
         )
         st.caption(
-            "色の意味は（参考）タブと揃えていますが、"
-            "**この配布データには片側交互通行の規制が1件もありません**"
-            "（104件すべて全面通行止め系で、赤84件・緊急車両のみ通行可3件・"
-            "解除の記録2件・内容の記載なし15件）。そのため橙の「片側交互など」は"
-            "出てきません。"
+            mlit_map_view.content_note(data)
         )
         note = mlit_map_view.unknown_level_note(data)
         if note:
@@ -2153,7 +2155,14 @@ def main():
         if e.get("eid") != mainshock.get("eid")
     ]
 
-    post = observations[observations["is_post_quake"]]
+    # 異常検知（地図の色分けの元）は発災後1週間だけを対象にする。
+    # 平常時は地震前の同じ日区分から作っているので、お盆のように
+    # そもそも交通の出方が違う時期を混ぜると「平常時との差」が
+    # 災害の影響なのか行事の影響なのか区別できなくなる。
+    anomaly_end = quake_at + ANOMALY_WINDOW
+    post = observations[
+        observations["is_post_quake"] & (observations["datetime"] < anomaly_end)
+    ]
     point_summary = build_point_summary(post, observations)
 
     if "selected_points" not in st.session_state:
@@ -2521,6 +2530,9 @@ def main():
                 )
                 st.caption(
                     "観測点は色が濃いほど地震後の交通量変化（|zスコア|）が大きいことを示す（青系のグラデーション）。"
+                    f"**この異常度は発災後1週間（〜{anomaly_end:%m-%d %H:%M}）を"
+                    "対象に求めた値です**（それ以降はお盆にかかり、地震前の"
+                    "平常時と比べる意味が薄いため）。"
                     "地点番号は異常度の大きい順。青い × は震源"
                     "（気象庁の推計震度分布図と同じ記号）。"
                     "選択中の観測点は赤/緑の枠で強調表示されます（最大2地点）。"
@@ -2739,7 +2751,7 @@ def main():
         else:
             render_mlit_beta_tab(
                 point_summary, point_labels, quake_at, other_event_times,
-                quake_info, mainshock,
+                quake_info, mainshock, anomaly_end,
             )
 
 
