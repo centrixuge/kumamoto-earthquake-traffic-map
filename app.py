@@ -1896,7 +1896,7 @@ def render_mlit_beta_tab(point_summary: pd.DataFrame, point_labels: dict,
             "道路規制情報はこの時点のものです）"
             if data["latest_snapshot"] != data["latest_regulation_time"] else ""
         )
-        + "。交通量は最新まで出るので、"
+        + "。交通量は最新まで出ますが、"
         "この時点より後の規制の変化は地図に反映されていません。",
         unsafe_allow_html=False,
     )
