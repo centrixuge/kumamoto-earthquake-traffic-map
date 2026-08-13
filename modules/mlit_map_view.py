@@ -45,7 +45,7 @@ CONTENT_CLASSES = [
     ("緊急車両のみ通行可", "#e67e22", lambda t: "緊急車両" in t),
     ("対面通行・片側交互など", "#d4a017",
      lambda t: any(k in t for k in ("対面", "片側", "車線"))),
-    ("規制の内容が分からない", "#b0b7c3", lambda t: not t),
+    ("規制内容不明", "#5b6470", lambda t: not t),
 ]
 CONTENT_COLOR = {name: color for name, color, _ in CONTENT_CLASSES}
 # 「通行止め解除」とだけ書かれたレコードは、規制ではなく解除の告知で、
@@ -68,7 +68,7 @@ def content_class(item: dict) -> str:
     for name, _, matches in CONTENT_CLASSES:
         if matches(text):
             return name
-    return "規制の内容が分からない"
+    return "規制内容不明"
 
 
 def drawn_items(data: dict) -> list:
@@ -103,7 +103,7 @@ def _style(item: dict) -> dict:
     """
     ended = item["状態"] == "解除済み"
     return {
-        "color": CONTENT_COLOR.get(content_class(item), "#b0b7c3"),
+        "color": CONTENT_COLOR.get(content_class(item), "#5b6470"),
         "weight": LEVEL_WEIGHT.get(item["道路種別"], 4),
         "opacity": 0.45 if ended else 0.95,
         "dashArray": "6,8" if ended else None,
