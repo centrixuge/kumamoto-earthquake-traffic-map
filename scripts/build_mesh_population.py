@@ -51,6 +51,10 @@ MIN_POPULATION = 10
 # その語では呼ばない。ここで数えているのはその時刻の滞留人口）
 REPRESENTATIVE_HOURS = (3, 14)
 
+# 500mメッシュの大きさ（緯度1/240度・経度1/160度）
+LAT_STEP = 1 / 240
+LON_STEP = 1 / 160
+
 # 熊本市の行政区。N03の名称欄には「熊本市」としか入らないため、
 # 行政区域コードから補う（2,030メッシュが全部「熊本市」では場所が分からない）
 KUMAMOTO_WARDS = {
@@ -304,6 +308,32 @@ def _phase_days(hours: pd.DatetimeIndex) -> dict:
     return out
 
 
+def write_gis(summary: pd.DataFrame) -> None:
+    """
+    QGISで開ける形で、メッシュのポリゴンと集計値を書き出す。
+
+    アプリが地図に描いているものと同じ中身で、こちらは全メッシュを入れる
+    （アプリは全時点で配信された分だけを描く。`n_hours` で絞れる）。
+    座標系はWGS84（EPSG:4326）。GeoJSONはどこでも開ける代わりに大きく、
+    GeoPackageは型が保たれてQGISでは軽い。用途で選べるよう両方出す。
+    """
+    import geopandas as gpd
+    from shapely.geometry import box
+
+    frame = summary.copy()
+    for col in frame.select_dtypes("float").columns:
+        frame[col] = frame[col].round(1)
+    geometry = [
+        box(lon - LON_STEP / 2, lat - LAT_STEP / 2,
+            lon + LON_STEP / 2, lat + LAT_STEP / 2)
+        for lat, lon in zip(frame["lat"], frame["lon"])
+    ]
+    gdf = gpd.GeoDataFrame(frame, geometry=geometry, crs="EPSG:4326")
+    gdf.to_file(OUT / "mesh_population_summary.gpkg", layer="mesh_population",
+                driver="GPKG")
+    gdf.to_file(OUT / "mesh_population_summary.geojson", driver="GeoJSON")
+
+
 def main() -> None:
     OUT.mkdir(parents=True, exist_ok=True)
     mesh = kumamoto_meshes()
@@ -326,6 +356,7 @@ def main() -> None:
     table["population"] = table["population"].astype("int32")
     table.to_parquet(OUT / "mesh_population.parquet", index=False)
     summary.to_parquet(OUT / "mesh_population_summary.parquet", index=False)
+    write_gis(summary)
 
     types = day_type(pd.DatetimeIndex(hours))
     meta = {
@@ -357,7 +388,9 @@ def main() -> None:
     )
 
     for path in ("mesh_population.parquet", "mesh_population_summary.parquet",
-                 "mesh_population_meta.json"):
+                 "mesh_population_meta.json",
+                 "mesh_population_summary.gpkg",
+                 "mesh_population_summary.geojson"):
         size = (OUT / path).stat().st_size
         print(f"  {path}: {size/1e6:.1f} MB")
 

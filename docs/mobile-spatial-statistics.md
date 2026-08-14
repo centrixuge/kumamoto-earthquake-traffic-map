@@ -28,8 +28,12 @@
 | ファイル | 中身 | 大きさ |
 | --- | --- | --- |
 | `mesh_population.parquet` | メッシュ × 時点の人口推計値（3,901,597行） | 8.0 MB |
-| `mesh_population_summary.parquet` | メッシュごとの位置・市区町村名・発災前後の平均 | 1.0 MB |
+| `mesh_population_summary.parquet` | メッシュごとの位置・市区町村名・発災前後の平均（26,798行） | 2.6 MB |
 | `mesh_population_meta.json` | 期間・件数・出典・秘匿の扱い | 数KB |
+| `mesh_population_summary.gpkg` | 上に500mメッシュのポリゴンを付けたもの（**QGIS向け**・EPSG:4326） | 10.6 MB |
+| `mesh_population_summary.geojson` | 同じ内容のGeoJSON版。どこでも開ける代わりに大きい | 25.6 MB |
+
+アプリが読むのは前の3つで、後ろの2つは**手元のGISで分析するためのもの**です（アプリからは読みません）。地図に描いているのと同じ中身で、こちらは全26,798メッシュが入ります（アプリが描くのは全時点で配信された3,834メッシュだけなので、`n_hours == 336` で絞ると同じになります）。列の説明は非公開リポジトリの `README.md` に置いています。
 
 置き場は**非公開のGitHubリポジトリ** `centrixuge/kumamoto-mesh-population-data`（private）で、この3ファイルだけを置いています。アプリはGitHubのcontents APIで実行時に読みます（[`modules/mesh_population.py`](../modules/mesh_population.py)）。手元に `data/mss_build/` があるときはそちらが優先されるので、開発中は設定なしで動きます。
 
