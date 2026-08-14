@@ -64,8 +64,13 @@ NO_DATA_COLOR = "#9aa0a6"
 # 別の定義で、ここで見ているのはその時刻にそこに居た人数（滞留人口）。
 HOUR_METRICS = {"全時間帯": "all", "夜間（3時）": "h3", "昼間（14時）": "h14"}
 # 平日と休日では人の居場所が元から違うので、発災前の平日平均には発災後の
-# 平日を、休日平均には休日を当てて比べられるようにする。
-DAY_METRICS = {"全日": "all", "平日": "wd", "休日（土日祝）": "hd"}
+# 平日を、休日平均には休日を当てて比べる。平日と休日をまとめた「全日」は
+# 出さない（その比は日区分の違いが混ざるだけで、読んでも意味がない）。
+DAY_METRICS = {"平日": "wd", "休日（土日祝）": "hd"}
+# 既定は平日の夜間。夜間はほぼ滞在人口なので、そこに人が残っているかを
+# いちばん素直に読める。
+DEFAULT_HOUR = "夜間（3時）"
+DEFAULT_DAY = "平日"
 
 
 def metric_columns(hour_label: str, day_label: str) -> tuple[str, str, str]:
@@ -75,7 +80,17 @@ def metric_columns(hour_label: str, day_label: str) -> tuple[str, str, str]:
 
 
 def metric_label(hour_label: str, day_label: str) -> str:
-    return hour_label if day_label == "全日" else f"{hour_label}・{day_label}"
+    return f"{hour_label}・{day_label}"
+
+
+def required_summary_columns() -> list[str]:
+    """いまのアプリが使う列。集計を作り直したときの取り違えを見つけるのに使う。"""
+    return [
+        col
+        for hour in HOUR_METRICS
+        for day in DAY_METRICS
+        for col in metric_columns(hour, day)
+    ]
 
 
 class MeshDataUnavailable(RuntimeError):
@@ -193,6 +208,31 @@ def load_meta() -> dict:
 @st.cache_data(ttl=3600, show_spinner="メッシュの一覧を読み込み中")
 def load_summary() -> pd.DataFrame:
     return pd.read_parquet(io.BytesIO(_fetch(SUMMARY_FILE)))
+
+
+def summary() -> pd.DataFrame:
+    """
+    メッシュ一覧。列が足りなければ一度だけ取り直す。
+
+    集計は1時間キャッシュしているので、集計を作り直して置き場に上げても、
+    動いているアプリはしばらく古いものを掴んだままになる。新しい列を使う
+    コードと古い集計が噛み合わないと AttributeError で落ちるので、
+    足りないと分かった時点でキャッシュを捨てて取り直す。
+    """
+    frame = load_summary()
+    missing = [c for c in required_summary_columns() if c not in frame.columns]
+    if missing:
+        load_summary.clear()
+        frame = load_summary()
+        still = [c for c in required_summary_columns() if c not in frame.columns]
+        if still:
+            raise MeshDataUnavailable(
+                "置き場の集計ファイルが古い版です（"
+                f"{', '.join(still[:4])} などの列がありません）。"
+                "`python scripts/build_mesh_population.py` を回し直して、"
+                "出力を置き場に上げ直してください。"
+            )
+    return frame
 
 
 @st.cache_data(ttl=3600, show_spinner="メッシュ別の人口を読み込み中")

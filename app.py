@@ -2249,6 +2249,7 @@ MESH_CLICK_TARGETS = ("メッシュ", "観測点")
 # 足りないものを名指しして、このタブだけ止める。
 MESH_MODULE_REQUIRES = (
     "HOUR_METRICS", "DAY_METRICS", "metric_columns", "metric_label",
+    "summary", "required_summary_columns", "DEFAULT_HOUR", "DEFAULT_DAY",
     "mesh_geojson", "selected_geojson", "add_mesh_layer",
     "add_selection_layer", "legend_html", "mesh_bounds", "mesh_from_tooltip",
     "mesh_label", "series_for", "with_baseline", "load_meta", "load_summary",
@@ -2306,7 +2307,9 @@ def _mesh_population_body(point_summary: pd.DataFrame, point_labels: dict,
         return
 
     meta = mesh_population.load_meta()
-    summary = mesh_population.load_summary()
+    # 列が足りなければ取り直す（集計を作り直した直後に、古い
+    # キャッシュを掴んだまま新しい列を読んで落ちるのを防ぐ）
+    summary = mesh_population.summary()
     holidays = load_holiday_set()
     start = pd.Timestamp(meta["start"])
     end = pd.Timestamp(meta["end"])
@@ -2340,8 +2343,10 @@ def _mesh_population_body(point_summary: pd.DataFrame, point_labels: dict,
         post_days = meta.get("phase_days", {}).get("post", {})
         col_hour, col_day = st.columns([1.1, 1])
         with col_hour:
+            hours_choices = list(mesh_population.HOUR_METRICS)
             hour_label = st.selectbox(
-                "色分けの時間帯", list(mesh_population.HOUR_METRICS),
+                "色分けの時間帯", hours_choices,
+                index=hours_choices.index(mesh_population.DEFAULT_HOUR),
                 key="mesh_metric",
                 help="夜間は3時、昼間は14時を代表時刻にしています"
                      "（どちらも移動の途中が混じりにくい時刻）。"
@@ -2349,8 +2354,10 @@ def _mesh_population_body(point_summary: pd.DataFrame, point_labels: dict,
                      "別の定義なので、その語は使っていません。",
             )
         with col_day:
+            day_choices = list(mesh_population.DAY_METRICS)
             day_label = st.selectbox(
-                "日区分", list(mesh_population.DAY_METRICS),
+                "日区分", day_choices,
+                index=day_choices.index(mesh_population.DEFAULT_DAY),
                 key="mesh_daytype",
                 help="平日と休日では人の居場所が元から違うので、発災前の"
                      "平日平均には発災後の平日を、休日平均には休日を当てて"
@@ -2439,10 +2446,7 @@ def _mesh_population_body(point_summary: pd.DataFrame, point_labels: dict,
                f"{post_days.get('平日', '—')}日）。" if day_label == "平日"
                else f"（発災前の休日{pre_days.get('休日', '—')}日 vs 発災後の"
                     f"休日{post_days.get('休日', '—')}日。日数が少ないので、"
-                    "1日の事情が比にそのまま出ます）。" if day_label != "全日"
-               else "（平日と休日をまとめた平均どうしの比です。"
-                    "人の居場所は平日と休日で元から違うので、"
-                    "日区分を分けたほうが読み違えません）。")
+                    "1日の事情が比にそのまま出ます）。")
             + f"いまクリックで選べるのは**{click_target}**です"
             "（メッシュは最大2つ、観測点は1点）。"
             "選んだものを右の図に重ねて出します（反映に1〜2秒かかります）。"
