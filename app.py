@@ -17,6 +17,7 @@ from datetime import datetime, timedelta, timezone
 
 import branca.element as branca_element
 import folium
+from folium import plugins as folium_plugins
 import jinja2
 import pandas as pd
 import plotly.graph_objects as go
@@ -2226,6 +2227,8 @@ def load_holiday_set() -> set:
 # 配信されないので、時間帯によって出たり消えたりするメッシュを混ぜると
 # 比が同じ土台で比べられないうえ、全部（2万件超）を描くと地図が重い。
 MESH_MIN_HOURS = 336
+# 比較のタブは地図が主役なので、時系列図と並べる地図より縦を取る。
+MESH_COMPARE_MAP_HEIGHT_PX = 620
 MAX_SELECTED_MESHES = 2
 # この地図で選べる観測点は1点だけ。メッシュ2つ＋観測点で、実績と平常時を
 # 出すと図が6本になる。これ以上増やすとどの線がどれか追えなくなる。
@@ -2532,6 +2535,127 @@ def _mesh_population_body(point_summary: pd.DataFrame, point_labels: dict,
             selected, selected_points, summary, meta, point_labels,
             quake_at, holidays, other_event_times,
         )
+
+
+def render_mesh_compare_tab(mainshock: dict) -> None:
+    """
+    同じ集計を条件違いで2枚並べて見比べるタブ。
+
+    「発災前と発災後」「夜間と昼間」「平日と休日」のように、どの2つを比べたい
+    かは見る人によって変わる。左右それぞれに時間帯・日区分・出す値を持たせて、
+    組み合わせを自由に選べるようにしている。
+
+    2枚は folium の DualMap で、拡大・移動は連動する。見比べる図で縮尺が
+    ずれると意味がないため。クリックでの選択はこのタブには置かない
+    （どちらの地図を押したのかが返り値から分からず、取り違えるため）。
+    """
+    try:
+        _mesh_compare_body(mainshock)
+    except mesh_population.MeshDataUnavailable as e:
+        st.error(f"モバイル空間統計の集計データを読めませんでした。\n\n{e}")
+    except Exception as e:
+        st.error(
+            f"人口の比較のタブを描けませんでした（{type(e).__name__}: {e}）。"
+            "ほかのタブは通常どおり動きます。"
+            + _stale_module_hint(e)
+        )
+
+
+# 左右の既定の組み合わせ。まず見たいのは発災前と発災後の並べ比べなので、
+# 時間帯・日区分は揃えて、出す値だけ変えておく。
+MESH_COMPARE_DEFAULTS = (
+    ("左", "人口（発災前）"),
+    ("右", "人口（発災後）"),
+)
+
+
+def _mesh_compare_body(mainshock: dict) -> None:
+    if not mesh_population.available():
+        st.info(
+            "モバイル空間統計の集計データが見つかりません。"
+            "`python scripts/build_mesh_population.py` で作るか、"
+            "非公開の置き場を `st.secrets` に設定してください。"
+        )
+        return
+
+    meta = mesh_population.load_meta()
+    summary = mesh_population.summary()
+    st.caption(
+        f"{meta['source']}（{meta['area']}・{meta['unit']}）。"
+        f"収録は **{pd.Timestamp(meta['start']):%Y-%m-%d %H:%M} 〜 "
+        f"{pd.Timestamp(meta['end']):%Y-%m-%d %H:%M}**。"
+        "2枚の地図は拡大・移動が連動します。"
+        "条件を選ぶと同じ場所どうしで見比べられます"
+        "（クリックでの選択と時系列変化は「地図・人口の時系列変化」タブに"
+        "あります）。"
+    )
+
+    hours = list(mesh_population.HOUR_METRICS)
+    days = list(mesh_population.DAY_METRICS)
+    modes = list(mesh_population.VALUE_MODES)
+
+    columns = st.columns(2, gap="large")
+    sides = []
+    for (side, default_mode), col in zip(MESH_COMPARE_DEFAULTS, columns):
+        with col:
+            c_mode, c_hour, c_day = st.columns(3)
+            with c_mode:
+                mode = st.selectbox(
+                    "出す値", modes, index=modes.index(default_mode),
+                    key=f"cmp_mode_{side}",
+                )
+            with c_hour:
+                hour = st.selectbox(
+                    "時間帯", hours,
+                    index=hours.index(mesh_population.DEFAULT_HOUR),
+                    key=f"cmp_hour_{side}",
+                )
+            with c_day:
+                day = st.selectbox(
+                    "日区分", days,
+                    index=days.index(mesh_population.DEFAULT_DAY),
+                    key=f"cmp_day_{side}",
+                )
+            label = mesh_population.metric_label(hour, day)
+            st.markdown(
+                mesh_population.legend_html(label, mode), unsafe_allow_html=True
+            )
+        sides.append((hour, day, mode, label))
+
+    dual = folium_plugins.DualMap(
+        location=[mainshock["epicenter_lat"], mainshock["epicenter_lon"]],
+        zoom_start=MAP_ZOOM + 1, tiles=None, prefer_canvas=True,
+        layout="horizontal",
+    )
+    n_meshes = 0
+    for fmap, (hour, day, mode, label) in zip((dual.m1, dual.m2), sides):
+        folium.TileLayer(
+            "OpenStreetMap", name="OpenStreetMap", opacity=0.45, control=False,
+        ).add_to(fmap)
+        geojson = mesh_population.mesh_geojson(
+            summary, hour, day, MESH_MIN_HOURS, mode
+        )
+        n_meshes = len(geojson["features"])
+        mesh_population.add_mesh_layer(fmap, geojson, label)
+        folium.Marker(
+            [mainshock["epicenter_lat"], mainshock["epicenter_lon"]],
+            icon=_epicenter_icon(), tooltip="本震の震源",
+        ).add_to(fmap)
+        add_map_size_fixer(fmap)
+    dual.get_root().header.add_child(folium.Element(
+        "<style>.leaflet-tooltip{width:max-content;max-width:240px;"
+        "font-size:11.5px;line-height:1.5;padding:5px 8px;}</style>"
+    ))
+    st_folium(
+        dual, height=MESH_COMPARE_MAP_HEIGHT_PX, use_container_width=True,
+        returned_objects=[], key="mesh_compare_map_v1",
+    )
+    st.caption(
+        "左右で違うのは選んだ条件だけで、描いているメッシュ"
+        f"（全{meta['hours']}時点で配信された{n_meshes:,}メッシュ）は"
+        "同じです。増減率の区切りは15%・30%、人口の区切りは100・250・500・"
+        "1,000人で、左右のどちらでも同じ色は同じ値を指します。"
+    )
 
 
 def render_mesh_timeseries(selected, selected_points, summary, meta,
@@ -2871,10 +2995,11 @@ def main():
     # 通れる道マップ版を先に置く。規制の収録が国の配信で揃っており、
     # 高速道路の緊急車両の通行可能区間まで区間ごとの線で入るため、
     # こちらを主に見てもらう。県のJSON＋PDF転記の版は（参考）に下げた。
-    tab_mlit, tab_mesh, tab_overview, tab_dl = st.tabs(
+    tab_mlit, tab_mesh, tab_mesh_cmp, tab_overview, tab_dl = st.tabs(
         [
             "地図・交通量の時系列変化",
             "地図・人口の時系列変化",
+            "地図・人口の比較",
             "地図・交通量の時系列変化（参考）",
             "データダウンロード",
         ]
@@ -3347,6 +3472,12 @@ def main():
             point_summary, build_point_labels(point_summary), quake_at,
             mainshock, other_event_times,
         )
+
+    # ------------------------------------------------------------------
+    # 地図・人口の比較タブ（条件違いの2枚を並べる）
+    # ------------------------------------------------------------------
+    with tab_mesh_cmp:
+        render_mesh_compare_tab(mainshock)
 
 
 if __name__ == "__main__":
