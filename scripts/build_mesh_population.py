@@ -212,39 +212,96 @@ def day_type(index: pd.DatetimeIndex) -> pd.Series:
     return out
 
 
+def is_weekday(index: pd.DatetimeIndex) -> pd.Series:
+    """平日か（土日祝でないか）。祝日の扱いは交通量側と揃える。"""
+    holidays = set(json.loads(HOLIDAYS.read_text(encoding="utf-8")))
+    dates = pd.Series(index.strftime("%Y-%m-%d"), index=range(len(index)))
+    dow = pd.Series(index.dayofweek.values)
+    return ~(dow.isin([5, 6]) | dates.isin(holidays))
+
+
+def day_type(index: pd.DatetimeIndex) -> pd.Series:
+    """平常時の平均を取る単位。祝日は日曜と同じ扱い（交通量側と揃える）。"""
+    holidays = set(json.loads(HOLIDAYS.read_text(encoding="utf-8")))
+    is_holiday = pd.Series(index.strftime("%Y-%m-%d"), index=range(len(index))).isin(
+        holidays
+    )
+    dow = pd.Series(index.dayofweek.values)
+    out = pd.Series("平日", index=range(len(index)))
+    out[dow == 5] = "土"
+    out[(dow == 6) | is_holiday] = "日祝"
+    return out
+
+
 def build_summary(df: pd.DataFrame, mesh: pd.DataFrame) -> pd.DataFrame:
     """
     メッシュごとの発災前後の水準。地図の色分けに使う。
 
-    全時間帯の平均のほかに、夜間・昼間の代表時刻として3時・14時を別に出す。
-    3時はほぼ就寝中、14時は通勤通学が済んだ後で、どちらも移動の途中が
-    混じりにくい時刻。国勢調査の夜間人口・昼間人口は常住地・従業地で
-    数える別の定義なので、その語は使わない。
+    時間帯（全時間帯／3時／14時）と日区分（全日／平日／休日）の組み合わせで
+    それぞれ平均を出す。3時はほぼ就寝中、14時は通勤通学が済んだ後で、
+    どちらも移動の途中が混じりにくい時刻。国勢調査の夜間人口・昼間人口は
+    常住地・従業地で数える別の定義なので、その語は使わない。
+
+    日区分を分けるのは、平日と休日で人の居場所が元から違うためで、
+    発災前の平日平均には発災後の平日を、休日平均には休日を当てて比べる。
+
+    列の名前は pre_{日区分}_{時間帯} / post_… / ratio_…
+    （日区分 all=全日 wd=平日 hd=休日、時間帯 all=全時間帯 h3 h14）。
     """
-    pre = df[df["datetime"] < QUAKE_AT]
-    post = df[df["datetime"] >= QUAKE_AT]
+    weekday = is_weekday(pd.DatetimeIndex(df["datetime"]))
+    weekday.index = df.index
     hour = df["datetime"].dt.hour
 
-    def _mean(frame: pd.DataFrame, name: str) -> pd.Series:
-        return frame.groupby("mesh")["population"].mean().rename(name)
-
-    joins = [_mean(pre, "pre_mean"), _mean(post, "post_mean")]
+    day_masks = {
+        "all": pd.Series(True, index=df.index),
+        "wd": weekday,
+        "hd": ~weekday,
+    }
+    hour_masks = {"all": pd.Series(True, index=df.index)}
     for h in REPRESENTATIVE_HOURS:
-        at_hour = hour == h
-        joins += [
-            _mean(pre[at_hour.loc[pre.index]], f"pre_h{h}"),
-            _mean(post[at_hour.loc[post.index]], f"post_h{h}"),
-        ]
+        hour_masks[f"h{h}"] = hour == h
+
+    is_pre = df["datetime"] < QUAKE_AT
+    joins = []
+    for day, day_mask in day_masks.items():
+        for hour_key, hour_mask in hour_masks.items():
+            both = day_mask & hour_mask
+            for phase, phase_mask in (("pre", is_pre), ("post", ~is_pre)):
+                sub = df[both & phase_mask]
+                joins.append(
+                    sub.groupby("mesh")["population"].mean()
+                    .rename(f"{phase}_{day}_{hour_key}")
+                )
     joins += [
         df.groupby("mesh")["population"].max().rename("max_population"),
         df.groupby("mesh")["datetime"].count().rename("n_hours"),
     ]
 
     out = mesh.set_index("mesh").join(joins, how="left")
-    out["ratio"] = out["post_mean"] / out["pre_mean"]
-    for h in REPRESENTATIVE_HOURS:
-        out[f"ratio_h{h}"] = out[f"post_h{h}"] / out[f"pre_h{h}"]
+    for day in day_masks:
+        for hour_key in hour_masks:
+            out[f"ratio_{day}_{hour_key}"] = (
+                out[f"post_{day}_{hour_key}"] / out[f"pre_{day}_{hour_key}"]
+            )
     return out.reset_index()
+
+
+def _phase_days(hours: pd.DatetimeIndex) -> dict:
+    """発災前後それぞれの平日・休日の日数（日付の数。時点の数ではない）。"""
+    weekday = is_weekday(hours).values
+    frame = pd.DataFrame({
+        "date": hours.strftime("%Y-%m-%d"),
+        "weekday": weekday,
+        "phase": ["pre" if t < QUAKE_AT else "post" for t in hours],
+    }).drop_duplicates(["date", "phase"])
+    out = {}
+    for phase in ("pre", "post"):
+        sub = frame[frame["phase"] == phase]
+        out[phase] = {
+            "平日": int(sub["weekday"].sum()),
+            "休日": int((~sub["weekday"]).sum()),
+        }
+    return out
 
 
 def main() -> None:
@@ -290,6 +347,9 @@ def main() -> None:
             k: int(v) for k, v in
             types.groupby(types).size().items()
         },
+        # 平日・休日それぞれ何日分あるか（地図の比の厚みを画面に出すため）。
+        # 本震のあった日は前後にまたがるので、両方で1日と数える。
+        "phase_days": _phase_days(hours),
         "boundary": "国土数値情報 行政区域（N03-20240101_43）",
     }
     (OUT / "mesh_population_meta.json").write_text(

@@ -58,15 +58,24 @@ RATIO_CLASSES = [
 ]
 NO_DATA_COLOR = "#9aa0a6"
 
-# 地図の色分けの単位。夜間・昼間の代表時刻として3時・14時を使う
-# （どちらも移動の途中が混じりにくい時刻）。
+# 地図の色分けの単位。時間帯と日区分の2つを掛け合わせる。
+# 夜間・昼間の代表時刻は3時・14時（どちらも移動の途中が混じりにくい時刻）。
 # 「夜間人口」「昼間人口」とは呼ばない。あちらは常住地・従業地で数える
 # 別の定義で、ここで見ているのはその時刻にそこに居た人数（滞留人口）。
-METRICS = {
-    "全時間帯": ("pre_mean", "post_mean", "ratio"),
-    "夜間（3時）": ("pre_h3", "post_h3", "ratio_h3"),
-    "昼間（14時）": ("pre_h14", "post_h14", "ratio_h14"),
-}
+HOUR_METRICS = {"全時間帯": "all", "夜間（3時）": "h3", "昼間（14時）": "h14"}
+# 平日と休日では人の居場所が元から違うので、発災前の平日平均には発災後の
+# 平日を、休日平均には休日を当てて比べられるようにする。
+DAY_METRICS = {"全日": "all", "平日": "wd", "休日（土日祝）": "hd"}
+
+
+def metric_columns(hour_label: str, day_label: str) -> tuple[str, str, str]:
+    """時間帯・日区分の組み合わせに対応する列名（発災前・発災後・比）。"""
+    key = f"{DAY_METRICS[day_label]}_{HOUR_METRICS[hour_label]}"
+    return f"pre_{key}", f"post_{key}", f"ratio_{key}"
+
+
+def metric_label(hour_label: str, day_label: str) -> str:
+    return hour_label if day_label == "全日" else f"{hour_label}・{day_label}"
 
 
 class MeshDataUnavailable(RuntimeError):
@@ -249,9 +258,10 @@ def _feature(row, pre_col: str, post_col: str, ratio_col: str,
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
-def mesh_geojson(summary: pd.DataFrame, metric: str, min_hours: int) -> dict:
+def mesh_geojson(summary: pd.DataFrame, hour_label: str, day_label: str,
+                 min_hours: int) -> dict:
     """地図に載せるメッシュのFeatureCollectionを作る。"""
-    pre_col, post_col, ratio_col = METRICS[metric]
+    pre_col, post_col, ratio_col = metric_columns(hour_label, day_label)
     sub = summary[summary["n_hours"] >= min_hours]
     return {
         "type": "FeatureCollection",
@@ -262,7 +272,7 @@ def mesh_geojson(summary: pd.DataFrame, metric: str, min_hours: int) -> dict:
     }
 
 
-def selected_geojson(summary: pd.DataFrame, metric: str,
+def selected_geojson(summary: pd.DataFrame, hour_label: str, day_label: str,
                      selected, colors) -> dict:
     """
     選択中のメッシュを太枠で描くためのFeatureCollection。
@@ -272,7 +282,7 @@ def selected_geojson(summary: pd.DataFrame, metric: str,
     選択の表示も同じ形・同じツールチップの図形にして、押せば解除できるよう
     にしている。
     """
-    pre_col, post_col, ratio_col = METRICS[metric]
+    pre_col, post_col, ratio_col = metric_columns(hour_label, day_label)
     rows = summary.set_index("mesh")
     features = []
     for mesh, color in zip(selected, colors):
@@ -287,11 +297,11 @@ def _fmt(value) -> str:
     return "—" if pd.isna(value) else f"{value:,.0f} 人"
 
 
-def add_mesh_layer(fmap: folium.Map, geojson: dict, metric: str,
+def add_mesh_layer(fmap: folium.Map, geojson: dict, label: str,
                    interactive: bool = True) -> None:
     folium.GeoJson(
         geojson,
-        name=f"人口の変化（{metric}）",
+        name=f"人口の変化（{label}）",
         # 観測点を選んでいる間は、メッシュがクリックもツールチップも拾わない
         interactive=interactive,
         style_function=lambda f: {
@@ -334,7 +344,7 @@ def add_selection_layer(fmap: folium.Map, geojson: dict,
     ).add_to(fmap)
 
 
-def legend_html(metric: str) -> str:
+def legend_html(label: str) -> str:
     marks = " ".join(
         f'<span style="white-space:nowrap;">'
         f'<span style="display:inline-block;width:18px;height:10px;'
@@ -345,7 +355,7 @@ def legend_html(metric: str) -> str:
     return (
         '<div style="font-size:0.79rem;line-height:1.45;margin:0 0 4px 0;">'
         '<div style="display:flex;flex-wrap:wrap;gap:1px 12px;align-items:center;">'
-        f'<b style="white-space:nowrap;">発災後/発災前・{metric}:</b>{marks}</div>'
+        f'<b style="white-space:nowrap;">発災後/発災前・{label}:</b>{marks}</div>'
         "</div>"
     )
 
