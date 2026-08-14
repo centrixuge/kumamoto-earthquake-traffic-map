@@ -78,7 +78,7 @@ modules/                       データ取得・変換・異常検知ロジッ�
 scripts/                       補助スクリプト（規制PDFのテキスト抽出、区間の線形の生成、通れる道マップの整理）
 data/qsr_regulations/          熊本河川国道事務所の規制PDF（転記元。手動で追加）
 data/nexco_west_regulations/   NEXCO西日本の規制PDF（転記元。手動で追加）
-data/mlit_r8kumamoto_map/      「通れる道マップ」の各時点の配布ZIP（ベータ版タブ用。手動で追加）
+data/mlit_r8kumamoto_map/      「通れる道マップ」の各時点の配布ZIP（既定のタブ用。手動で追加）
 data/archive/                  恒久アーカイブ（追記専用）: 5分値・1時間値・通行規制
 data/                          前処理済みデータ（parquet/json）のスナップショット
 .github/workflows/             定期自動取得と、NEXCO西日本の新しい報の確認（GitHub Actions）
