@@ -345,7 +345,7 @@ def value_classes(mode: str):
 
 
 def _feature(row, pre_col: str, post_col: str, ratio_col: str,
-             mode: str = DEFAULT_VALUE_MODE, outline: str = "") -> dict:
+             mode: str = DEFAULT_VALUE_MODE) -> dict:
     south, west, north, east = mesh_bounds(row.mesh)
     ratio = getattr(row, ratio_col)
     kind = VALUE_MODES[mode]
@@ -370,7 +370,6 @@ def _feature(row, pre_col: str, post_col: str, ratio_col: str,
             "post": _fmt(getattr(row, post_col)),
             "ratio": "—" if pd.isna(ratio) else f"{ratio:.2f} 倍",
             "color": _class_color(value, value_classes(mode)),
-            "outline": outline,
         },
     }
 
@@ -393,8 +392,14 @@ def mesh_geojson(summary: pd.DataFrame, hour_label: str, day_label: str,
     }
 
 
+# 選択中を示す二重枠。塗りの色に関係なく見えるよう、白の太線の上に黒の
+# 細線を重ねる（メッシュも観測点も1つずつなので、色で種類を分ける必要はない）。
+SELECTION_HALO = ("#ffffff", 6)
+SELECTION_EDGE = ("#111111", 2)
+
+
 def selected_geojson(summary: pd.DataFrame, hour_label: str, day_label: str,
-                     selected, colors, mode: str = DEFAULT_VALUE_MODE,
+                     selected, mode: str = DEFAULT_VALUE_MODE,
                      residence_label: str = DEFAULT_RESIDENCE) -> dict:
     """
     選択中のメッシュを太枠で描くためのFeatureCollection。
@@ -409,13 +414,11 @@ def selected_geojson(summary: pd.DataFrame, hour_label: str, day_label: str,
     )
     rows = summary.set_index("mesh")
     features = []
-    for mesh, color in zip(selected, colors):
+    for mesh in selected:
         if mesh not in rows.index:
             continue
         row = rows.loc[[mesh]].reset_index().itertuples(index=False).__next__()
-        features.append(
-            _feature(row, pre_col, post_col, ratio_col, mode, outline=color)
-        )
+        features.append(_feature(row, pre_col, post_col, ratio_col, mode))
     return {"type": "FeatureCollection", "features": features}
 
 
@@ -448,18 +451,35 @@ def add_mesh_layer(fmap: folium.Map, geojson: dict, label: str,
 
 def add_selection_layer(fmap: folium.Map, geojson: dict,
                         interactive: bool = True) -> None:
-    """選択中のメッシュを太枠で重ねる。押せば解除できるよう、同じツールチップを持たせる。"""
+    """
+    選択中のメッシュを二重枠で重ねる。押せば解除できるよう、同じツールチップを
+    持たせる（白の下線は当たり判定から外し、上の黒線でクリックを拾う）。
+    """
     if not geojson["features"]:
         return
+    halo_color, halo_weight = SELECTION_HALO
+    folium.GeoJson(
+        geojson,
+        name="選択中のメッシュ（下線）",
+        interactive=False,
+        style_function=lambda f: {
+            "fillColor": f["properties"]["color"],
+            "color": halo_color,
+            "weight": halo_weight,
+            "fillOpacity": 0.55,
+        },
+        smooth_factor=0,
+    ).add_to(fmap)
+    edge_color, edge_weight = SELECTION_EDGE
     folium.GeoJson(
         geojson,
         name="選択中のメッシュ",
         interactive=interactive,
         style_function=lambda f: {
             "fillColor": f["properties"]["color"],
-            "color": f["properties"]["outline"],
-            "weight": 3,
-            "fillOpacity": 0.55,
+            "color": edge_color,
+            "weight": edge_weight,
+            "fillOpacity": 0,
         },
         tooltip=folium.GeoJsonTooltip(
             fields=["mesh", "city", "pre", "post", "ratio"],

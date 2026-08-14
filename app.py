@@ -1707,13 +1707,23 @@ def build_plain_points_feature_group(
     for _, row in point_summary.iterrows():
         is_selected = row["point_id"] in selected_points
         label = point_labels.get(row["point_id"], row["point_id"])
+        if is_selected and interactive:
+            # 選択中は、メッシュと同じ二重枠にする（白の太線＋黒の細線）。
+            # 下の白線は当たり判定から外し、上の黒丸でクリックを拾う。
+            halo = folium.CircleMarker(
+                location=[row["point_lat"], row["point_lon"]],
+                radius=9, color=SELECTION_HALO_COLOR, weight=6,
+                fill=True, fill_color="#ffffff", fill_opacity=1.0,
+            )
+            halo.options["interactive"] = False
+            halo.add_to(fg)
         marker = folium.CircleMarker(
             location=[row["point_lat"], row["point_lon"]],
             # 500mメッシュが2〜3pxで並ぶ中では、小さすぎると探せない。
             # メッシュを覆い隠さない範囲で大きめに取る。
             radius=9 if is_selected else 7,
-            color=POINT_SELECTION_COLOR if is_selected else "#333333",
-            weight=4 if is_selected else 2,
+            color=SELECTION_EDGE_COLOR if is_selected else "#333333",
+            weight=2 if is_selected else 2,
             fill=True,
             fill_color="#ffffff",
             fill_opacity=1.0,
@@ -2316,18 +2326,16 @@ MAX_SELECTED_MESHES = 1
 # この地図で選べる観測点は1点だけ。メッシュ2つ＋観測点で、実績と平常時を
 # 出すと図が6本になる。これ以上増やすとどの線がどれか追えなくなる。
 MAX_SELECTED_POINTS_ON_MESH_MAP = 1
-# 選択したものの色。地図の塗り分けが青〜赤なので、その上でも沈まない色を
-# 選ぶ（紫は赤の塗りに埋もれ、赤と並ぶと見分けにくかった）。
-# 色覚の型によらず区別しやすい配色（岡部・伊藤）から3色を取っている。
-MESH_SELECTION_COLORS = ["#6A3D9A"]  # 紫
-# 観測点（交通量）は明るいオレンジ。青緑は紫系の棒と重なると線が沈んで
-# 見えなかった。地図の「15〜30%増」の塗り（#ef8a62）とは近いが、観測点は
-# 白丸＋太い枠なので見分けられる。
-POINT_SELECTION_COLOR = "#F97316"
-# 棒は（居住者, 来訪者, 内訳なし）の3段で、積むと総数になる。
-# 濃いままだと上を通る交通量の線が沈むので、いずれも薄めに置き、
-# 枠線・階段線だけ上の濃い色を使う。
-MESH_BAR_COLORS = [("#A566AD", "#C6B3DE", "#EDE7F5")]  # 紫（居住者は少しピンク寄り）
+# 地図で「いま選んでいる」ことを示す枠。メッシュも観測点も1つずつなので、
+# 種類を色で見分ける必要がない。塗りの色（青〜赤／黄〜青）に関係なく見える
+# ように、白の太線の上に黒の細線を重ねる二重枠で、両方に同じものを使う。
+SELECTION_HALO_COLOR = "#ffffff"
+SELECTION_EDGE_COLOR = "#111111"
+# 図の色。人口（棒と平常時の階段線）は青緑、交通量はその上でも沈まない
+# 明るいオレンジ。
+MESH_CHART_COLORS = ["#00695C"]
+MESH_BAR_COLORS = [("#26A69A", "#9CD8D0", "#E0F2F0")]
+POINT_CHART_COLOR = "#F97316"
 
 # 人口の地図で「クリックで何を選ぶか」。観測点はメッシュの上に乗るので、
 # 両方を同時に押せる状態だと、メッシュを狙っても観測点が拾ってしまう。
@@ -2559,7 +2567,7 @@ def _mesh_population_body(point_summary: pd.DataFrame, point_labels: dict,
             fmap,
             mesh_population.selected_geojson(
                 summary, hour_label, day_label, selected,
-                MESH_SELECTION_COLORS, value_mode, residence_label,
+                value_mode, residence_label,
             ),
             interactive=mesh_clickable,
         )
@@ -2600,9 +2608,10 @@ def _mesh_population_body(point_summary: pd.DataFrame, point_labels: dict,
             + f"いまクリックで選べるのは**{click_target}**です"
             "（メッシュ・観測点ともに1つずつ）。"
             "選んだものを右の図に重ねて出します（反映に1〜2秒かかります）。"
-            "メッシュの選択枠は紫、選択中の観測点は青緑で、"
-            "図の色もこれに合わせています。"
-            "観測点は白丸の小さな印で、メッシュの色を隠さないよう"
+            "**選んでいるメッシュ・観測点は、白＋黒の二重枠**で示します"
+            "（塗りの色に関係なく見えるよう、どちらも同じ枠にしています）。"
+            "右の図では人口が青緑、交通量がオレンジです。"
+            "観測点は白丸の印で、メッシュの色を隠さないよう"
             "異常度による描き分けはしていません"
             "（異常度で描き分けた地図は交通量のタブにあります）。"
             f"地図に出しているのは、全{meta['hours']}時点で配信された"
@@ -2804,7 +2813,7 @@ def render_mesh_timeseries(selected, selected_points, summary, meta,
 
     fig = go.Figure()
     for mesh, color, bar_color in zip(
-        selected, MESH_SELECTION_COLORS, MESH_BAR_COLORS
+        selected, MESH_CHART_COLORS, MESH_BAR_COLORS
     ):
         frame = mesh_population.with_baseline(
             mesh_population.series_for(mesh, meta), pd.Timestamp(quake_at), holidays
@@ -2846,7 +2855,7 @@ def render_mesh_timeseries(selected, selected_points, summary, meta,
     x_from, x_to = TIMESERIES_DISPLAY_START, pd.Timestamp(meta["end"])
     if selected_points:
         hourly = load_observations("observations_hourly.parquet")
-        for pid, color in zip(selected_points, [POINT_SELECTION_COLOR]):
+        for pid, color in zip(selected_points, [POINT_CHART_COLOR]):
             sub = hourly[
                 (hourly["point_id"] == pid)
                 & hourly["datetime"].between(x_from, x_to)
