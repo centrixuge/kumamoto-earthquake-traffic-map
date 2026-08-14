@@ -1627,9 +1627,11 @@ def build_plain_points_feature_group(
         label = point_labels.get(row["point_id"], row["point_id"])
         marker = folium.CircleMarker(
             location=[row["point_lat"], row["point_lon"]],
-            radius=6 if is_selected else 4,
+            # 500mメッシュが2〜3pxで並ぶ中では、小さすぎると探せない。
+            # メッシュを覆い隠さない範囲で大きめに取る。
+            radius=9 if is_selected else 7,
             color=POINT_SELECTION_COLOR if is_selected else "#333333",
-            weight=3 if is_selected else 1,
+            weight=4 if is_selected else 2,
             fill=True,
             fill_color="#ffffff",
             fill_opacity=1.0,
@@ -2232,7 +2234,9 @@ MAX_SELECTED_POINTS_ON_MESH_MAP = 1
 # 選ぶ（紫は赤の塗りに埋もれ、赤と並ぶと見分けにくかった）。
 # 色覚の型によらず区別しやすい配色（岡部・伊藤）から3色を取っている。
 MESH_SELECTION_COLORS = ["#000000", "#009E73"]  # 黒 / 青緑
-POINT_SELECTION_COLOR = "#E69F00"              # 橙（観測点）
+# 観測点は赤みのあるチョコレート色。橙は地図の「10〜25%増」の塗り（#ef8a62）
+# と近く、図の中でも薄い棒に紛れて見えにくかった。
+POINT_SELECTION_COLOR = "#A0522D"
 # 棒はこの薄い色で塗る。濃いまま並べると、その上を通る橙の交通量の線が
 # 沈んで読めなくなる。枠線・階段線は上の濃い色のままにして対応を保つ。
 MESH_BAR_COLORS = ["#b8b8b8", "#9ccfc0"]
@@ -2450,7 +2454,7 @@ def _mesh_population_body(point_summary: pd.DataFrame, point_labels: dict,
             + f"いまクリックで選べるのは**{click_target}**です"
             "（メッシュは最大2つ、観測点は1点）。"
             "選んだものを右の図に重ねて出します（反映に1〜2秒かかります）。"
-            "メッシュの選択枠は黒・青緑、選択中の観測点は橙で、"
+            "メッシュの選択枠は黒・青緑、選択中の観測点は茶で、"
             "図の色もこれに合わせています。"
             "観測点は白丸の小さな印で、メッシュの色を隠さないよう"
             "異常度による描き分けはしていません"
