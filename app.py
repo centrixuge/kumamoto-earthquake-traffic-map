@@ -2320,14 +2320,13 @@ MAX_SELECTED_POINTS_ON_MESH_MAP = 1
 # 選ぶ（紫は赤の塗りに埋もれ、赤と並ぶと見分けにくかった）。
 # 色覚の型によらず区別しやすい配色（岡部・伊藤）から3色を取っている。
 MESH_SELECTION_COLORS = ["#6A3D9A"]  # 紫
-# 観測点は赤みのあるチョコレート色。橙は地図の「10〜25%増」の塗り（#ef8a62）
-# と近く、図の中でも薄い棒に紛れて見えにくかった。
-POINT_SELECTION_COLOR = "#A0522D"
-# 棒は「メッシュごとに色相、居住地の区分ごとに濃さ」で塗る。
-# （居住者, 来訪者, 内訳なし）の3段で、積むと総数になる。
-# 濃いままだと上を通るチョコレート色の交通量の線が沈むので、いずれも
-# 薄めに置き、枠線・階段線だけ上の濃い色を使う。
-MESH_BAR_COLORS = [("#8C6BB1", "#C6B3DE", "#EDE7F5")]  # 紫
+# 観測点（交通量）は青緑。紫系の棒とは色相が離れており、地図の塗り
+# （青〜赤・黄〜青）の上でも沈まない。
+POINT_SELECTION_COLOR = "#009E73"
+# 棒は（居住者, 来訪者, 内訳なし）の3段で、積むと総数になる。
+# 濃いままだと上を通る交通量の線が沈むので、いずれも薄めに置き、
+# 枠線・階段線だけ上の濃い色を使う。
+MESH_BAR_COLORS = [("#A566AD", "#C6B3DE", "#EDE7F5")]  # 紫（居住者は少しピンク寄り）
 
 # 人口の地図で「クリックで何を選ぶか」。観測点はメッシュの上に乗るので、
 # 両方を同時に押せる状態だと、メッシュを狙っても観測点が拾ってしまう。
@@ -2600,7 +2599,7 @@ def _mesh_population_body(point_summary: pd.DataFrame, point_labels: dict,
             + f"いまクリックで選べるのは**{click_target}**です"
             "（メッシュ・観測点ともに1つずつ）。"
             "選んだものを右の図に重ねて出します（反映に1〜2秒かかります）。"
-            "メッシュの選択枠は紫、選択中の観測点は茶で、"
+            "メッシュの選択枠は紫、選択中の観測点は青緑で、"
             "図の色もこれに合わせています。"
             "観測点は白丸の小さな印で、メッシュの色を隠さないよう"
             "異常度による描き分けはしていません"
@@ -2826,10 +2825,16 @@ def render_mesh_timeseries(selected, selected_points, summary, meta,
                 name=seg_label, legendrank=rank,
             ))
         # 平常時は、棒と同じ1時間ごとの水準なので階段（hv）で描く。
-        # なめらかな破線だと棒の刻みと合わず、どの棒と比べる線なのかが
-        # 読み取れなかった。
+        # hvは「その点から次の点まで水平」に引くので、時刻そのままだと
+        # 棒（時刻を中心に前後30分）から右へ30分ずれる。30分手前から引き、
+        # 最後の棒の右端まで1点足して、段と棒の幅をそろえる。
+        half = pd.Timedelta(minutes=30)
+        step_x = list(frame["datetime"] - half) + [
+            frame["datetime"].iloc[-1] + half
+        ]
+        step_y = list(frame["baseline"]) + [frame["baseline"].iloc[-1]]
         fig.add_trace(go.Scatter(
-            x=frame["datetime"], y=frame["baseline"],
+            x=step_x, y=step_y,
             mode="lines", line=dict(color=color, width=1.6, shape="hv"),
             name="人口 平常時", legendrank=4,
         ))
