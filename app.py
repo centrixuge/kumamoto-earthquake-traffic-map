@@ -1011,6 +1011,72 @@ def add_map_size_fixer(fmap: folium.Map) -> None:
     MapSizeFixer().add_to(fmap)
 
 
+class MeshHoverLink(folium.MacroElement):
+    """
+    2枚の地図で、同じメッシュに触れると両方が枠で囲まれるようにする。
+
+    見比べる図なので、片方で見ている場所が反対側のどこなのかが分からないと
+    比べられない。メッシュコードで対応づけて、触れているメッシュと同じ
+    コードのメッシュを反対側でも強調する。
+
+    DualMapの2枚目（最後に描かれる地図）に付ける。JSは地図の子のscript
+    マクロとして出さないと streamlit-folium では実行されない。
+    """
+    _template = jinja2.Template("""
+        {% macro script(this, kwargs) %}
+            (function () {
+                var maps = [{{ this.other_name }},
+                            {{ this._parent.get_name() }}];
+                var index = maps.map(function (m) {
+                    var byCode = {};
+                    m.eachLayer(function (layer) {
+                        if (!layer._layers) { return; }
+                        Object.keys(layer._layers).forEach(function (key) {
+                            var sub = layer._layers[key];
+                            var p = sub.feature && sub.feature.properties;
+                            if (p && p.mesh) { byCode[p.mesh] = sub; }
+                        });
+                    });
+                    return byCode;
+                });
+                var HIGHLIGHT = {"weight": 3, "color": "#111111"};
+                function paint(sub, on) {
+                    if (!sub) { return; }
+                    if (on) {
+                        sub.setStyle(HIGHLIGHT);
+                        if (sub.bringToFront) { sub.bringToFront(); }
+                    } else {
+                        sub.setStyle({
+                            "weight": 0.2,
+                            "color": sub.feature.properties.color
+                        });
+                    }
+                }
+                index.forEach(function (byCode, i) {
+                    var other = index[1 - i];
+                    Object.keys(byCode).forEach(function (code) {
+                        var sub = byCode[code];
+                        sub.on("mouseover", function () {
+                            paint(sub, true); paint(other[code], true);
+                        });
+                        sub.on("mouseout", function () {
+                            paint(sub, false); paint(other[code], false);
+                        });
+                    });
+                });
+            })();
+        {% endmacro %}
+    """)
+
+    def __init__(self, other_map: folium.Map):
+        super().__init__()
+        self._name = "MeshHoverLink"
+        # DualMapの2枚の地図はどちらもFigureの子なので、相手を親から辿れない。
+        # 変数名を持たせる（streamlit-folium の名前の付け替えも、この文字列に
+        # 対して同じように効く）。
+        self.other_name = other_map.get_name()
+
+
 def point_z_legend_row(point_summary) -> str:
     """
     上の凡例を、地図の上の規制の凡例（mlit_map_view.legend_html）の続きの
@@ -2011,7 +2077,7 @@ def render_mlit_beta_tab(point_summary: pd.DataFrame, point_labels: dict,
     st.caption(
         "地図の通行規制は"
         f"[{data['source_name']}]({data['source_url']})の配布データで作っています。"
-        "県の公開JSONとPDFからの転記で集めた版は「地図・交通量の時系列変化（参考）」"
+        "県の公開JSONとPDFからの転記で集めた版は「(旧版)道路規制×交通量」"
         "タブにあり、規制の収録範囲が違うので同じ観測点でも見え方が変わります。  \n"
         f"**規制情報は {data['latest_regulation_time']} 時点のものです**"
         # 配布の回と、その回に入っている規制情報の時点がずれることがある
@@ -2586,7 +2652,7 @@ def _mesh_compare_body(mainshock: dict) -> None:
         f"{pd.Timestamp(meta['end']):%Y-%m-%d %H:%M}**。"
         "2枚の地図は拡大・移動が連動します。"
         "条件を選ぶと同じ場所どうしで見比べられます"
-        "（クリックでの選択と時系列変化は「地図・人口の時系列変化」タブに"
+        "（クリックでの選択と時系列変化は「人口推計値×交通量」タブに"
         "あります）。"
     )
 
@@ -2642,6 +2708,9 @@ def _mesh_compare_body(mainshock: dict) -> None:
             icon=_epicenter_icon(), tooltip="本震の震源",
         ).add_to(fmap)
         add_map_size_fixer(fmap)
+    # 触れているメッシュを両側で囲む。2枚目に付けるのは、その時点で
+    # 1枚目のメッシュも作られていて、両方を辿れるため。
+    MeshHoverLink(dual.m1).add_to(dual.m2)
     dual.get_root().header.add_child(folium.Element(
         "<style>.leaflet-tooltip{width:max-content;max-width:240px;"
         "font-size:11.5px;line-height:1.5;padding:5px 8px;}</style>"
@@ -2667,7 +2736,7 @@ def render_mesh_timeseries(selected, selected_points, summary, meta,
     単位が違うので縦軸を分ける（左＝人、右＝台/時）。交通量は人口に合わせて
     1時間値の上下合計で、平常時の線はメッシュ側だけに出す（8本になると
     どの線を追っているのか分からなくなるため。交通量の平常時との比較は
-    「地図・交通量の時系列変化」タブが本体）。
+    「道路規制×交通量」タブが本体）。
     """
     if not selected and not selected_points:
         st.info(
@@ -2997,16 +3066,16 @@ def main():
     # こちらを主に見てもらう。県のJSON＋PDF転記の版は（参考）に下げた。
     tab_mlit, tab_mesh, tab_mesh_cmp, tab_overview, tab_dl = st.tabs(
         [
-            "地図・交通量の時系列変化",
-            "地図・人口の時系列変化",
-            "地図・人口の比較",
-            "地図・交通量の時系列変化（参考）",
+            "道路規制×交通量",
+            "人口推計値×交通量",
+            "人口推計値の時点比較",
+            "(旧版)道路規制×交通量",
             "データダウンロード",
         ]
     )
 
     # ------------------------------------------------------------------
-    # 地図・交通量の時系列変化（参考）タブ
+    # (旧版)道路規制×交通量タブ
     # 県の公開JSON＋PDFからの転記で集めた規制の版
     # ------------------------------------------------------------------
     with tab_overview:
@@ -3453,7 +3522,7 @@ def main():
         )
 
     # ------------------------------------------------------------------
-    # 地図・交通量の時系列変化タブ（通れる道マップの配布データ版・既定）
+    # 道路規制×交通量タブ（通れる道マップの配布データ版・既定）
     # ------------------------------------------------------------------
     with tab_mlit:
         if post.empty:
@@ -3465,7 +3534,7 @@ def main():
             )
 
     # ------------------------------------------------------------------
-    # 地図・人口の時系列変化タブ（モバイル空間統計）
+    # 人口推計値×交通量タブ（モバイル空間統計）
     # ------------------------------------------------------------------
     with tab_mesh:
         render_mesh_population_tab(
@@ -3474,7 +3543,7 @@ def main():
         )
 
     # ------------------------------------------------------------------
-    # 地図・人口の比較タブ（条件違いの2枚を並べる）
+    # 人口推計値の時点比較タブ（条件違いの2枚を並べる）
     # ------------------------------------------------------------------
     with tab_mesh_cmp:
         render_mesh_compare_tab(mainshock)
