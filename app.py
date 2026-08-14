@@ -1703,40 +1703,65 @@ def build_plain_points_feature_group(
     その上に乗ると肝心のメッシュが読めない。ここでは「観測点がどこにあるか」と
     「いま選んでいるか」だけ分かればよいので、異常度の凡例も出さない
     （異常度で描き分けた地図は交通量のタブにある）。
+
+    形（●＝一般国道／■＝高速自動車国道）は他の地図と揃える。大きさは同じ
+    なので地図は混まないし、揃えておかないと同じ観測点が別の記号で出る。
     """
     fg = folium.FeatureGroup(name="観測点")
     for _, row in point_summary.iterrows():
         is_selected = row["point_id"] in selected_points
         label = point_labels.get(row["point_id"], row["point_id"])
+        tooltip = f"{label}<br>{POINT_TOOLTIP_HINT}" if interactive else None
+        edge = POINT_CHART_COLOR if is_selected else "#333333"
+        weight = 3 if is_selected else 2
+        radius = 9 if is_selected else 7
+
         if is_selected and interactive:
-            # 選択中は白い太線を下に敷いて、黒枠＋黄色の丸を目立たせる。
-            # 下の白線は当たり判定から外し、上の丸でクリックを拾う。
-            halo = folium.CircleMarker(
-                location=[row["point_lat"], row["point_lon"]],
-                radius=9, color=SELECTION_HALO_COLOR, weight=6,
-                fill=True, fill_color="#ffffff", fill_opacity=1.0,
-            )
+            # 白い縁取りを下に敷いて、下の塗りに関係なく輪郭を出す
+            # （当たり判定からは外し、上の印でクリックを拾う）。
+            halo = _plain_point_shape(row, radius, "#ffffff", 6, None, halo=True)
             halo.options["interactive"] = False
             halo.add_to(fg)
-        marker = folium.CircleMarker(
-            location=[row["point_lat"], row["point_lon"]],
-            # 500mメッシュが2〜3pxで並ぶ中では、小さすぎると探せない。
-            # メッシュを覆い隠さない範囲で大きめに取る。
-            radius=9 if is_selected else 7,
-            color=POINT_CHART_COLOR if is_selected else "#333333",
-            weight=3 if is_selected else 2,
-            fill=True,
-            fill_color="#ffffff",
-            fill_opacity=1.0,
-            tooltip=f"{label}<br>{POINT_TOOLTIP_HINT}" if interactive else None,
-        )
+        marker = _plain_point_shape(row, radius, edge, weight, tooltip)
         if not interactive:
             # メッシュを選んでいる間は、観測点がその上でクリックを拾わない
-            # ようにする（folium.CircleMarker は interactive を引数で受け取ら
-            # ないので、出力するオプションに直接入れる）。
             marker.options["interactive"] = False
         marker.add_to(fg)
     return fg
+
+
+def _plain_point_shape(row, radius: int, edge: str, weight: int, tooltip,
+                       halo: bool = False):
+    """
+    人口の地図用の観測点の印。高速自動車国道は四角、それ以外は丸。
+
+    四角はCircleMarkerでは描けないのでDivIconで作る（交通量の地図と同じ作り）。
+    ツールチップの文字列は丸と同じにしてあるので、クリックの判定
+    （point_id_from_tooltip）は形が変わっても同じように効く。
+
+    halo=True のときは、下に敷く白い座（枠線ではなく一段大きい白い形）を返す。
+    四角は枠線が内側に伸びるので、白を外へ出すには形ごと大きくする必要がある。
+    """
+    location = [row["point_lat"], row["point_lon"]]
+    if _is_square_point(row.get("road_type")):
+        size = max(6, 2 * radius) + (6 if halo else 0)
+        style = (
+            f"width:{size}px;height:{size}px;box-sizing:border-box;"
+            "border-radius:28%;background:#ffffff;"
+            + ("" if halo else f"border:{weight}px solid {edge};")
+        )
+        return folium.Marker(
+            location=location,
+            icon=folium.DivIcon(
+                icon_size=(size, size), icon_anchor=(size // 2, size // 2),
+                html=f'<div style="{style}"></div>',
+            ),
+            tooltip=tooltip,
+        )
+    return folium.CircleMarker(
+        location=location, radius=radius, color=edge, weight=weight,
+        fill=True, fill_color="#ffffff", fill_opacity=1.0, tooltip=tooltip,
+    )
 
 
 def build_points_feature_group(
@@ -2327,6 +2352,11 @@ MAX_SELECTED_MESHES = 1
 # この地図で選べる観測点は1点だけ。メッシュ2つ＋観測点で、実績と平常時を
 # 出すと図が6本になる。これ以上増やすとどの線がどれか追えなくなる。
 MAX_SELECTED_POINTS_ON_MESH_MAP = 1
+# 初めて開いたときに選んでおくもの（何も選ばれていない図だと、この画面で
+# 何が見られるのか伝わらない）。メッシュは宇城市の一角で、夜間人口が
+# 発災後に6割まで落ちている場所。
+DEFAULT_MESH_ON_MAP = 483075254
+DEFAULT_POINT_CODE_ON_MAP = "9110040"
 # 地図で「いま選んでいる」ことを示す枠。白の太線を下に敷いて、その上に
 # 図と同じ色の線を重ねる（メッシュは青緑、観測点は朱色）。下の白線は
 # 塗りの色（青〜赤／黄〜青）に関係なく輪郭を出すためのもの。
@@ -2433,8 +2463,17 @@ def _mesh_population_body(point_summary: pd.DataFrame, point_labels: dict,
         f"{meta['suppressed_note']}。"
     )
 
-    st.session_state.setdefault("selected_meshes", [])
-    st.session_state.setdefault("selected_points_mesh", [])
+    # 既定の選択。観測点のIDは緯度経度の文字列なので、表示名（観測点コード）
+    # から引く。
+    default_point = next(
+        (pid for pid, label in point_labels.items()
+         if label.endswith(DEFAULT_POINT_CODE_ON_MAP)),
+        None,
+    )
+    st.session_state.setdefault("selected_meshes", [DEFAULT_MESH_ON_MAP])
+    st.session_state.setdefault(
+        "selected_points_mesh", [default_point] if default_point else []
+    )
     sel_version = st.session_state.get("_sel_version_mesh", 0)
     selected = list(st.session_state["selected_meshes"])
     selected_points = [
@@ -2460,7 +2499,7 @@ def _mesh_population_body(point_summary: pd.DataFrame, point_labels: dict,
             else "選択メッシュの人口推計値 × 選択観測点の交通量"
         )
     with col_map:
-        st.subheader("500mメッシュ別の人口の変化")
+        st.subheader("500mメッシュ別の推計人口")
         # 操作するものは地図の真上に置く。画面の幅が狭いノートPCでは、
         # 上に離して置くと地図と時系列図を並べたまま切り替えられない。
         # 地図より前に作る点は変えない（地図のクリックで st.rerun したときに、
@@ -2471,7 +2510,7 @@ def _mesh_population_body(point_summary: pd.DataFrame, point_labels: dict,
         with col_hour:
             hours_choices = list(mesh_population.HOUR_METRICS)
             hour_label = st.selectbox(
-                "色分けの時間帯", hours_choices,
+                "時間帯区分（夜間・昼間・全日）", hours_choices,
                 index=hours_choices.index(mesh_population.DEFAULT_HOUR),
                 key="mesh_metric",
                 help="夜間は3時、昼間は14時を代表時刻にしています"
@@ -2482,7 +2521,7 @@ def _mesh_population_body(point_summary: pd.DataFrame, point_labels: dict,
         with col_day:
             day_choices = list(mesh_population.DAY_METRICS)
             day_label = st.selectbox(
-                "日区分", day_choices,
+                "平日・休日区分", day_choices,
                 index=day_choices.index(mesh_population.DEFAULT_DAY),
                 key="mesh_daytype",
                 help="平日と休日では人の居場所が元から違うので、発災前の"
@@ -2497,7 +2536,7 @@ def _mesh_population_body(point_summary: pd.DataFrame, point_labels: dict,
         with col_res:
             res_choices = list(mesh_population.RESIDENCE_METRICS)
             residence_label = st.selectbox(
-                "居住地", res_choices,
+                "居住者・来訪者区分", res_choices,
                 index=res_choices.index(mesh_population.DEFAULT_RESIDENCE),
                 key="mesh_residence",
                 help="そのメッシュのある市区町村に住んでいる人か、それ以外か。"
@@ -2510,7 +2549,7 @@ def _mesh_population_body(point_summary: pd.DataFrame, point_labels: dict,
         with col_mode:
             mode_choices = list(mesh_population.VALUE_MODES)
             value_mode = st.selectbox(
-                "地図に出す値", mode_choices,
+                "凡例を表示する値", mode_choices,
                 index=mode_choices.index(mesh_population.DEFAULT_VALUE_MODE),
                 key="mesh_value_mode",
                 help="増減率だけだと、元から人が少ない場所の1〜2割の増減が"
@@ -2558,7 +2597,12 @@ def _mesh_population_body(point_summary: pd.DataFrame, point_labels: dict,
             # ようにする（他の地図と同じ扱い）
             ".leaflet-tooltip{pointer-events:none;width:max-content;"
             "max-width:240px;font-size:11.5px;line-height:1.5;padding:5px 8px;}"
+            + POINT_LEGEND_CSS +
             "</style>"
+        ))
+        # 形（●＝一般国道／■＝高速自動車国道）の凡例は、この地図でも出す
+        fmap.get_root().html.add_child(folium.Element(
+            point_legend_html(point_summary)
         ))
         mesh_population.add_mesh_layer(
             fmap, geojson, metric, interactive=mesh_clickable
@@ -2725,27 +2769,29 @@ def _mesh_compare_body(mainshock: dict) -> None:
     sides = []
     for (side, default_mode), col in zip(MESH_COMPARE_DEFAULTS, columns):
         with col:
-            c_mode, c_hour, c_day, c_res = st.columns(4)
+            c_mode, c_hour = st.columns(2)
+            c_day, c_res = st.columns(2)
             with c_mode:
                 mode = st.selectbox(
-                    "出す値", modes, index=modes.index(default_mode),
+                    "凡例を表示する値", modes,
+                    index=modes.index(default_mode),
                     key=f"cmp_mode_{side}",
                 )
             with c_hour:
                 hour = st.selectbox(
-                    "時間帯", hours,
+                    "時間帯区分（夜間・昼間・全日）", hours,
                     index=hours.index(mesh_population.DEFAULT_HOUR),
                     key=f"cmp_hour_{side}",
                 )
             with c_day:
                 day = st.selectbox(
-                    "日区分", days,
+                    "平日・休日区分", days,
                     index=days.index(mesh_population.DEFAULT_DAY),
                     key=f"cmp_day_{side}",
                 )
             with c_res:
                 residence = st.selectbox(
-                    "居住地", residences,
+                    "居住者・来訪者区分", residences,
                     index=residences.index(mesh_population.DEFAULT_RESIDENCE),
                     key=f"cmp_res_{side}",
                 )
