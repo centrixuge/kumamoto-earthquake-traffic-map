@@ -53,7 +53,8 @@ CONTENT_COLOR = {name: color for name, color, _ in CONTENT_CLASSES}
 # 解除後に残る規制も書かれていない。色を割り当てても意味が無いので
 # 地図・凡例・件数からは外す（一覧には残す）。
 RELEASED = ("通行止め解除", "通行止解除")
-# 道路種別が取れなかったレコードに付ける名前。地図には出さない（drawn_items）
+# 道路種別が取れなかったレコードに付ける名前。規制中扱いのものだけ地図に
+# 出さない（is_unknown_active / drawn_items）
 UNKNOWN_LEVEL = "不明"
 
 
@@ -74,19 +75,30 @@ def content_class(item: dict) -> str:
     return "規制内容不明"
 
 
+def is_unknown_active(item: dict) -> bool:
+    """
+    道路種別が取れないまま、最新の配布に入っている（＝規制中扱いの）もの。
+
+    この形のレコードは配布元の地図でも凡例に無い紫色で描かれており、いまの
+    配布分については不備と見られる。何の規制か分からないものを「いま規制中」
+    として地図に出すと、規制があるという誤解だけが残るので出さない。
+
+    一方、いちど出て消えたもの（解除済み）は、その時点でそこに規制があった
+    という記録なので地図に残す。
+    """
+    return item["道路種別"] == UNKNOWN_LEVEL and item["状態"] == "規制中"
+
+
 def drawn_items(data: dict) -> list:
     """
     地図に出す規制。次の2つは除く（一覧・CSV・GeoJSONには残す）。
 
     ・解除の告知だけのレコード
-    ・道路種別が「不明」のレコード。線形だけで属性が一切無く、配布元の
-      地図でも凡例に無い紫色で描かれているため、データの不備と見られる。
-      何の規制か分からないものを地図に出すと、規制があるという誤解だけが
-      残るので出さない。
+    ・道路種別が取れないまま規制中扱いになっているレコード
     """
     return [
         i for i in data["items"]
-        if not is_release_record(i) and i["道路種別"] != UNKNOWN_LEVEL
+        if not is_release_record(i) and not is_unknown_active(i)
     ]
 
 
@@ -316,9 +328,11 @@ def content_note(data: dict) -> str:
     )
     # 道路種別が「不明」のものは下の断り書きで別に数えるので、ここでは
     # それに当たらない解除の告知だけを数える（同じ件を二重に数えないため）。
+    # 地図から外した理由ごとに1回だけ数える。道路種別が取れないものは
+    # 「規制中扱いのもの」だけを下の断り書きに寄せ、それ以外はここで数える。
     released = [
         i for i in data["items"]
-        if is_release_record(i) and i["道路種別"] != UNKNOWN_LEVEL
+        if is_release_record(i) and not is_unknown_active(i)
     ]
     text = (
         f"色は規制の内容で分けています（地図に出している{len(items)}件の内訳は"
@@ -351,20 +365,39 @@ def unknown_level_note(data: dict) -> str:
     if not items:
         return ""
     stamps = sorted({i["初出時点"] for i in items})
+    active = [i for i in items if is_unknown_active(i)]
+    # 解除の告知だけのレコードは別の理由で外しているので、ここでは数えない
+    ended = [i for i in items
+             if not is_unknown_active(i) and not is_release_record(i)]
     bare = sum(
         1 for i in items
         if not any(i.get(k) for k in ("路線名", "区間", "規制内容", "開始日時"))
     )
-    return (
-        f"**道路種別が取れない{len(items)}件は地図に出していません。** "
+    text = (
+        f"**道路種別が取れないレコードが{len(items)}件あります。** "
         f"うち{bare}件は配布されているGeoJSONに道路の線形（LineString）だけが"
         "入っていて、路線名・区間・規制内容・開始日時のどれも持ちません"
         f"（{stamps[0]} 以降の配布分に現れます）。"
-        "配布元の地図でも凡例に無い紫色で描かれており、データの不備と"
-        "見られます。何の規制か分からないものを地図に出すと、規制があると"
-        "いう誤解だけが残るため、地図・凡例・件数からは外しました"
-        "（このページ下の「規制の一覧」とCSV・GeoJSONには残しています）。"
     )
+    if active:
+        text += (
+            f"このうち**最新の配布に入っている{len(active)}件は地図に出して"
+            "いません**。配布元の地図でも凡例に無い紫色で描かれており、"
+            "いまの配布分については不備と見られるためです"
+            "（何の規制か分からないものを「いま規制中」として出すと、"
+            "規制があるという誤解だけが残ります）。"
+        )
+    if ended:
+        text += (
+            f"いちど出て消えた{len(ended)}件は、その時点でそこに規制があった"
+            "という記録なので、解除済みとして地図に残しています。"
+        )
+    elif active:
+        text += (
+            "いちど出て消えたものは、その時点の記録として解除済みで地図に"
+            "残す扱いです（いまはそれに当たるものがありません）。"
+        )
+    return text + "各件の中身は、このページ下の「規制の一覧」で確認できます。"
 
 
 def regulation_table(data: dict) -> pd.DataFrame:
