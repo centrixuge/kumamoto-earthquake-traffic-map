@@ -2247,17 +2247,34 @@ MESH_BAR_COLORS = ["#b8b8b8", "#9ccfc0"]
 MESH_CLICK_TARGETS = ("メッシュ", "観測点")
 
 
-# このタブが modules/mesh_population.py に求めるもの。公開側で app.py だけが
-# 読み直され、モジュールが古いまま動くことが実際に2回起きている
-# （新しい関数を呼んで AttributeError になり、ページ全体が落ちた）。
-# 足りないものを名指しして、このタブだけ止める。
-MESH_MODULE_REQUIRES = (
-    "HOUR_METRICS", "DAY_METRICS", "metric_columns", "metric_label",
-    "summary", "required_summary_columns", "DEFAULT_HOUR", "DEFAULT_DAY",
-    "mesh_geojson", "selected_geojson", "add_mesh_layer",
-    "add_selection_layer", "legend_html", "mesh_bounds", "mesh_from_tooltip",
-    "mesh_label", "series_for", "with_baseline", "load_meta", "load_summary",
-)
+def _stale_module_hint(err: Exception) -> str:
+    """
+    公開側で app.py だけが読み直され、modules/mesh_population.py が古いまま
+    動くことが実際に起きている。その形の失敗をここで見分ける。
+
+    以前は「このタブが使う名前」を手で並べて確かめていたが、機能を足すたびに
+    並べ直しが要り、実際に追いつかなくなった（VALUE_MODES を足したとき）。
+    出た例外そのものから見分ければ、並べ直しは要らない。
+
+    古いモジュールに対して起きるのは次の2つ。
+      ・新しい名前を呼ぶ    → AttributeError（module … has no attribute …）
+      ・引数が増えた関数を呼ぶ → TypeError（unexpected keyword argument …）
+    """
+    text = str(err)
+    module_name = mesh_population.__name__
+    stale = (
+        (isinstance(err, AttributeError) and module_name in text)
+        or (isinstance(err, TypeError)
+            and ("unexpected keyword argument" in text
+                 or "positional argument" in text))
+    )
+    if not stale:
+        return ""
+    return (
+        "\n\n`modules/mesh_population.py` が古いまま読み込まれている状態です"
+        "（画面のコードだけが新しく、モジュールが入れ替わっていない）。"
+        "**アプリを再起動（Manage app → Reboot）すると直ります。**"
+    )
 
 
 def render_mesh_population_tab(point_summary: pd.DataFrame, point_labels: dict,
@@ -2277,15 +2294,6 @@ def render_mesh_population_tab(point_summary: pd.DataFrame, point_labels: dict,
     この中の失敗は、このタブの中だけで止める。ここで例外を上げると、
     交通量のタブごとページ全体が落ちてしまうため。
     """
-    missing = [n for n in MESH_MODULE_REQUIRES
-               if not hasattr(mesh_population, n)]
-    if missing:
-        st.error(
-            "`modules/mesh_population.py` が古いまま読み込まれています"
-            f"（{', '.join(missing)} がありません）。"
-            "アプリを再起動（Manage app → Reboot）すると直ります。"
-        )
-        return
     try:
         _mesh_population_body(
             point_summary, point_labels, quake_at, mainshock, other_event_times
@@ -2296,6 +2304,7 @@ def render_mesh_population_tab(point_summary: pd.DataFrame, point_labels: dict,
         st.error(
             f"人口のタブを描けませんでした（{type(e).__name__}: {e}）。"
             "ほかのタブは通常どおり動きます。"
+            + _stale_module_hint(e)
         )
 
 
