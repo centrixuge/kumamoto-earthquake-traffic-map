@@ -88,20 +88,36 @@ HOUR_METRICS = {"全時間帯": "all", "夜間（3時）": "h3", "昼間（14時
 # 平日を、休日平均には休日を当てて比べる。平日と休日をまとめた「全日」は
 # 出さない（その比は日区分の違いが混ざるだけで、読んでも意味がない）。
 DAY_METRICS = {"平日": "wd", "休日（土日祝）": "hd"}
+# 居住地別。そのメッシュのある市区町村に住んでいる人か、それ以外か。
+# 「すべて」は総数の配信（01_total）で、居住者＋来訪者とは一致しない
+# （居住地ごとに10人未満だと配信されないため、内訳の合計のほうが小さい）。
+RESIDENCE_METRICS = {
+    "すべて": "all",
+    "居住者（当該市区町村）": "rs",
+    "来訪者（それ以外）": "vi",
+}
 # 既定は平日の夜間。夜間はほぼ滞在人口なので、そこに人が残っているかを
 # いちばん素直に読める。
 DEFAULT_HOUR = "夜間（3時）"
 DEFAULT_DAY = "平日"
+DEFAULT_RESIDENCE = "すべて"
 
 
-def metric_columns(hour_label: str, day_label: str) -> tuple[str, str, str]:
-    """時間帯・日区分の組み合わせに対応する列名（発災前・発災後・比）。"""
-    key = f"{DAY_METRICS[day_label]}_{HOUR_METRICS[hour_label]}"
+def metric_columns(hour_label: str, day_label: str,
+                   residence_label: str = DEFAULT_RESIDENCE
+                   ) -> tuple[str, str, str]:
+    """区分の組み合わせに対応する列名（発災前・発災後・比）。"""
+    key = (f"{RESIDENCE_METRICS[residence_label]}"
+           f"_{DAY_METRICS[day_label]}_{HOUR_METRICS[hour_label]}")
     return f"pre_{key}", f"post_{key}", f"ratio_{key}"
 
 
-def metric_label(hour_label: str, day_label: str) -> str:
-    return f"{hour_label}・{day_label}"
+def metric_label(hour_label: str, day_label: str,
+                 residence_label: str = DEFAULT_RESIDENCE) -> str:
+    text = f"{hour_label}・{day_label}"
+    if RESIDENCE_METRICS[residence_label] != "all":
+        text += f"・{residence_label}"
+    return text
 
 
 def required_summary_columns() -> list[str]:
@@ -110,7 +126,8 @@ def required_summary_columns() -> list[str]:
         col
         for hour in HOUR_METRICS
         for day in DAY_METRICS
-        for col in metric_columns(hour, day)
+        for res in RESIDENCE_METRICS
+        for col in metric_columns(hour, day, res)
     ]
 
 
@@ -332,9 +349,12 @@ def _feature(row, pre_col: str, post_col: str, ratio_col: str,
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def mesh_geojson(summary: pd.DataFrame, hour_label: str, day_label: str,
-                 min_hours: int, mode: str = DEFAULT_VALUE_MODE) -> dict:
+                 min_hours: int, mode: str = DEFAULT_VALUE_MODE,
+                 residence_label: str = DEFAULT_RESIDENCE) -> dict:
     """地図に載せるメッシュのFeatureCollectionを作る。"""
-    pre_col, post_col, ratio_col = metric_columns(hour_label, day_label)
+    pre_col, post_col, ratio_col = metric_columns(
+        hour_label, day_label, residence_label
+    )
     sub = summary[summary["n_hours"] >= min_hours]
     return {
         "type": "FeatureCollection",
@@ -346,7 +366,8 @@ def mesh_geojson(summary: pd.DataFrame, hour_label: str, day_label: str,
 
 
 def selected_geojson(summary: pd.DataFrame, hour_label: str, day_label: str,
-                     selected, colors, mode: str = DEFAULT_VALUE_MODE) -> dict:
+                     selected, colors, mode: str = DEFAULT_VALUE_MODE,
+                     residence_label: str = DEFAULT_RESIDENCE) -> dict:
     """
     選択中のメッシュを太枠で描くためのFeatureCollection。
 
@@ -355,7 +376,9 @@ def selected_geojson(summary: pd.DataFrame, hour_label: str, day_label: str,
     選択の表示も同じ形・同じツールチップの図形にして、押せば解除できるよう
     にしている。
     """
-    pre_col, post_col, ratio_col = metric_columns(hour_label, day_label)
+    pre_col, post_col, ratio_col = metric_columns(
+        hour_label, day_label, residence_label
+    )
     rows = summary.set_index("mesh")
     features = []
     for mesh, color in zip(selected, colors):

@@ -5,7 +5,9 @@
 入力（いずれも公開repoには置かない。data/mss/ は .gitignore 済み）
   data/mss/過去分/01_total.csv.zip            2026-07-21 00時〜07-28 23時（属性：総数）
   data/mss/realtime/YYYYMMDD/*_00000.csv.zip  1時間ごとの配信分（同上）
-  ※ *_00001〜00003 は性年代別・居住地別。今回は使わない
+  data/mss/過去分/04_residence_city.csv.zip   同じ期間の居住地市区町村別
+  data/mss/realtime/YYYYMMDD/*_00003.csv.zip  1時間ごとの配信分（同上）
+  ※ *_00001（性年代別）・*_00002（居住地都道府県別）は使わない
 
 出力（data/mss_build/。ここも .gitignore 済み。非公開ストレージへ置くもの）
   mesh_population.parquet          mesh × 時刻 の人口推計値（long）
@@ -13,8 +15,10 @@
   mesh_population_meta.json        期間・件数・出典・秘匿の扱い
 
 配布データそのものは公開できないため、アプリが描くのに必要な粒度
-（熊本県内・500mメッシュ・1時間・総数のみ）まで落としたものだけを出力する。
-元データに戻せる情報（性年代・居住地）は含めない。
+（熊本県内・500mメッシュ・1時間）まで落としたものだけを出力する。
+居住地別は「そのメッシュのある市区町村の居住者か・それ以外か」の2区分に
+畳んでから集計し、居住地の市区町村コードは残さない（元データに戻せない）。
+性年代別は読み込まない。
 
 熊本県内の判定は、500mメッシュの中心が国土数値情報の行政区域（N03）の
 熊本県のポリゴンに入るかどうか。メッシュの緯度経度はメッシュコードから
@@ -127,6 +131,10 @@ def kumamoto_meshes() -> pd.DataFrame:
     # 熊本市の区は、この年次のN03では名称の欄に入らず行政区域コードにしかない
     name = name + joined["N03_007"].map(KUMAMOTO_WARDS).fillna("")
     frame["city"] = name.values
+    # 居住地市区町村別の集計で「当該市区町村の居住者か」を判定するのに使う。
+    # 配布データの居住地コードは5桁で、熊本市は区単位（43101〜43105）まで
+    # 入っており、行政区域コードとそのまま突き合わせられる。
+    frame["city_code"] = joined["N03_007"].astype(str).values
     print(f"熊本県内の500mメッシュ: {len(frame):,}"
           f"（市区町村名なし {int((frame['city'] == '').sum())}）")
     return frame
@@ -203,17 +211,76 @@ def load_population(mesh: pd.DataFrame) -> pd.DataFrame:
     return df.reset_index(drop=True)
 
 
-def day_type(index: pd.DatetimeIndex) -> pd.Series:
-    """平常時の平均を取る単位。祝日は日曜と同じ扱い（交通量側と揃える）。"""
-    holidays = set(json.loads(HOLIDAYS.read_text(encoding="utf-8")))
-    is_holiday = pd.Series(index.strftime("%Y-%m-%d"), index=range(len(index))).isin(
-        holidays
+def load_residence(mesh: pd.DataFrame) -> pd.DataFrame:
+    """
+    居住地市区町村別を、「そのメッシュのある市区町村の居住者か」の2区分に
+    畳んで集計する。
+
+    配布データは 居住地の市区町村コード × メッシュ × 時点 の細かい表なので、
+    そのまま持つと重い。ここでは居住者（rs）と来訪者（vi、＝それ以外の
+    市区町村に住む人）の2つに足し込む。
+
+    総数（01_total）とは足し合わせが一致しない。居住地別は「居住地ごとに
+    10人未満なら配信されない」ので、内訳の合計は総数より小さくなる。
+    """
+    own = mesh.set_index("mesh")["city_code"]
+    keep = pd.Index(mesh["mesh"])
+    parts: list[pd.DataFrame] = []
+    group = ["mesh", "res", "date", "time"]
+
+    def _read(handle) -> None:
+        for chunk in pd.read_csv(
+            handle,
+            usecols=["date", "time", "area", "residence", "population"],
+            dtype={"date": "int32", "time": "int32", "area": "int64",
+                   "residence": "str", "population": "int32"},
+            chunksize=2_000_000,
+        ):
+            sub = chunk[chunk["area"].isin(keep)]
+            if sub.empty:
+                continue
+            resident = sub["residence"].values == own.reindex(sub["area"]).values
+            frame = pd.DataFrame({
+                "mesh": sub["area"].values,
+                "res": np.where(resident, "rs", "vi"),
+                "date": sub["date"].values,
+                "time": sub["time"].values,
+                "population": sub["population"].values,
+            })
+            parts.append(
+                frame.groupby(group, as_index=False)["population"].sum()
+            )
+
+    hist = SRC / "過去分" / "04_residence_city.csv.zip"
+    with zipfile.ZipFile(hist) as z:
+        name = z.namelist()[0]
+        print(f"読み込み: {hist.name} / {name}")
+        with z.open(name) as f:
+            _read(f)
+    # 途中でまとめて行数を抑える（分割読みの境目で同じ時点が分かれるため、
+    # 足し合わせは何回に分けても同じ）
+    parts = [pd.concat(parts, ignore_index=True)
+             .groupby(group, as_index=False)["population"].sum()]
+
+    for day in sorted((SRC / "realtime").iterdir()):
+        if not day.is_dir():
+            continue
+        files = sorted(day.glob("*_00003.csv.zip"))  # 00003 が居住地市区町村別
+        print(f"読み込み: realtime/{day.name}（居住地別 {len(files)}時点）")
+        for path in files:
+            with zipfile.ZipFile(path) as z:
+                with z.open(z.namelist()[0]) as f:
+                    _read(f)
+
+    df = pd.concat(parts, ignore_index=True).groupby(
+        group, as_index=False
+    )["population"].sum()
+    df["datetime"] = pd.to_datetime(
+        df["date"].astype(str) + df["time"].astype(str).str.zfill(4),
+        format="%Y%m%d%H%M",
     )
-    dow = pd.Series(index.dayofweek.values)
-    out = pd.Series("平日", index=range(len(index)))
-    out[dow == 5] = "土"
-    out[(dow == 6) | is_holiday] = "日祝"
-    return out
+    print(f"居住地別: {len(df):,}行（居住者・来訪者に畳んだ後）")
+    return df.drop(columns=["date", "time"])
 
 
 def is_weekday(index: pd.DatetimeIndex) -> pd.Series:
@@ -237,56 +304,76 @@ def day_type(index: pd.DatetimeIndex) -> pd.Series:
     return out
 
 
-def build_summary(df: pd.DataFrame, mesh: pd.DataFrame) -> pd.DataFrame:
+def _phase_means(frame: pd.DataFrame, prefix: str) -> list:
     """
-    メッシュごとの発災前後の水準。地図の色分けに使う。
-
-    時間帯（全時間帯／3時／14時）と日区分（全日／平日／休日）の組み合わせで
-    それぞれ平均を出す。3時はほぼ就寝中、14時は通勤通学が済んだ後で、
-    どちらも移動の途中が混じりにくい時刻。国勢調査の夜間人口・昼間人口は
-    常住地・従業地で数える別の定義なので、その語は使わない。
-
-    日区分を分けるのは、平日と休日で人の居場所が元から違うためで、
-    発災前の平日平均には発災後の平日を、休日平均には休日を当てて比べる。
-
-    列の名前は pre_{日区分}_{時間帯} / post_… / ratio_…
-    （日区分 all=全日 wd=平日 hd=休日、時間帯 all=全時間帯 h3 h14）。
+    1つの母集団（総数／居住者／来訪者）について、日区分×時間帯ごとの
+    発災前・発災後の平均を出す。
     """
-    weekday = is_weekday(pd.DatetimeIndex(df["datetime"]))
-    weekday.index = df.index
-    hour = df["datetime"].dt.hour
+    weekday = is_weekday(pd.DatetimeIndex(frame["datetime"]))
+    weekday.index = frame.index
+    hour = frame["datetime"].dt.hour
 
     day_masks = {
-        "all": pd.Series(True, index=df.index),
+        "all": pd.Series(True, index=frame.index),
         "wd": weekday,
         "hd": ~weekday,
     }
-    hour_masks = {"all": pd.Series(True, index=df.index)}
+    hour_masks = {"all": pd.Series(True, index=frame.index)}
     for h in REPRESENTATIVE_HOURS:
         hour_masks[f"h{h}"] = hour == h
 
-    is_pre = df["datetime"] < QUAKE_AT
+    is_pre = frame["datetime"] < QUAKE_AT
     joins = []
     for day, day_mask in day_masks.items():
         for hour_key, hour_mask in hour_masks.items():
             both = day_mask & hour_mask
             for phase, phase_mask in (("pre", is_pre), ("post", ~is_pre)):
-                sub = df[both & phase_mask]
+                sub = frame[both & phase_mask]
                 joins.append(
                     sub.groupby("mesh")["population"].mean()
-                    .rename(f"{phase}_{day}_{hour_key}")
+                    .rename(f"{phase}_{prefix}_{day}_{hour_key}")
                 )
+    return joins
+
+
+def build_summary(df: pd.DataFrame, mesh: pd.DataFrame,
+                  residence: pd.DataFrame = None) -> pd.DataFrame:
+    """
+    メッシュごとの発災前後の水準。地図の色分けに使う。
+
+    3つの区分の組み合わせで平均を出す。
+      ・母集団（総数／当該市区町村の居住者／それ以外＝来訪者）
+      ・日区分（全日／平日／休日）
+      ・時間帯（全時間帯／3時／14時）
+
+    3時はほぼ就寝中、14時は通勤通学が済んだ後で、どちらも移動の途中が
+    混じりにくい時刻。国勢調査の夜間人口・昼間人口は常住地・従業地で数える
+    別の定義なので、その語は使わない。日区分を分けるのは、平日と休日で人の
+    居場所が元から違うためで、発災前の平日平均には発災後の平日を、休日平均
+    には休日を当てて比べる。
+
+    列の名前は pre_{母集団}_{日区分}_{時間帯} / post_… / ratio_…
+    （母集団 all=総数 rs=居住者 vi=来訪者、日区分 all/wd/hd、
+    時間帯 all/h3/h14）。
+    """
+    joins = _phase_means(df, "all")
+    if residence is not None:
+        for key in ("rs", "vi"):
+            joins += _phase_means(residence[residence["res"] == key], key)
     joins += [
         df.groupby("mesh")["population"].max().rename("max_population"),
         df.groupby("mesh")["datetime"].count().rename("n_hours"),
     ]
 
     out = mesh.set_index("mesh").join(joins, how="left")
-    for day in day_masks:
-        for hour_key in hour_masks:
-            out[f"ratio_{day}_{hour_key}"] = (
-                out[f"post_{day}_{hour_key}"] / out[f"pre_{day}_{hour_key}"]
-            )
+    groups = ("all", "rs", "vi") if residence is not None else ("all",)
+    for res in groups:
+        for day in ("all", "wd", "hd"):
+            for hour_key in ("all", *(f"h{h}" for h in REPRESENTATIVE_HOURS)):
+                out[f"ratio_{res}_{day}_{hour_key}"] = (
+                    out[f"post_{res}_{day}_{hour_key}"]
+                    / out[f"pre_{res}_{day}_{hour_key}"]
+                )
     return out.reset_index()
 
 
@@ -359,7 +446,8 @@ def main() -> None:
         f"{df['datetime'].min()}〜{df['datetime'].max()}（{len(hours)}時点）"
     )
 
-    summary = build_summary(df, mesh)
+    residence = load_residence(mesh)
+    summary = build_summary(df, mesh, residence)
     summary = summary[summary["n_hours"].notna()].reset_index(drop=True)
 
     # 時刻は開始時点からの通し番号で持つ（1時間ごとに欠けなく並ぶため）
@@ -377,7 +465,7 @@ def main() -> None:
         "source": "モバイル空間統計®（NTTドコモ／ドコモ・インサイトマーケティング）"
                   "リアルタイム国内人口分布",
         "area": "熊本県内（500mメッシュの中心が県域に入るもの）",
-        "unit": "500mメッシュ・1時間・人口推計値（総数）",
+        "unit": "500mメッシュ・1時間・人口推計値（総数と居住地別）",
         "start": start.isoformat(),
         "hours": int(len(hours)),
         "end": df["datetime"].max().isoformat(),
@@ -385,6 +473,11 @@ def main() -> None:
         "meshes": int(df["mesh"].nunique()),
         "rows": int(len(df)),
         "min_population": MIN_POPULATION,
+        # 居住地別（居住者＋来訪者）の合計が総数の何割か。居住地ごとに
+        # 10人未満だと配信されないので、内訳の合計は総数より小さくなる。
+        "residence_coverage": round(
+            float(residence["population"].sum() / df["population"].sum()), 4
+        ),
         "representative_hours": list(REPRESENTATIVE_HOURS),
         "suppressed_note": f"{MIN_POPULATION}人未満のメッシュは配信されないため、"
                            "値が無い時間帯は0ではなく「10人未満または欠測」",

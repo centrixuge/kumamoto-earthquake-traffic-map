@@ -2464,7 +2464,20 @@ def _mesh_population_body(point_summary: pd.DataFrame, point_labels: dict,
                      f"{post_days.get('平日', '—')}日・"
                      f"休日{post_days.get('休日', '—')}日しかありません。",
             )
-        col_mode, col_click = st.columns([1.1, 1])
+        col_res, col_mode = st.columns([1.1, 1])
+        with col_res:
+            res_choices = list(mesh_population.RESIDENCE_METRICS)
+            residence_label = st.selectbox(
+                "居住地", res_choices,
+                index=res_choices.index(mesh_population.DEFAULT_RESIDENCE),
+                key="mesh_residence",
+                help="そのメッシュのある市区町村に住んでいる人か、それ以外か。"
+                     "居住者が減って来訪者が増えていれば、避難や支援で人が"
+                     "入れ替わったことが読めます。"
+                     "「すべて」は総数の配信で、居住者＋来訪者とは一致しません"
+                     "（居住地ごとに10人未満だと配信されないため、内訳の合計の"
+                     "ほうが小さくなります）。",
+            )
         with col_mode:
             mode_choices = list(mesh_population.VALUE_MODES)
             value_mode = st.selectbox(
@@ -2475,19 +2488,21 @@ def _mesh_population_body(point_summary: pd.DataFrame, point_labels: dict,
                      "都心部と同じ色になります。人口そのものを選ぶと、"
                      "どこに何人いるかで塗り分けます。",
             )
-        with col_click:
-            click_target = st.radio(
-                "クリックで選ぶもの", MESH_CLICK_TARGETS, horizontal=True,
-                key="mesh_target",
-                help="観測点はメッシュの上に乗るので、両方を同時に押せる"
-                     "状態だとメッシュを狙っても観測点が拾ってしまいます。"
-                     "選んでいないほうは当たり判定から外し、"
-                     "カーソルを合わせても何も出ないようにしています。",
-            )
+        click_target = st.radio(
+            "クリックで選ぶもの", MESH_CLICK_TARGETS, horizontal=True,
+            key="mesh_target",
+            help="観測点はメッシュの上に乗るので、両方を同時に押せる"
+                 "状態だとメッシュを狙っても観測点が拾ってしまいます。"
+                 "選んでいないほうは当たり判定から外し、"
+                 "カーソルを合わせても何も出ないようにしています。",
+        )
         mesh_clickable = click_target == MESH_CLICK_TARGETS[0]
-        metric = mesh_population.metric_label(hour_label, day_label)
+        metric = mesh_population.metric_label(
+            hour_label, day_label, residence_label
+        )
         geojson = mesh_population.mesh_geojson(
-            summary, hour_label, day_label, MESH_MIN_HOURS, value_mode
+            summary, hour_label, day_label, MESH_MIN_HOURS, value_mode,
+            residence_label,
         )
         # 観測点は同じ小さな印にしてあるので、異常度の凡例は出さない
         st.markdown(
@@ -2526,7 +2541,7 @@ def _mesh_population_body(point_summary: pd.DataFrame, point_labels: dict,
             fmap,
             mesh_population.selected_geojson(
                 summary, hour_label, day_label, selected,
-                MESH_SELECTION_COLORS, value_mode,
+                MESH_SELECTION_COLORS, value_mode, residence_label,
             ),
             interactive=mesh_clickable,
         )
@@ -2674,12 +2689,13 @@ def _mesh_compare_body(mainshock: dict) -> None:
     hours = list(mesh_population.HOUR_METRICS)
     days = list(mesh_population.DAY_METRICS)
     modes = list(mesh_population.VALUE_MODES)
+    residences = list(mesh_population.RESIDENCE_METRICS)
 
     columns = st.columns(2, gap="large")
     sides = []
     for (side, default_mode), col in zip(MESH_COMPARE_DEFAULTS, columns):
         with col:
-            c_mode, c_hour, c_day = st.columns(3)
+            c_mode, c_hour, c_day, c_res = st.columns(4)
             with c_mode:
                 mode = st.selectbox(
                     "出す値", modes, index=modes.index(default_mode),
@@ -2697,11 +2713,17 @@ def _mesh_compare_body(mainshock: dict) -> None:
                     index=days.index(mesh_population.DEFAULT_DAY),
                     key=f"cmp_day_{side}",
                 )
-            label = mesh_population.metric_label(hour, day)
+            with c_res:
+                residence = st.selectbox(
+                    "居住地", residences,
+                    index=residences.index(mesh_population.DEFAULT_RESIDENCE),
+                    key=f"cmp_res_{side}",
+                )
+            label = mesh_population.metric_label(hour, day, residence)
             st.markdown(
                 mesh_population.legend_html(label, mode), unsafe_allow_html=True
             )
-        sides.append((hour, day, mode, label))
+        sides.append((hour, day, mode, residence, label))
 
     dual = folium_plugins.DualMap(
         location=[mainshock["epicenter_lat"], mainshock["epicenter_lon"]],
@@ -2709,12 +2731,14 @@ def _mesh_compare_body(mainshock: dict) -> None:
         layout="horizontal",
     )
     n_meshes = 0
-    for fmap, (hour, day, mode, label) in zip((dual.m1, dual.m2), sides):
+    for fmap, (hour, day, mode, residence, label) in zip(
+        (dual.m1, dual.m2), sides
+    ):
         folium.TileLayer(
             "OpenStreetMap", name="OpenStreetMap", opacity=0.45, control=False,
         ).add_to(fmap)
         geojson = mesh_population.mesh_geojson(
-            summary, hour, day, MESH_MIN_HOURS, mode
+            summary, hour, day, MESH_MIN_HOURS, mode, residence
         )
         n_meshes = len(geojson["features"])
         mesh_population.add_mesh_layer(fmap, geojson, label)
