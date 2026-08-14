@@ -287,10 +287,13 @@ def _fmt(value) -> str:
     return "—" if pd.isna(value) else f"{value:,.0f} 人"
 
 
-def add_mesh_layer(fmap: folium.Map, geojson: dict, metric: str) -> None:
+def add_mesh_layer(fmap: folium.Map, geojson: dict, metric: str,
+                   interactive: bool = True) -> None:
     folium.GeoJson(
         geojson,
         name=f"人口の変化（{metric}）",
+        # 観測点を選んでいる間は、メッシュがクリックもツールチップも拾わない
+        interactive=interactive,
         style_function=lambda f: {
             "fillColor": f["properties"]["color"],
             "color": f["properties"]["color"],
@@ -302,18 +305,20 @@ def add_mesh_layer(fmap: folium.Map, geojson: dict, metric: str) -> None:
             fields=["mesh", "city", "pre", "post", "ratio"],
             aliases=["", "", "発災前の平均:", "発災後の平均:", "発災後/発災前:"],
             sticky=False,
-        ),
+        ) if interactive else None,
         smooth_factor=0,
     ).add_to(fmap)
 
 
-def add_selection_layer(fmap: folium.Map, geojson: dict) -> None:
+def add_selection_layer(fmap: folium.Map, geojson: dict,
+                        interactive: bool = True) -> None:
     """選択中のメッシュを太枠で重ねる。押せば解除できるよう、同じツールチップを持たせる。"""
     if not geojson["features"]:
         return
     folium.GeoJson(
         geojson,
         name="選択中のメッシュ",
+        interactive=interactive,
         style_function=lambda f: {
             "fillColor": f["properties"]["color"],
             "color": f["properties"]["outline"],
@@ -324,7 +329,7 @@ def add_selection_layer(fmap: folium.Map, geojson: dict) -> None:
             fields=["mesh", "city", "pre", "post", "ratio"],
             aliases=["", "", "発災前の平均:", "発災後の平均:", "発災後/発災前:"],
             sticky=False,
-        ),
+        ) if interactive else None,
         smooth_factor=0,
     ).add_to(fmap)
 

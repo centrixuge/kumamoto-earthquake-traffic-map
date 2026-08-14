@@ -1610,7 +1610,8 @@ def render_source_table(regulations: list, n_post: int,
 
 
 def build_plain_points_feature_group(
-    point_summary: pd.DataFrame, point_labels: dict, selected_points=()
+    point_summary: pd.DataFrame, point_labels: dict, selected_points=(),
+    interactive: bool = True,
 ) -> folium.FeatureGroup:
     """
     人口の地図に置く観測点。異常度で色や大きさを変えず、小さな同じ印にする。
@@ -1624,7 +1625,7 @@ def build_plain_points_feature_group(
     for _, row in point_summary.iterrows():
         is_selected = row["point_id"] in selected_points
         label = point_labels.get(row["point_id"], row["point_id"])
-        folium.CircleMarker(
+        marker = folium.CircleMarker(
             location=[row["point_lat"], row["point_lon"]],
             radius=6 if is_selected else 4,
             color=POINT_SELECTION_COLOR if is_selected else "#333333",
@@ -1632,8 +1633,14 @@ def build_plain_points_feature_group(
             fill=True,
             fill_color="#ffffff",
             fill_opacity=1.0,
-            tooltip=f"{label}<br>{POINT_TOOLTIP_HINT}",
-        ).add_to(fg)
+            tooltip=f"{label}<br>{POINT_TOOLTIP_HINT}" if interactive else None,
+        )
+        if not interactive:
+            # メッシュを選んでいる間は、観測点がその上でクリックを拾わない
+            # ようにする（folium.CircleMarker は interactive を引数で受け取ら
+            # ないので、出力するオプションに直接入れる）。
+            marker.options["interactive"] = False
+        marker.add_to(fg)
     return fg
 
 
@@ -2228,6 +2235,14 @@ MAX_SELECTED_POINTS_ON_MESH_MAP = 1
 # 色覚の型によらず区別しやすい配色（岡部・伊藤）から3色を取っている。
 MESH_SELECTION_COLORS = ["#000000", "#009E73"]  # 黒 / 青緑
 POINT_SELECTION_COLOR = "#E69F00"              # 橙（観測点）
+# 棒はこの薄い色で塗る。濃いまま並べると、その上を通る橙の交通量の線が
+# 沈んで読めなくなる。枠線・階段線は上の濃い色のままにして対応を保つ。
+MESH_BAR_COLORS = ["#b8b8b8", "#9ccfc0"]
+
+# 人口の地図で「クリックで何を選ぶか」。観測点はメッシュの上に乗るので、
+# 両方を同時に押せる状態だと、メッシュを狙っても観測点が拾ってしまう。
+# 選んでいないほうは当たり判定から外す（ツールチップも出さない）。
+MESH_CLICK_TARGETS = ("メッシュ", "観測点")
 
 
 # このタブが modules/mesh_population.py に求めるもの。公開側で app.py だけが
@@ -2315,11 +2330,21 @@ def _mesh_population_body(point_summary: pd.DataFrame, point_labels: dict,
 
     # 地図より前にウィジェットを作る（地図のクリックで st.rerun したときに、
     # まだ作られていないウィジェットの状態が捨てられるのを避けるため）。
-    col_metric, col_cover, col_clear = st.columns([2, 2, 1])
+    col_target, col_metric, col_cover, col_clear = st.columns([1.4, 2, 2, 1])
+    with col_target:
+        click_target = st.radio(
+            "クリックで選ぶもの", MESH_CLICK_TARGETS, horizontal=True,
+            key="mesh_target",
+            help="観測点はメッシュの上に乗るので、両方を同時に押せる状態だと"
+                 "メッシュを狙っても観測点が拾ってしまいます。"
+                 "選んでいないほうは当たり判定から外し、"
+                 "カーソルを合わせても何も出ないようにしています。",
+        )
+    mesh_clickable = click_target == MESH_CLICK_TARGETS[0]
     with col_metric:
         metric = st.selectbox(
             "地図の色分け", list(mesh_population.METRICS),
-            key=f"mesh_metric_{sel_version}",
+            key="mesh_metric",
             help="夜間は3時、昼間は14時を代表時刻にしています"
                  "（どちらも移動の途中が混じりにくい時刻）。"
                  "国勢調査の夜間人口・昼間人口は常住地・従業地で数える"
@@ -2328,7 +2353,7 @@ def _mesh_population_body(point_summary: pd.DataFrame, point_labels: dict,
     with col_cover:
         coverage = st.selectbox(
             "地図に出すメッシュ", list(MESH_COVERAGE),
-            key=f"mesh_cover_{sel_version}",
+            key="mesh_cover",
         )
     with col_clear:
         st.write("")
@@ -2354,7 +2379,9 @@ def _mesh_population_body(point_summary: pd.DataFrame, point_labels: dict,
             # 県全体は1画面に入らないので、震源を中心に置いて熊本市・益城の
             # あたりから見てもらう（縮尺は他の地図と揃える）
             location=[mainshock["epicenter_lat"], mainshock["epicenter_lon"]],
-            zoom_start=MAP_ZOOM, tiles=None,
+            # 500mメッシュは他の地図の縮尺だと小さすぎて押しにくいので、
+            # 1段階寄せた状態から始める
+            zoom_start=MAP_ZOOM + 1, tiles=None,
             # 数千のポリゴンを個別のDOM要素にするとブラウザが持たないので、
             # canvasにまとめて描く
             prefer_canvas=True,
@@ -2370,7 +2397,9 @@ def _mesh_population_body(point_summary: pd.DataFrame, point_labels: dict,
             "max-width:240px;font-size:11.5px;line-height:1.5;padding:5px 8px;}"
             "</style>"
         ))
-        mesh_population.add_mesh_layer(fmap, geojson, metric)
+        mesh_population.add_mesh_layer(
+            fmap, geojson, metric, interactive=mesh_clickable
+        )
         # 選択中のメッシュは、同じ形・同じツールチップの図形を太枠で重ねる。
         # 枠だけのRectangleを乗せると、canvasの当たり判定は塗りの有無を見ない
         # ので、その枠が下のメッシュのクリックを奪って解除できなくなる。
@@ -2379,6 +2408,7 @@ def _mesh_population_body(point_summary: pd.DataFrame, point_labels: dict,
             mesh_population.selected_geojson(
                 summary, metric, selected, MESH_SELECTION_COLORS
             ),
+            interactive=mesh_clickable,
         )
         folium.Marker(
             [mainshock["epicenter_lat"], mainshock["epicenter_lon"]],
@@ -2386,7 +2416,8 @@ def _mesh_population_body(point_summary: pd.DataFrame, point_labels: dict,
         ).add_to(fmap)
         add_map_size_fixer(fmap)
         points_fg = build_plain_points_feature_group(
-            point_summary, point_labels, selected_points
+            point_summary, point_labels, selected_points,
+            interactive=not mesh_clickable,
         )
         map_state = st_folium(
             fmap, height=MAP_HEIGHT_PX, width=550,
@@ -2398,7 +2429,9 @@ def _mesh_population_body(point_summary: pd.DataFrame, point_labels: dict,
         )
         st.caption(
             "色は発災前後の平均人口の比です。"
-            "**メッシュ（最大2つ）と観測点（1点）はどちらもクリックで選べ**、"
+            f"いまクリックで選べるのは**{click_target}**です"
+            f"（メッシュは最大2つ、観測点は1点。上の「クリックで選ぶもの」で"
+            "切り替えます）。"
             "選んだものを右の図に重ねて出します（反映に1〜2秒かかります）。"
             "メッシュの選択枠は黒・青緑、選択中の観測点は橙で、"
             "図の色もこれに合わせています。"
@@ -2416,8 +2449,11 @@ def _mesh_population_body(point_summary: pd.DataFrame, point_labels: dict,
     ):
         st.session_state["_last_click_count_mesh"] = click_count
         tooltip = map_state.get("last_object_clicked_tooltip")
-        mesh = mesh_population.mesh_from_tooltip(tooltip)
-        pid = point_id_from_tooltip(tooltip, point_labels)
+        # 当たり判定でも外してあるが、こちら側でも選んでいる種類だけ見る
+        mesh = (mesh_population.mesh_from_tooltip(tooltip)
+                if mesh_clickable else None)
+        pid = (None if mesh_clickable
+               else point_id_from_tooltip(tooltip, point_labels))
         if mesh is not None:
             if mesh in selected:
                 selected.remove(mesh)
@@ -2465,7 +2501,9 @@ def render_mesh_timeseries(selected, selected_points, summary, meta,
         return
 
     fig = go.Figure()
-    for mesh, color in zip(selected, MESH_SELECTION_COLORS):
+    for mesh, color, bar_color in zip(
+        selected, MESH_SELECTION_COLORS, MESH_BAR_COLORS
+    ):
         frame = mesh_population.with_baseline(
             mesh_population.series_for(mesh, meta), pd.Timestamp(quake_at), holidays
         )
@@ -2474,8 +2512,8 @@ def render_mesh_timeseries(selected, selected_points, summary, meta,
         # なので、時点の量として読むほうが分かりやすい（交通量は流れなので線）。
         fig.add_trace(go.Bar(
             x=frame["datetime"], y=frame["population"],
-            marker=dict(color=color, line=dict(width=0)),
-            opacity=0.6, name=f"{label} 人口",
+            marker=dict(color=bar_color, line=dict(width=0)),
+            name=f"{label} 人口",
         ))
         # 平常時は、棒と同じ1時間ごとの水準なので階段（hv）で描く。
         # なめらかな破線だと棒の刻みと合わず、どの棒と比べる線なのかが
@@ -2527,7 +2565,8 @@ def render_mesh_timeseries(selected, selected_points, summary, meta,
     fig.update_layout(
         height=430,
         # 2メッシュの棒は横に並べる。重ねると水準の低いほうが隠れる。
-        barmode="group", bargap=0.1, bargroupgap=0,
+        # 棒どうしを少し空けて、1時間ごとの刻みが見えるようにする。
+        barmode="group", bargap=0.25, bargroupgap=0.1,
         margin=dict(l=10, r=10, t=26, b=CHART_BOTTOM_MARGIN),
         legend=dict(orientation="h", yref="container", yanchor="bottom", y=0.012,
                     xanchor="left", x=0, font=dict(size=10)),
