@@ -3194,7 +3194,9 @@ def main():
         f"（本震+3週間または現在時刻の早い方）　｜　"
         f"データ生成: {quake_info.get('generated_at', '不明')}<br>"
         # 並びは 交通量 → 人口 → 通行規制（道路種別の階層順：全体をまとめた
-        # 配布データ、高速道路、直轄国道、県・市町村道）→ 地震情報。
+        # 配布データ、高速道路、直轄国道、県が管理する補助国道・県道・
+        # 市町村道）→ 地震情報。県の公開JSONには補助国道（218/219/265/
+        # 266/324/442/443/445号）も入るので、そう書く。
         "データ源: "
         '<a href="https://www.jartic-open-traffic.org/" target="_blank">JARTIC 交通量オープンデータ</a>'
         ' ／ <a href="https://mobaku.jp/" target="_blank">'
@@ -3203,7 +3205,7 @@ def main():
         ' target="_blank">国土交通省「通れる道マップ」（通行規制情報）</a>'
         ' ／ <a href="https://www.w-nexco.co.jp/" target="_blank">NEXCO西日本（高速道路の規制）</a>'
         ' ／ <a href="https://www.qsr.mlit.go.jp/kumamoto/" target="_blank">熊本河川国道事務所（直轄国道の規制）</a>'
-        ' ／ <a href="https://portal.bousai.pref.kumamoto.jp/?p=traffic" target="_blank">防災情報くまもと（県・市町村道の規制）</a>'
+        ' ／ <a href="https://portal.bousai.pref.kumamoto.jp/?p=traffic" target="_blank">防災情報くまもと（補助国道・県道・市町村道の規制）</a>'
         ' ／ <a href="https://www.jma.go.jp/jma/menu/20260728_kumamoto_jishin.html" target="_blank">気象庁（地震情報）</a>'
         # 交通量API利用規約 第5条1項が求める出典。「エンドユーザーが当該
         # サービスを利用する度に確認できる位置」に出す必要があるので、
