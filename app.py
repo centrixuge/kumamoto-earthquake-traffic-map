@@ -2220,12 +2220,10 @@ def load_holiday_set() -> set:
         return set(json.load(f))
 
 
-MESH_COVERAGE = {
-    "常に10人以上（推奨）": 336,
-    "9割以上の時間で10人以上": 300,
-    "半分以上の時間で10人以上": 168,
-    "1時点でも10人以上（重い）": 1,
-}
+# 地図に出すメッシュは「全時点で配信されたもの」に固定する。10人未満は
+# 配信されないので、時間帯によって出たり消えたりするメッシュを混ぜると
+# 比が同じ土台で比べられないうえ、全部（2万件超）を描くと地図が重い。
+MESH_MIN_HOURS = 336
 MAX_SELECTED_MESHES = 2
 # この地図で選べる観測点は1点だけ。メッシュ2つ＋観測点で、実績と平常時を
 # 出すと図が6本になる。これ以上増やすとどの線がどれか追えなくなる。
@@ -2328,51 +2326,36 @@ def _mesh_population_body(point_summary: pd.DataFrame, point_labels: dict,
         if p in set(point_summary["point_id"])
     ]
 
-    # 地図より前にウィジェットを作る（地図のクリックで st.rerun したときに、
-    # まだ作られていないウィジェットの状態が捨てられるのを避けるため）。
-    col_target, col_metric, col_cover, col_clear = st.columns([1.4, 2, 2, 1])
-    with col_target:
-        click_target = st.radio(
-            "クリックで選ぶもの", MESH_CLICK_TARGETS, horizontal=True,
-            key="mesh_target",
-            help="観測点はメッシュの上に乗るので、両方を同時に押せる状態だと"
-                 "メッシュを狙っても観測点が拾ってしまいます。"
-                 "選んでいないほうは当たり判定から外し、"
-                 "カーソルを合わせても何も出ないようにしています。",
-        )
-    mesh_clickable = click_target == MESH_CLICK_TARGETS[0]
-    with col_metric:
-        metric = st.selectbox(
-            "地図の色分け", list(mesh_population.METRICS),
-            key="mesh_metric",
-            help="夜間は3時、昼間は14時を代表時刻にしています"
-                 "（どちらも移動の途中が混じりにくい時刻）。"
-                 "国勢調査の夜間人口・昼間人口は常住地・従業地で数える"
-                 "別の定義なので、その語は使っていません。",
-        )
-    with col_cover:
-        coverage = st.selectbox(
-            "地図に出すメッシュ", list(MESH_COVERAGE),
-            key="mesh_cover",
-        )
-    with col_clear:
-        st.write("")
-        if st.button("選択をクリア", key="clear_mesh",
-                     disabled=not (selected or selected_points)):
-            st.session_state["selected_meshes"] = []
-            st.session_state["selected_points_mesh"] = []
-            st.session_state["_sel_version_mesh"] = sel_version + 1
-            st.rerun()
-
-    geojson = mesh_population.mesh_geojson(
-        summary, metric, MESH_COVERAGE[coverage]
-    )
-
     col_map, col_ts = st.columns([2, 3], gap="large")
     with col_ts:
         st.subheader("選択メッシュの人口推計値 × 選択観測点の交通量")
     with col_map:
-        st.subheader(f"500mメッシュ別の人口の変化（{len(geojson['features']):,}メッシュ）")
+        st.subheader("500mメッシュ別の人口の変化")
+        # 操作するものは地図の真上に置く。画面の幅が狭いノートPCでは、
+        # 上に離して置くと地図と時系列図を並べたまま切り替えられない。
+        # 地図より前に作る点は変えない（地図のクリックで st.rerun したときに、
+        # まだ作られていないウィジェットの状態が捨てられるため）。
+        col_metric, col_target = st.columns([1.1, 1])
+        with col_metric:
+            metric = st.selectbox(
+                "色分けの時間帯", list(mesh_population.METRICS),
+                key="mesh_metric",
+                help="夜間は3時、昼間は14時を代表時刻にしています"
+                     "（どちらも移動の途中が混じりにくい時刻）。"
+                     "国勢調査の夜間人口・昼間人口は常住地・従業地で数える"
+                     "別の定義なので、その語は使っていません。",
+            )
+        with col_target:
+            click_target = st.radio(
+                "クリックで選ぶもの", MESH_CLICK_TARGETS, horizontal=True,
+                key="mesh_target",
+                help="観測点はメッシュの上に乗るので、両方を同時に押せる状態だと"
+                     "メッシュを狙っても観測点が拾ってしまいます。"
+                     "選んでいないほうは当たり判定から外し、"
+                     "カーソルを合わせても何も出ないようにしています。",
+            )
+        mesh_clickable = click_target == MESH_CLICK_TARGETS[0]
+        geojson = mesh_population.mesh_geojson(summary, metric, MESH_MIN_HOURS)
         # 観測点は同じ小さな印にしてあるので、異常度の凡例は出さない
         st.markdown(mesh_population.legend_html(metric), unsafe_allow_html=True)
         fmap = folium.Map(
@@ -2427,20 +2410,27 @@ def _mesh_population_body(point_summary: pd.DataFrame, point_labels: dict,
             ],
             key="mesh_pop_map_v1",
         )
+        if st.button("選択をクリア", key="clear_mesh",
+                     disabled=not (selected or selected_points)):
+            st.session_state["selected_meshes"] = []
+            st.session_state["selected_points_mesh"] = []
+            st.session_state["_sel_version_mesh"] = sel_version + 1
+            st.rerun()
         st.caption(
             "色は発災前後の平均人口の比です。"
             f"いまクリックで選べるのは**{click_target}**です"
-            f"（メッシュは最大2つ、観測点は1点。上の「クリックで選ぶもの」で"
-            "切り替えます）。"
+            "（メッシュは最大2つ、観測点は1点）。"
             "選んだものを右の図に重ねて出します（反映に1〜2秒かかります）。"
             "メッシュの選択枠は黒・青緑、選択中の観測点は橙で、"
             "図の色もこれに合わせています。"
             "観測点は白丸の小さな印で、メッシュの色を隠さないよう"
             "異常度による描き分けはしていません"
             "（異常度で描き分けた地図は交通量のタブにあります）。"
-            "10人未満のメッシュは配信されないため、"
-            f"「{list(MESH_COVERAGE)[0]}」以外を選ぶと、"
-            "出たり出なかったりするメッシュも地図に出ます。"
+            f"地図に出しているのは、全{meta['hours']}時点で配信された"
+            f"**{len(geojson['features']):,}メッシュ**です"
+            "（10人未満は配信されないため、時間帯によって出たり消えたりする"
+            f"メッシュは同じ土台で比べられず、全{meta['meshes']:,}メッシュを"
+            "描くと地図が重くなります）。"
         )
 
     click_count = map_state.get("last_object_clicked_count") if map_state else None
