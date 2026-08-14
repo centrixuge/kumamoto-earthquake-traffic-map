@@ -280,6 +280,34 @@ def load_series() -> pd.DataFrame:
     return df.set_index("mesh").sort_index()
 
 
+# 時系列に要る列。pop_rs（居住者）・pop_vi（来訪者）は後から足したので、
+# 古いファイルを掴んでいると欠ける。
+SERIES_COLUMNS = ("t", "population", "pop_rs", "pop_vi")
+
+
+def series() -> pd.DataFrame:
+    """
+    時系列。列が足りなければ一度だけ取り直す（summary と同じ理由）。
+
+    以前は足りない列をNaNで埋めていたため、古いファイルのままだと棒が
+    黙って空になり、原因が画面から分からなかった。
+    """
+    frame = load_series()
+    missing = [c for c in SERIES_COLUMNS if c not in frame.columns]
+    if missing:
+        load_series.clear()
+        frame = load_series()
+        still = [c for c in SERIES_COLUMNS if c not in frame.columns]
+        if still:
+            raise MeshDataUnavailable(
+                "置き場の時系列ファイルが古い版です（"
+                f"{', '.join(still)} の列がありません）。"
+                "`python scripts/build_mesh_population.py` を回し直して、"
+                "出力を置き場に上げ直してください。"
+            )
+    return frame
+
+
 def available() -> bool:
     return (LOCAL_DIR / META_FILE).exists() or bool(_secrets())
 
@@ -488,23 +516,21 @@ def series_for(mesh: int, meta: dict) -> pd.DataFrame:
     （pop_other = 総数 − 居住者 − 来訪者。居住地ごとに10人未満で配信され
     なかった分）も返す。3つを積むと総数になる。
     """
-    series = load_series()
+    table = series()
     start = pd.Timestamp(meta["start"])
     hours = pd.date_range(start, periods=meta["hours"], freq="h")
     out = pd.DataFrame({"datetime": hours})
-    columns = ["population", "pop_rs", "pop_vi", "pop_other"]
-    if mesh not in series.index:
-        for col in columns:
+    if mesh not in table.index:
+        for col in ("population", "pop_rs", "pop_vi", "pop_other"):
             out[col] = pd.NA
         return out
-    got = series.loc[[mesh]]
+    got = table.loc[[mesh]]
     frame = pd.DataFrame({
         "datetime": start + pd.to_timedelta(got["t"].astype(int), unit="h"),
         "population": got["population"].astype(float).values,
+        "pop_rs": got["pop_rs"].astype(float).values,
+        "pop_vi": got["pop_vi"].astype(float).values,
     })
-    for col in ("pop_rs", "pop_vi"):
-        frame[col] = (got[col].astype(float).values
-                      if col in got.columns else float("nan"))
     frame["pop_other"] = (
         frame["population"] - frame["pop_rs"] - frame["pop_vi"]
     ).clip(lower=0)
