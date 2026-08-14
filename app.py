@@ -1141,6 +1141,9 @@ POINT_LEGEND_CSS = (
     ".pt-circle{border-radius:50%;}"
     # 角丸の四角。地図のマーカーと同じ丸め方（1辺の28%）にする
     ".pt-square{width:9px;height:9px;border-radius:28%;}"
+    # 人口の地図は観測点を白く塗るので、凡例の印も白にする（塗りが違うと
+    # 凡例と地図の印が対応しない）。
+    ".pt-shape-legend.pt-plain .pt-mark{background:#ffffff;border:2px solid #333;}"
     ".pt-legend-head{font-size:10.5px;color:#555;letter-spacing:0.02em;"
     "border-bottom:1px solid #ddd;margin-bottom:2px;padding-bottom:1px;}"
 )
@@ -1160,7 +1163,8 @@ LAYER_CONTROL_CSS = (
 )
 
 
-def point_legend_html(point_summary: pd.DataFrame) -> str:
+def point_legend_html(point_summary: pd.DataFrame,
+                      plain: bool = False) -> str:
     """
     観測点の形（＝道路の種別）の凡例。地図を見ながら参照するものなので
     地図の外ではなく地図の中（右上）に置く。
@@ -1185,7 +1189,8 @@ def point_legend_html(point_summary: pd.DataFrame) -> str:
         rows.append(
             f'<span><i class="pt-mark pt-circle"></i>種別不明 {n_unknown}点</span>'
         )
-    return '<div class="pt-shape-legend">' + "".join(rows) + "</div>"
+    css_class = "pt-shape-legend pt-plain" if plain else "pt-shape-legend"
+    return f'<div class="{css_class}">' + "".join(rows) + "</div>"
 
 
 def _map_center(point_summary: pd.DataFrame, mainshock: dict) -> list:
@@ -2600,9 +2605,10 @@ def _mesh_population_body(point_summary: pd.DataFrame, point_labels: dict,
             + POINT_LEGEND_CSS +
             "</style>"
         ))
-        # 形（●＝一般国道／■＝高速自動車国道）の凡例は、この地図でも出す
+        # 形（●＝一般国道／■＝高速自動車国道）の凡例は、この地図でも出す。
+        # この地図の印は白く塗るので、凡例の印も白にする（plain=True）。
         fmap.get_root().html.add_child(folium.Element(
-            point_legend_html(point_summary)
+            point_legend_html(point_summary, plain=True)
         ))
         mesh_population.add_mesh_layer(
             fmap, geojson, metric, interactive=mesh_clickable
@@ -2731,11 +2737,12 @@ def render_mesh_compare_tab(mainshock: dict) -> None:
         )
 
 
-# 左右の既定の組み合わせ。まず見たいのは発災前と発災後の並べ比べなので、
-# 時間帯・日区分は揃えて、出す値だけ変えておく。
+# 左右の既定の組み合わせ。左に発災前の人口、右に発災前後の増減率を出す
+# （どこに人がいた場所で、どれだけ動いたかが1画面で読める）。
+# 時間帯・日区分・居住地は左右で揃えておく。
 MESH_COMPARE_DEFAULTS = (
     ("左", "人口（発災前）"),
-    ("右", "人口（発災後）"),
+    ("右", "増減率"),
 )
 
 
