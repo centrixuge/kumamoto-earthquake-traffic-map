@@ -392,10 +392,11 @@ def mesh_geojson(summary: pd.DataFrame, hour_label: str, day_label: str,
     }
 
 
-# 選択中を示す二重枠。塗りの色に関係なく見えるよう、白の太線の上に黒の
-# 細線を重ねる（メッシュも観測点も1つずつなので、色で種類を分ける必要はない）。
+# 選択中を示す枠。白の太線を下に敷き、その上に時系列図と同じ色（人口の
+# 青緑）の線を重ねる。白は、塗りの色（青〜赤／黄〜青）に関係なく輪郭を
+# 出すためのもの。
 SELECTION_HALO = ("#ffffff", 6)
-SELECTION_EDGE = ("#111111", 2)
+SELECTION_EDGE = ("#00695C", 3)
 
 
 def selected_geojson(summary: pd.DataFrame, hour_label: str, day_label: str,
