@@ -450,11 +450,14 @@ def add_mesh_layer(fmap: folium.Map, geojson: dict, label: str,
     ).add_to(fmap)
 
 
-def add_selection_layer(fmap: folium.Map, geojson: dict,
+def add_selection_layer(parent, geojson: dict,
                         interactive: bool = True) -> None:
     """
     選択中のメッシュを二重枠で重ねる。押せば解除できるよう、同じツールチップを
-    持たせる（白の下線は当たり判定から外し、上の黒線でクリックを拾う）。
+    持たせる（白の下線は当たり判定から外し、上の線でクリックを拾う）。
+
+    parent は地図でもFeatureGroupでもよい。選択で変わるものは
+    feature_group_to_add に載せたいので、呼び出し側が入れ物を決める。
     """
     if not geojson["features"]:
         return
@@ -470,7 +473,7 @@ def add_selection_layer(fmap: folium.Map, geojson: dict,
             "fillOpacity": 0.55,
         },
         smooth_factor=0,
-    ).add_to(fmap)
+    ).add_to(parent)
     edge_color, edge_weight = SELECTION_EDGE
     folium.GeoJson(
         geojson,
@@ -488,7 +491,7 @@ def add_selection_layer(fmap: folium.Map, geojson: dict,
             sticky=False,
         ) if interactive else None,
         smooth_factor=0,
-    ).add_to(fmap)
+    ).add_to(parent)
 
 
 def legend_html(label: str, mode: str = DEFAULT_VALUE_MODE) -> str:

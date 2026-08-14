@@ -1699,7 +1699,7 @@ def render_source_table(regulations: list, n_post: int,
 
 def build_plain_points_feature_group(
     point_summary: pd.DataFrame, point_labels: dict, selected_points=(),
-    interactive: bool = True,
+    interactive: bool = True, into: folium.FeatureGroup = None,
 ) -> folium.FeatureGroup:
     """
     人口の地図に置く観測点。異常度で色や大きさを変えず、小さな同じ印にする。
@@ -1712,7 +1712,8 @@ def build_plain_points_feature_group(
     形（●＝一般国道／■＝高速自動車国道）は他の地図と揃える。大きさは同じ
     なので地図は混まないし、揃えておかないと同じ観測点が別の記号で出る。
     """
-    fg = folium.FeatureGroup(name="観測点")
+    # into が渡されたらそこに足す（選択の表示と同じ入れ物にまとめるため）
+    fg = into if into is not None else folium.FeatureGroup(name="観測点")
     for _, row in point_summary.iterrows():
         is_selected = row["point_id"] in selected_points
         label = point_labels.get(row["point_id"], row["point_id"])
@@ -2110,6 +2111,31 @@ def render_timeseries(
     )
 
 
+def tab_fragment(func):
+    """
+    タブの中身を「そのタブだけ再実行する単位」にする。
+
+    Streamlitは操作のたびにスクリプト全体を回すので、そのままだと1回の
+    クリックで5つのタブの地図を作り直す（メッシュ3,834件＋時点比較の2枚ぶん
+    7,668件＋規制の地図2枚）。サーバ側は1枚100〜200msでも、その分のHTMLを
+    毎回ブラウザへ送ってLeafletに描き直させるので、操作が重くなる。
+
+    fragment にすると、その中の操作ではその中だけが再実行される。
+    古いStreamlitには無いので、無ければ素通しにする。
+    """
+    deco = getattr(st, "fragment", None) or getattr(st, "experimental_fragment", None)
+    return deco(func) if deco else func
+
+
+def rerun_fragment() -> None:
+    """fragment の中だけを再実行する（対応していない版では全体を再実行）。"""
+    try:
+        st.rerun(scope="fragment")
+    except TypeError:
+        st.rerun()
+
+
+@tab_fragment
 def render_mlit_beta_tab(point_summary: pd.DataFrame, point_labels: dict,
                          quake_at, other_event_times, quake_info: dict,
                          mainshock: dict, anomaly_end) -> None:
@@ -2164,7 +2190,7 @@ def render_mlit_beta_tab(point_summary: pd.DataFrame, point_labels: dict,
         return f"{point_labels[pid]}（{c['point_lat']:.3f}N, {c['point_lon']:.3f}E）"
 
     # 本家と同じく、地図より前にウィジェットを作る（地図クリックの
-    # st.rerun() で中断されると、その実行で作られなかった分の状態が落ちる）
+    # rerun_fragment() で中断されると、その実行で作られなかった分の状態が落ちる）
     col_select, col_view, col_range, col_clear = st.columns([3, 2, 1.3, 1])
     with col_select:
         picked = st.multiselect(
@@ -2203,7 +2229,7 @@ def render_mlit_beta_tab(point_summary: pd.DataFrame, point_labels: dict,
         if st.button("選択をクリア", disabled=not selected_points, key="clear_beta"):
             st.session_state["selected_points_beta"] = []
             st.session_state["_sel_version_beta"] = sel_version + 1
-            st.rerun()
+            rerun_fragment()
 
     selected_points = picked
     st.session_state["selected_points_beta"] = picked
@@ -2275,7 +2301,7 @@ def render_mlit_beta_tab(point_summary: pd.DataFrame, point_labels: dict,
                 selected.append(pid)
             st.session_state["selected_points_beta"] = selected
             st.session_state["_sel_version_beta"] = sel_version + 1
-            st.rerun()
+            rerun_fragment()
 
     with col_ts:
         ts_obs = load_observations(cfg["file"])
@@ -2411,6 +2437,7 @@ def _stale_module_hint(err: Exception) -> str:
     )
 
 
+@tab_fragment
 def render_mesh_population_tab(point_summary: pd.DataFrame, point_labels: dict,
                                quake_at, mainshock: dict,
                                other_event_times=()) -> None:
@@ -2613,26 +2640,32 @@ def _mesh_population_body(point_summary: pd.DataFrame, point_labels: dict,
         mesh_population.add_mesh_layer(
             fmap, geojson, metric, interactive=mesh_clickable
         )
+        folium.Marker(
+            [mainshock["epicenter_lat"], mainshock["epicenter_lon"]],
+            icon=_epicenter_icon(), tooltip="本震の震源",
+        ).add_to(fmap)
+        add_map_size_fixer(fmap)
+        # 選択で変わるもの（選択中のメッシュの枠と観測点の印）は、地図本体
+        # ではなく feature_group_to_add に載せる。地図本体に入れると、選択の
+        # たびに3,834件のメッシュを含む1.6MBのHTMLを作り直してブラウザへ
+        # 送り直すことになり、クリックの反応が鈍くなる。
+        overlay = folium.FeatureGroup(name="選択と観測点")
         # 選択中のメッシュは、同じ形・同じツールチップの図形を太枠で重ねる。
         # 枠だけのRectangleを乗せると、canvasの当たり判定は塗りの有無を見ない
         # ので、その枠が下のメッシュのクリックを奪って解除できなくなる。
         mesh_population.add_selection_layer(
-            fmap,
+            overlay,
             mesh_population.selected_geojson(
                 summary, hour_label, day_label, selected,
                 value_mode, residence_label,
             ),
             interactive=mesh_clickable,
         )
-        folium.Marker(
-            [mainshock["epicenter_lat"], mainshock["epicenter_lon"]],
-            icon=_epicenter_icon(), tooltip="本震の震源",
-        ).add_to(fmap)
-        add_map_size_fixer(fmap)
-        points_fg = build_plain_points_feature_group(
+        build_plain_points_feature_group(
             point_summary, point_labels, selected_points,
-            interactive=not mesh_clickable,
+            interactive=not mesh_clickable, into=overlay,
         )
+        points_fg = overlay
         map_state = st_folium(
             fmap, height=MAP_HEIGHT_PX, width=550,
             feature_group_to_add=points_fg,
@@ -2646,7 +2679,7 @@ def _mesh_population_body(point_summary: pd.DataFrame, point_labels: dict,
             st.session_state["selected_meshes"] = []
             st.session_state["selected_points_mesh"] = []
             st.session_state["_sel_version_mesh"] = sel_version + 1
-            st.rerun()
+            rerun_fragment()
         st.caption(
             (f"色は**{metric}**での、発災前後の平均人口の比です"
              if mesh_population.VALUE_MODES[value_mode] == "ratio"
@@ -2694,7 +2727,7 @@ def _mesh_population_body(point_summary: pd.DataFrame, point_labels: dict,
                 selected.append(mesh)
             st.session_state["selected_meshes"] = selected
             st.session_state["_sel_version_mesh"] = sel_version + 1
-            st.rerun()
+            rerun_fragment()
         elif pid is not None:
             if pid in selected_points:
                 selected_points.remove(pid)
@@ -2704,7 +2737,7 @@ def _mesh_population_body(point_summary: pd.DataFrame, point_labels: dict,
                 selected_points.append(pid)
             st.session_state["selected_points_mesh"] = selected_points
             st.session_state["_sel_version_mesh"] = sel_version + 1
-            st.rerun()
+            rerun_fragment()
 
     with col_ts:
         render_mesh_timeseries(
@@ -2713,6 +2746,7 @@ def _mesh_population_body(point_summary: pd.DataFrame, point_labels: dict,
         )
 
 
+@tab_fragment
 def render_mesh_compare_tab(mainshock: dict) -> None:
     """
     同じ集計を条件違いで2枚並べて見比べるタブ。
