@@ -985,6 +985,11 @@ class MapSizeFixer(folium.MacroElement):
                     var s = m.getSize();
                     if (s.x !== box.clientWidth || s.y !== box.clientHeight) {
                         m.invalidateSize(false);
+                        // canvasで描く図形は、地図が大きさ0のときに作られた
+                        // canvas要素も0×0のままで、invalidateSizeだけでは
+                        // 描き直されない（タイルは出るのにメッシュが出ない
+                        // 状態になる）。描画をやり直させる。
+                        m.fire("viewreset");
                     }
                 };
                 if (window.ResizeObserver) {
@@ -998,6 +1003,16 @@ class MapSizeFixer(folium.MacroElement):
                 box.addEventListener("mouseenter", fix);
                 box.addEventListener("pointerdown", fix, true);
                 setTimeout(fix, 200);
+                // ResizeObserver が来ない場合の保険。タブが開かれて大きさが
+                // 付いた時点で直り、直ったら止める（最長30秒）。
+                var tries = 0;
+                var timer = setInterval(function () {
+                    tries += 1;
+                    fix();
+                    var done = box.clientWidth > 0
+                        && m.getSize().x === box.clientWidth;
+                    if (done || tries > 60) { clearInterval(timer); }
+                }, 500);
             })();
         {% endmacro %}
     """)
