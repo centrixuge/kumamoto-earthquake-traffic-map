@@ -53,8 +53,8 @@ CONTENT_COLOR = {name: color for name, color, _ in CONTENT_CLASSES}
 # 解除後に残る規制も書かれていない。色を割り当てても意味が無いので
 # 地図・凡例・件数からは外す（一覧には残す）。
 RELEASED = ("通行止め解除", "通行止解除")
-# 道路種別が取れなかったレコードに付ける名前。規制中扱いのものだけ地図に
-# 出さない（is_unknown_active / drawn_items）
+# 道路種別が取れなかったレコードに付ける名前。地図では規制中として出さず、
+# 解除済みの扱いにする（display_state）
 UNKNOWN_LEVEL = "不明"
 
 
@@ -75,31 +75,28 @@ def content_class(item: dict) -> str:
     return "規制内容不明"
 
 
-def is_unknown_active(item: dict) -> bool:
+def display_state(item: dict) -> str:
     """
-    道路種別が取れないまま、最新の配布に入っている（＝規制中扱いの）もの。
+    地図での扱い（規制中／解除済み）。
 
-    この形のレコードは配布元の地図でも凡例に無い紫色で描かれており、いまの
-    配布分については不備と見られる。何の規制か分からないものを「いま規制中」
-    として地図に出すと、規制があるという誤解だけが残るので出さない。
+    道路種別が取れないレコードは、最新の配布に入っていても「規制中」として
+    は出さない。この形のレコードは配布元の地図でも凡例に無い紫色で描かれて
+    おり、いまの配布分については不備と見られるためで、何の規制か分からない
+    ものを「いま規制中」として出すと誤解だけが残る。
 
-    一方、いちど出て消えたもの（解除済み）は、その時点でそこに規制があった
-    という記録なので地図に残す。
+    ただし、いちど出ていたという事実はその時点の記録なので、地図から消さずに
+    「解除済み」として残す（既定では非表示のレイヤに入り、レイヤ一覧の
+    「不明：解除済み」から出せる）。データの「状態」そのものは書き換えない
+    （一覧・CSV・GeoJSONには最新の配布にあるかどうかをそのまま残す）。
     """
-    return item["道路種別"] == UNKNOWN_LEVEL and item["状態"] == "規制中"
+    if item["道路種別"] == UNKNOWN_LEVEL:
+        return "解除済み"
+    return item["状態"]
 
 
 def drawn_items(data: dict) -> list:
-    """
-    地図に出す規制。次の2つは除く（一覧・CSV・GeoJSONには残す）。
-
-    ・解除の告知だけのレコード
-    ・道路種別が取れないまま規制中扱いになっているレコード
-    """
-    return [
-        i for i in data["items"]
-        if not is_release_record(i) and not is_unknown_active(i)
-    ]
+    """地図に出す規制。解除の告知だけのレコードは除く（一覧には残す）。"""
+    return [i for i in data["items"] if not is_release_record(i)]
 
 
 # レイヤ一覧に出す短い名前。正式な呼び方は凡例に出している。
@@ -127,7 +124,7 @@ def _style(item: dict) -> dict:
     色の意味を「地図・交通量の時系列変化」タブと揃え、道路種別は
     レイヤと線の太さで分かるようにする。
     """
-    ended = item["状態"] == "解除済み"
+    ended = display_state(item) == "解除済み"
     return {
         "color": CONTENT_COLOR.get(content_class(item), "#5b6470"),
         "weight": LEVEL_WEIGHT.get(item["道路種別"], 4),
@@ -148,6 +145,14 @@ def _tooltip(item: dict) -> str:
     ]
     if item["状態"] == "解除済み":
         rows.append(("解除の確認", item["解除確認時点"] or "（最新時点で消失）"))
+    elif display_state(item) == "解除済み":
+        # 最新の配布には入っているが、道路種別が取れないので規制中としては
+        # 出していない。地図の見た目（破線）とデータの食い違いを説明する。
+        rows.append((
+            "地図での扱い",
+            "解除済みとして表示（道路種別が取れないため、"
+            "最新の配布にあっても規制中としては出していません）",
+        ))
     body = "".join(
         f"<tr><td style='color:#666;padding-right:6px;white-space:nowrap;'>{k}</td>"
         f"<td>{v or '—'}</td></tr>"
@@ -207,7 +212,7 @@ def build_map(data: dict, center=None, zoom: int = None,
 
     used = set()
     for item in drawn_items(data):
-        key = (item["道路種別"], item["状態"])
+        key = (item["道路種別"], display_state(item))
         style = _style(item)
         folium.GeoJson(
             {"type": "Feature", "geometry": item["geometry"], "properties": {}},
@@ -232,7 +237,8 @@ def build_map(data: dict, center=None, zoom: int = None,
 
 def _counts(data: dict) -> pd.DataFrame:
     df = pd.DataFrame([
-        {"道路種別": i["道路種別"], "状態": i["状態"]} for i in drawn_items(data)
+        {"道路種別": i["道路種別"], "状態": display_state(i)}
+        for i in drawn_items(data)
     ])
     order = [n for n, _, _ in LEVELS]
     table = (
@@ -326,14 +332,9 @@ def content_note(data: dict) -> str:
         f"{name} {counts[name]}件"
         for name, _, _ in CONTENT_CLASSES if counts.get(name)
     )
-    # 道路種別が「不明」のものは下の断り書きで別に数えるので、ここでは
-    # それに当たらない解除の告知だけを数える（同じ件を二重に数えないため）。
-    # 地図から外した理由ごとに1回だけ数える。道路種別が取れないものは
-    # 「規制中扱いのもの」だけを下の断り書きに寄せ、それ以外はここで数える。
-    released = [
-        i for i in data["items"]
-        if is_release_record(i) and not is_unknown_active(i)
-    ]
+    # 地図から外しているのは解除の告知だけ（道路種別が取れないものは
+    # 解除済みの扱いで地図に残すので、ここでは外さない）。
+    released = [i for i in data["items"] if is_release_record(i)]
     text = (
         f"色は規制の内容で分けています（地図に出している{len(items)}件の内訳は"
         f"{detail}）。"
@@ -365,10 +366,7 @@ def unknown_level_note(data: dict) -> str:
     if not items:
         return ""
     stamps = sorted({i["初出時点"] for i in items})
-    active = [i for i in items if is_unknown_active(i)]
-    # 解除の告知だけのレコードは別の理由で外しているので、ここでは数えない
-    ended = [i for i in items
-             if not is_unknown_active(i) and not is_release_record(i)]
+    latest = [i for i in items if i["状態"] == "規制中"]
     bare = sum(
         1 for i in items
         if not any(i.get(k) for k in ("路線名", "区間", "規制内容", "開始日時"))
@@ -378,24 +376,16 @@ def unknown_level_note(data: dict) -> str:
         f"うち{bare}件は配布されているGeoJSONに道路の線形（LineString）だけが"
         "入っていて、路線名・区間・規制内容・開始日時のどれも持ちません"
         f"（{stamps[0]} 以降の配布分に現れます）。"
+        "**このレコードは地図では「規制中」として出さず、解除済みの扱いで"
+        "残しています**（レイヤ一覧の「不明：解除済み」で表示を切り替え、"
+        "既定では非表示）。配布元の地図でも凡例に無い紫色で描かれており、"
+        "いまの配布分については不備と見られるためで、そこに規制があったという"
+        "記録は消さずに残す、という扱いにしています。"
     )
-    if active:
+    if latest:
         text += (
-            f"このうち**最新の配布に入っている{len(active)}件は地図に出して"
-            "いません**。配布元の地図でも凡例に無い紫色で描かれており、"
-            "いまの配布分については不備と見られるためです"
-            "（何の規制か分からないものを「いま規制中」として出すと、"
-            "規制があるという誤解だけが残ります）。"
-        )
-    if ended:
-        text += (
-            f"いちど出て消えた{len(ended)}件は、その時点でそこに規制があった"
-            "という記録なので、解除済みとして地図に残しています。"
-        )
-    elif active:
-        text += (
-            "いちど出て消えたものは、その時点の記録として解除済みで地図に"
-            "残す扱いです（いまはそれに当たるものがありません）。"
+            f"うち{len(latest)}件は最新の配布にも入っていますが、"
+            "同じ扱いです。"
         )
     return text + "各件の中身は、このページ下の「規制の一覧」で確認できます。"
 
