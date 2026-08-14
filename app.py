@@ -1708,8 +1708,8 @@ def build_plain_points_feature_group(
         is_selected = row["point_id"] in selected_points
         label = point_labels.get(row["point_id"], row["point_id"])
         if is_selected and interactive:
-            # 選択中は、メッシュと同じ二重枠にする（白の太線＋黒の細線）。
-            # 下の白線は当たり判定から外し、上の黒丸でクリックを拾う。
+            # 選択中は白い太線を下に敷いて、黒枠＋黄色の丸を目立たせる。
+            # 下の白線は当たり判定から外し、上の丸でクリックを拾う。
             halo = folium.CircleMarker(
                 location=[row["point_lat"], row["point_lon"]],
                 radius=9, color=SELECTION_HALO_COLOR, weight=6,
@@ -1723,9 +1723,11 @@ def build_plain_points_feature_group(
             # メッシュを覆い隠さない範囲で大きめに取る。
             radius=9 if is_selected else 7,
             color=SELECTION_EDGE_COLOR if is_selected else "#333333",
-            weight=2 if is_selected else 2,
+            weight=2,
             fill=True,
-            fill_color="#ffffff",
+            # 選択中だけ黄色く塗る（未選択は白）。未選択も枠線付きの丸なので、
+            # 枠の色だけではほとんど見分けが付かなかった。
+            fill_color=POINT_SELECTED_FILL if is_selected else "#ffffff",
             fill_opacity=1.0,
             tooltip=f"{label}<br>{POINT_TOOLTIP_HINT}" if interactive else None,
         )
@@ -2331,11 +2333,15 @@ MAX_SELECTED_POINTS_ON_MESH_MAP = 1
 # ように、白の太線の上に黒の細線を重ねる二重枠で、両方に同じものを使う。
 SELECTION_HALO_COLOR = "#ffffff"
 SELECTION_EDGE_COLOR = "#111111"
-# 図の色。人口（棒と平常時の階段線）は青緑、交通量はその上でも沈まない
-# 明るいオレンジ。
+# 図の色。人口（棒と平常時の階段線）は青緑、交通量は青緑の上でも沈まない
+# 赤寄りのオレンジ（朱色）。地図の色分けとは無関係になったので、
+# 図の中での見やすさだけで選べる。
 MESH_CHART_COLORS = ["#00695C"]
 MESH_BAR_COLORS = [("#26A69A", "#9CD8D0", "#E0F2F0")]
-POINT_CHART_COLOR = "#F97316"
+POINT_CHART_COLOR = "#DE3F1B"
+# 選択中の観測点は黄色く塗る。未選択も枠線付きの白丸なので、枠の色を
+# 変えるだけではほとんど見分けが付かなかった。
+POINT_SELECTED_FILL = "#FFD400"
 
 # 人口の地図で「クリックで何を選ぶか」。観測点はメッシュの上に乗るので、
 # 両方を同時に押せる状態だと、メッシュを狙っても観測点が拾ってしまう。
@@ -2608,9 +2614,9 @@ def _mesh_population_body(point_summary: pd.DataFrame, point_labels: dict,
             + f"いまクリックで選べるのは**{click_target}**です"
             "（メッシュ・観測点ともに1つずつ）。"
             "選んだものを右の図に重ねて出します（反映に1〜2秒かかります）。"
-            "**選んでいるメッシュ・観測点は、白＋黒の二重枠**で示します"
-            "（塗りの色に関係なく見えるよう、どちらも同じ枠にしています）。"
-            "右の図では人口が青緑、交通量がオレンジです。"
+            "**選んでいるメッシュは白＋黒の二重枠、選んでいる観測点は黄色い丸**"
+            "で示します（枠の色だけだと、未選択の白丸と見分けが付きません）。"
+            "右の図では人口が青緑、交通量が朱色です。"
             "観測点は白丸の印で、メッシュの色を隠さないよう"
             "異常度による描き分けはしていません"
             "（異常度で描き分けた地図は交通量のタブにあります）。"
