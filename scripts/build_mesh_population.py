@@ -454,8 +454,18 @@ def main() -> None:
     start = df["datetime"].min()
     df["t"] = ((df["datetime"] - start) // pd.Timedelta(hours=1)).astype("int16")
     table = df[["mesh", "t", "population"]].copy()
-    table["mesh"] = table["mesh"].astype("int32")
-    table["population"] = table["population"].astype("int32")
+    # 時系列の図で居住者・来訪者を色分けするため、内訳も同じ表に持たせる。
+    # 総数（population）とは一致しない（内訳は居住地ごとに10人未満だと
+    # 配信されないので、pop_rs + pop_vi <= population）。
+    wide = residence.assign(
+        t=((residence["datetime"] - start) // pd.Timedelta(hours=1)).astype("int16")
+    ).pivot_table(
+        index=["mesh", "t"], columns="res", values="population",
+        aggfunc="sum", fill_value=0,
+    ).rename(columns={"rs": "pop_rs", "vi": "pop_vi"})
+    table = table.merge(wide.reset_index(), on=["mesh", "t"], how="left")
+    for col in ("mesh", "population", "pop_rs", "pop_vi"):
+        table[col] = table[col].fillna(0).astype("int32")
     table.to_parquet(OUT / "mesh_population.parquet", index=False)
     summary.to_parquet(OUT / "mesh_population_summary.parquet", index=False)
     write_gis(summary)

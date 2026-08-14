@@ -483,20 +483,32 @@ def series_for(mesh: int, meta: dict) -> pd.DataFrame:
 
     0で埋めると「人がいなくなった」ように見えるが、実際は10人未満なので
     そうしない。折れ線は切れて出る。
+
+    居住者（pop_rs）・来訪者（pop_vi）と、その2つで説明できない分
+    （pop_other = 総数 − 居住者 − 来訪者。居住地ごとに10人未満で配信され
+    なかった分）も返す。3つを積むと総数になる。
     """
     series = load_series()
     start = pd.Timestamp(meta["start"])
     hours = pd.date_range(start, periods=meta["hours"], freq="h")
     out = pd.DataFrame({"datetime": hours})
+    columns = ["population", "pop_rs", "pop_vi", "pop_other"]
     if mesh not in series.index:
-        out["population"] = pd.NA
+        for col in columns:
+            out[col] = pd.NA
         return out
     got = series.loc[[mesh]]
-    got = pd.DataFrame({
+    frame = pd.DataFrame({
         "datetime": start + pd.to_timedelta(got["t"].astype(int), unit="h"),
         "population": got["population"].astype(float).values,
     })
-    return out.merge(got, on="datetime", how="left")
+    for col in ("pop_rs", "pop_vi"):
+        frame[col] = (got[col].astype(float).values
+                      if col in got.columns else float("nan"))
+    frame["pop_other"] = (
+        frame["population"] - frame["pop_rs"] - frame["pop_vi"]
+    ).clip(lower=0)
+    return out.merge(frame, on="datetime", how="left")
 
 
 def with_baseline(frame: pd.DataFrame, quake_at: pd.Timestamp,
