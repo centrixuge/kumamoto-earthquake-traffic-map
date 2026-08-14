@@ -49,14 +49,35 @@ _MESH_RE = re.compile(r"(\d{9})")
 
 # 発災前後の比の色分け。人が減った側を青、増えた側を赤にする
 # （避難で抜けた地域と、受け入れ先になった地域を見分けるため）。
+# 区切りは15%・30%。対象の日数が少なく（平日6日 vs 5日、休日は2日ずつ）、
+# 比は元々よく振れるので、10%・25%で切ると「動いた」区分にほとんどが
+# 入ってしまい、地図から差が読めなかった。
 RATIO_CLASSES = [
-    (0.75, "#2166ac", "25%以上 減"),
-    (0.90, "#8bbcda", "10〜25% 減"),
-    (1.10, "#f0f0f0", "±10%"),
-    (1.25, "#ef8a62", "10〜25% 増"),
-    (float("inf"), "#b2182b", "25%以上 増"),
+    (0.70, "#2166ac", "30%以上 減"),
+    (0.85, "#8bbcda", "15〜30% 減"),
+    (1.15, "#f0f0f0", "±15%"),
+    (1.30, "#ef8a62", "15〜30% 増"),
+    (float("inf"), "#b2182b", "30%以上 増"),
+]
+# 人口そのものを出すときの色分け（多いほど濃い1色系）。区切りは実測の
+# 分布から（地図に出す3,834メッシュで中央値132人、上位1割が826人以上）。
+POPULATION_CLASSES = [
+    (100, "#ffffcc", "100人 未満"),
+    (250, "#a1dab4", "100〜250人"),
+    (500, "#41b6c4", "250〜500人"),
+    (1000, "#2c7fb8", "500〜1,000人"),
+    (float("inf"), "#253494", "1,000人 以上"),
 ]
 NO_DATA_COLOR = "#9aa0a6"
+
+# 地図に出す値。倍率だけだと、元から人が少ない場所の1〜2割の増減が
+# 都心部と同じ色になるので、人口そのものも選べるようにする。
+VALUE_MODES = {
+    "増減率": "ratio",
+    "人口（発災後）": "post",
+    "人口（発災前）": "pre",
+}
+DEFAULT_VALUE_MODE = "増減率"
 
 # 地図の色分けの単位。時間帯と日区分の2つを掛け合わせる。
 # 夜間・昼間の代表時刻は3時・14時（どちらも移動の途中が混じりにくい時刻）。
@@ -260,19 +281,31 @@ def mesh_bounds(code: int | str) -> tuple[float, float, float, float]:
     return lat, lon, lat + LAT_STEP, lon + LON_STEP
 
 
-def ratio_color(ratio: float | None) -> str:
-    if ratio is None or pd.isna(ratio):
+def _class_color(value, classes) -> str:
+    if value is None or pd.isna(value):
         return NO_DATA_COLOR
-    for upper, color, _ in RATIO_CLASSES:
-        if ratio < upper:
+    for upper, color, _ in classes:
+        if value < upper:
             return color
-    return RATIO_CLASSES[-1][1]
+    return classes[-1][1]
+
+
+def ratio_color(ratio: float | None) -> str:
+    return _class_color(ratio, RATIO_CLASSES)
+
+
+def value_classes(mode: str):
+    """選んだ値の色分けの区切り（凡例と塗りで同じものを使う）。"""
+    return RATIO_CLASSES if VALUE_MODES[mode] == "ratio" else POPULATION_CLASSES
 
 
 def _feature(row, pre_col: str, post_col: str, ratio_col: str,
-             outline: str = "") -> dict:
+             mode: str = DEFAULT_VALUE_MODE, outline: str = "") -> dict:
     south, west, north, east = mesh_bounds(row.mesh)
     ratio = getattr(row, ratio_col)
+    kind = VALUE_MODES[mode]
+    value = (ratio if kind == "ratio"
+             else getattr(row, post_col if kind == "post" else pre_col))
     return {
         "type": "Feature",
         "geometry": {
@@ -291,7 +324,7 @@ def _feature(row, pre_col: str, post_col: str, ratio_col: str,
             "pre": _fmt(getattr(row, pre_col)),
             "post": _fmt(getattr(row, post_col)),
             "ratio": "—" if pd.isna(ratio) else f"{ratio:.2f} 倍",
-            "color": ratio_color(ratio),
+            "color": _class_color(value, value_classes(mode)),
             "outline": outline,
         },
     }
@@ -299,21 +332,21 @@ def _feature(row, pre_col: str, post_col: str, ratio_col: str,
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def mesh_geojson(summary: pd.DataFrame, hour_label: str, day_label: str,
-                 min_hours: int) -> dict:
+                 min_hours: int, mode: str = DEFAULT_VALUE_MODE) -> dict:
     """地図に載せるメッシュのFeatureCollectionを作る。"""
     pre_col, post_col, ratio_col = metric_columns(hour_label, day_label)
     sub = summary[summary["n_hours"] >= min_hours]
     return {
         "type": "FeatureCollection",
         "features": [
-            _feature(row, pre_col, post_col, ratio_col)
+            _feature(row, pre_col, post_col, ratio_col, mode)
             for row in sub.itertuples(index=False)
         ],
     }
 
 
 def selected_geojson(summary: pd.DataFrame, hour_label: str, day_label: str,
-                     selected, colors) -> dict:
+                     selected, colors, mode: str = DEFAULT_VALUE_MODE) -> dict:
     """
     選択中のメッシュを太枠で描くためのFeatureCollection。
 
@@ -329,7 +362,9 @@ def selected_geojson(summary: pd.DataFrame, hour_label: str, day_label: str,
         if mesh not in rows.index:
             continue
         row = rows.loc[[mesh]].reset_index().itertuples(index=False).__next__()
-        features.append(_feature(row, pre_col, post_col, ratio_col, outline=color))
+        features.append(
+            _feature(row, pre_col, post_col, ratio_col, mode, outline=color)
+        )
     return {"type": "FeatureCollection", "features": features}
 
 
@@ -384,18 +419,20 @@ def add_selection_layer(fmap: folium.Map, geojson: dict,
     ).add_to(fmap)
 
 
-def legend_html(label: str) -> str:
+def legend_html(label: str, mode: str = DEFAULT_VALUE_MODE) -> str:
     marks = " ".join(
         f'<span style="white-space:nowrap;">'
         f'<span style="display:inline-block;width:18px;height:10px;'
         f'background:{color};border:1px solid #bbb;vertical-align:middle;">'
-        f"</span> {label}</span>"
-        for _, color, label in RATIO_CLASSES
+        f"</span> {name}</span>"
+        for _, color, name in value_classes(mode)
     )
+    head = ("発災後/発災前" if VALUE_MODES[mode] == "ratio"
+            else f"人口（{'発災後' if VALUE_MODES[mode] == 'post' else '発災前'}）")
     return (
         '<div style="font-size:0.79rem;line-height:1.45;margin:0 0 4px 0;">'
         '<div style="display:flex;flex-wrap:wrap;gap:1px 12px;align-items:center;">'
-        f'<b style="white-space:nowrap;">発災後/発災前・{label}:</b>{marks}</div>'
+        f'<b style="white-space:nowrap;">{head}・{label}:</b>{marks}</div>'
         "</div>"
     )
 

@@ -2371,21 +2371,36 @@ def _mesh_population_body(point_summary: pd.DataFrame, point_labels: dict,
                      f"{post_days.get('平日', '—')}日・"
                      f"休日{post_days.get('休日', '—')}日しかありません。",
             )
-        click_target = st.radio(
-            "クリックで選ぶもの", MESH_CLICK_TARGETS, horizontal=True,
-            key="mesh_target",
-            help="観測点はメッシュの上に乗るので、両方を同時に押せる状態だと"
-                 "メッシュを狙っても観測点が拾ってしまいます。"
-                 "選んでいないほうは当たり判定から外し、"
-                 "カーソルを合わせても何も出ないようにしています。",
-        )
+        col_mode, col_click = st.columns([1.1, 1])
+        with col_mode:
+            mode_choices = list(mesh_population.VALUE_MODES)
+            value_mode = st.selectbox(
+                "地図に出す値", mode_choices,
+                index=mode_choices.index(mesh_population.DEFAULT_VALUE_MODE),
+                key="mesh_value_mode",
+                help="増減率だけだと、元から人が少ない場所の1〜2割の増減が"
+                     "都心部と同じ色になります。人口そのものを選ぶと、"
+                     "どこに何人いるかで塗り分けます。",
+            )
+        with col_click:
+            click_target = st.radio(
+                "クリックで選ぶもの", MESH_CLICK_TARGETS, horizontal=True,
+                key="mesh_target",
+                help="観測点はメッシュの上に乗るので、両方を同時に押せる"
+                     "状態だとメッシュを狙っても観測点が拾ってしまいます。"
+                     "選んでいないほうは当たり判定から外し、"
+                     "カーソルを合わせても何も出ないようにしています。",
+            )
         mesh_clickable = click_target == MESH_CLICK_TARGETS[0]
         metric = mesh_population.metric_label(hour_label, day_label)
         geojson = mesh_population.mesh_geojson(
-            summary, hour_label, day_label, MESH_MIN_HOURS
+            summary, hour_label, day_label, MESH_MIN_HOURS, value_mode
         )
         # 観測点は同じ小さな印にしてあるので、異常度の凡例は出さない
-        st.markdown(mesh_population.legend_html(metric), unsafe_allow_html=True)
+        st.markdown(
+            mesh_population.legend_html(metric, value_mode),
+            unsafe_allow_html=True,
+        )
         fmap = folium.Map(
             # 県全体は1画面に入らないので、震源を中心に置いて熊本市・益城の
             # あたりから見てもらう（縮尺は他の地図と揃える）
@@ -2417,7 +2432,8 @@ def _mesh_population_body(point_summary: pd.DataFrame, point_labels: dict,
         mesh_population.add_selection_layer(
             fmap,
             mesh_population.selected_geojson(
-                summary, hour_label, day_label, selected, MESH_SELECTION_COLORS
+                summary, hour_label, day_label, selected,
+                MESH_SELECTION_COLORS, value_mode,
             ),
             interactive=mesh_clickable,
         )
@@ -2445,12 +2461,16 @@ def _mesh_population_body(point_summary: pd.DataFrame, point_labels: dict,
             st.session_state["_sel_version_mesh"] = sel_version + 1
             st.rerun()
         st.caption(
-            f"色は**{metric}**での、発災前後の平均人口の比です"
-            + (f"（発災前の平日{pre_days.get('平日', '—')}日 vs 発災後の平日"
-               f"{post_days.get('平日', '—')}日）。" if day_label == "平日"
-               else f"（発災前の休日{pre_days.get('休日', '—')}日 vs 発災後の"
-                    f"休日{post_days.get('休日', '—')}日。日数が少ないので、"
-                    "1日の事情が比にそのまま出ます）。")
+            (f"色は**{metric}**での、発災前後の平均人口の比です"
+             if mesh_population.VALUE_MODES[value_mode] == "ratio"
+             else f"色は**{metric}**の平均人口（{value_mode[3:-1]}）そのものです。"
+                  "増減率に戻すと、どこで増えたか・減ったかが読めます。")
+            + ((f"（発災前の平日{pre_days.get('平日', '—')}日 vs 発災後の平日"
+                f"{post_days.get('平日', '—')}日）。" if day_label == "平日"
+                else f"（発災前の休日{pre_days.get('休日', '—')}日 vs 発災後の"
+                     f"休日{post_days.get('休日', '—')}日。日数が少ないので、"
+                     "1日の事情が比にそのまま出ます）。")
+               if mesh_population.VALUE_MODES[value_mode] == "ratio" else "")
             + f"いまクリックで選べるのは**{click_target}**です"
             "（メッシュは最大2つ、観測点は1点）。"
             "選んだものを右の図に重ねて出します（反映に1〜2秒かかります）。"
@@ -2600,6 +2620,9 @@ def render_mesh_timeseries(selected, selected_points, summary, meta,
         ),
         xaxis=dict(title="", range=[x_from, x_to]),
         hovermode="x unified",
+        # 系列名はplotlyの既定だと15文字で切られ、メッシュ番号＋市町村名が
+        # 途中で消える。名前を切らずに出す（吹き出しはその分広がる）。
+        hoverlabel=dict(namelength=-1, font=dict(size=11)),
     )
     st.plotly_chart(fig, use_container_width=True, key="mesh_pop_ts")
     st.caption(
