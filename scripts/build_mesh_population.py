@@ -321,12 +321,26 @@ def write_gis(summary: pd.DataFrame) -> None:
     from shapely.geometry import box
 
     frame = summary.copy()
+    # 丸めるのは値の列だけ。緯度経度を丸めると、その値からポリゴンを作った
+    # ときに位置が0.1度単位へ寄ってしまう（500mの四角が0.1度おきに点々と
+    # 並ぶ状態になっていた）。
     for col in frame.select_dtypes("float").columns:
-        frame[col] = frame[col].round(1)
+        if col in ("lat", "lon"):
+            frame[col] = frame[col].round(6)
+        else:
+            frame[col] = frame[col].round(1)
+    # ポリゴンはメッシュコードから作る（丸めた列を使わない）。アプリの地図が
+    # 使っている modules/mesh_population.mesh_bounds と同じ計算。
+    lat, lon = _mesh_center(frame["mesh"].astype(str).values)
+    # 角は7桁（約1cm）に丸める。丸めないと 1e-14 度のずれが残り、隣どうしの
+    # メッシュの辺がぴったり接しない（GISで境界に髪の毛の隙間が出る）。
+    def _r(value: float) -> float:
+        return round(value, 7)
+
     geometry = [
-        box(lon - LON_STEP / 2, lat - LAT_STEP / 2,
-            lon + LON_STEP / 2, lat + LAT_STEP / 2)
-        for lat, lon in zip(frame["lat"], frame["lon"])
+        box(_r(x - LON_STEP / 2), _r(y - LAT_STEP / 2),
+            _r(x + LON_STEP / 2), _r(y + LAT_STEP / 2))
+        for y, x in zip(lat, lon)
     ]
     gdf = gpd.GeoDataFrame(frame, geometry=geometry, crs="EPSG:4326")
     gdf.to_file(OUT / "mesh_population_summary.gpkg", layer="mesh_population",
