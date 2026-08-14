@@ -333,12 +333,21 @@ def unknown_level_note(data: dict) -> str:
     if not items:
         return ""
     stamps = sorted({i["初出時点"] for i in items})
+    active = sum(1 for i in items if i["状態"] == "規制中")
+    state = (
+        f"うち{active}件が規制中" if 0 < active < len(items)
+        else "いずれも規制中" if active else "いずれも解除済み"
+    )
     return (
         f"**道路種別「不明」の{len(items)}件について**: "
         "配布されているGeoJSONに道路の線形（LineString）だけが入っていて、"
         "道路種別・路線名・区間・規制内容・開始日時などの属性を一切持たない"
         "通行規制です。そのため、どの道路のどんな規制なのかは元データから"
-        f"分かりません（{stamps[0]} 以降の配布分に現れ、いずれも解除済み）。"
+        f"分かりません（{stamps[0]} 以降の配布分に現れ、{state}）。"
+        "**この属性なしのレコードは配布のたびに出たり消えたりしています**"
+        "（実測で、現れたのは22時点中4時点だけ）。状態は最新の配布に"
+        "あるかどうかで決めているので、消えていた時点では解除済みと"
+        "判定されます。"
         "各件の中身は、このページ下の「規制の一覧」で確認できます。"
     )
 
