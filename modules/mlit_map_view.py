@@ -53,6 +53,8 @@ CONTENT_COLOR = {name: color for name, color, _ in CONTENT_CLASSES}
 # 解除後に残る規制も書かれていない。色を割り当てても意味が無いので
 # 地図・凡例・件数からは外す（一覧には残す）。
 RELEASED = ("通行止め解除", "通行止解除")
+# 道路種別が取れなかったレコードに付ける名前。地図には出さない（drawn_items）
+UNKNOWN_LEVEL = "不明"
 
 
 def is_release_record(item: dict) -> bool:
@@ -73,8 +75,19 @@ def content_class(item: dict) -> str:
 
 
 def drawn_items(data: dict) -> list:
-    """地図に出す規制。解除の告知だけのレコードは除く。"""
-    return [i for i in data["items"] if not is_release_record(i)]
+    """
+    地図に出す規制。次の2つは除く（一覧・CSV・GeoJSONには残す）。
+
+    ・解除の告知だけのレコード
+    ・道路種別が「不明」のレコード。線形だけで属性が一切無く、配布元の
+      地図でも凡例に無い紫色で描かれているため、データの不備と見られる。
+      何の規制か分からないものを地図に出すと、規制があるという誤解だけが
+      残るので出さない。
+    """
+    return [
+        i for i in data["items"]
+        if not is_release_record(i) and i["道路種別"] != UNKNOWN_LEVEL
+    ]
 
 
 # レイヤ一覧に出す短い名前。正式な呼び方は凡例に出している。
@@ -301,7 +314,12 @@ def content_note(data: dict) -> str:
         f"{name} {counts[name]}件"
         for name, _, _ in CONTENT_CLASSES if counts.get(name)
     )
-    released = [i for i in data["items"] if is_release_record(i)]
+    # 道路種別が「不明」のものは下の断り書きで別に数えるので、ここでは
+    # それに当たらない解除の告知だけを数える（同じ件を二重に数えないため）。
+    released = [
+        i for i in data["items"]
+        if is_release_record(i) and i["道路種別"] != UNKNOWN_LEVEL
+    ]
     text = (
         f"色は規制の内容で分けています（地図に出している{len(items)}件の内訳は"
         f"{detail}）。"
@@ -329,26 +347,23 @@ def unknown_level_note(data: dict) -> str:
     黙って混ぜると「道路種別が取れなかった」ように見えるので、
     地図の下でそのことを明記する。
     """
-    items = [i for i in data["items"] if i["道路種別"] == "不明"]
+    items = [i for i in data["items"] if i["道路種別"] == UNKNOWN_LEVEL]
     if not items:
         return ""
     stamps = sorted({i["初出時点"] for i in items})
-    active = sum(1 for i in items if i["状態"] == "規制中")
-    state = (
-        f"うち{active}件が規制中" if 0 < active < len(items)
-        else "いずれも規制中" if active else "いずれも解除済み"
+    bare = sum(
+        1 for i in items
+        if not any(i.get(k) for k in ("路線名", "区間", "規制内容", "開始日時"))
     )
     return (
-        f"**道路種別「不明」の{len(items)}件について**: "
-        "配布されているGeoJSONに道路の線形（LineString）だけが入っていて、"
-        "道路種別・路線名・区間・規制内容・開始日時などの属性を一切持たない"
-        "通行規制です。そのため、どの道路のどんな規制なのかは元データから"
-        f"分かりません（{stamps[0]} 以降の配布分に現れ、{state}）。"
-        "**この属性なしのレコードは配布のたびに出たり消えたりしています**"
-        "（実測で、現れたのは22時点中4時点だけ）。状態は最新の配布に"
-        "あるかどうかで決めているので、消えていた時点では解除済みと"
-        "判定されます。"
-        "各件の中身は、このページ下の「規制の一覧」で確認できます。"
+        f"**道路種別が取れない{len(items)}件は地図に出していません。** "
+        f"うち{bare}件は配布されているGeoJSONに道路の線形（LineString）だけが"
+        "入っていて、路線名・区間・規制内容・開始日時のどれも持ちません"
+        f"（{stamps[0]} 以降の配布分に現れます）。"
+        "配布元の地図でも凡例に無い紫色で描かれており、データの不備と"
+        "見られます。何の規制か分からないものを地図に出すと、規制があると"
+        "いう誤解だけが残るため、地図・凡例・件数からは外しました"
+        "（このページ下の「規制の一覧」とCSV・GeoJSONには残しています）。"
     )
 
 
