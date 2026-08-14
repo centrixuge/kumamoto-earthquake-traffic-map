@@ -2310,14 +2310,16 @@ def load_holiday_set() -> set:
 MESH_MIN_HOURS = 336
 # 比較のタブは地図が主役なので、時系列図と並べる地図より縦を取る。
 MESH_COMPARE_MAP_HEIGHT_PX = 620
-MAX_SELECTED_MESHES = 2
+# メッシュは1つだけ選べるようにする。2つ選べるようにしていたが、居住地の
+# 内訳（3段）と交通量まで重なると、どの棒がどれか追えない図になった。
+MAX_SELECTED_MESHES = 1
 # この地図で選べる観測点は1点だけ。メッシュ2つ＋観測点で、実績と平常時を
 # 出すと図が6本になる。これ以上増やすとどの線がどれか追えなくなる。
 MAX_SELECTED_POINTS_ON_MESH_MAP = 1
 # 選択したものの色。地図の塗り分けが青〜赤なので、その上でも沈まない色を
 # 選ぶ（紫は赤の塗りに埋もれ、赤と並ぶと見分けにくかった）。
 # 色覚の型によらず区別しやすい配色（岡部・伊藤）から3色を取っている。
-MESH_SELECTION_COLORS = ["#6A3D9A", "#009E73"]  # 紫 / 青緑
+MESH_SELECTION_COLORS = ["#6A3D9A"]  # 紫
 # 観測点は赤みのあるチョコレート色。橙は地図の「10〜25%増」の塗り（#ef8a62）
 # と近く、図の中でも薄い棒に紛れて見えにくかった。
 POINT_SELECTION_COLOR = "#A0522D"
@@ -2325,10 +2327,7 @@ POINT_SELECTION_COLOR = "#A0522D"
 # （居住者, 来訪者, 内訳なし）の3段で、積むと総数になる。
 # 濃いままだと上を通るチョコレート色の交通量の線が沈むので、いずれも
 # 薄めに置き、枠線・階段線だけ上の濃い色を使う。
-MESH_BAR_COLORS = [
-    ("#8C6BB1", "#C6B3DE", "#EDE7F5"),  # 紫（メッシュ1）
-    ("#3FB795", "#9BD9C6", "#E2F2EC"),  # 青緑（メッシュ2）
-]
+MESH_BAR_COLORS = [("#8C6BB1", "#C6B3DE", "#EDE7F5")]  # 紫
 
 # 人口の地図で「クリックで何を選ぶか」。観測点はメッシュの上に乗るので、
 # 両方を同時に押せる状態だと、メッシュを狙っても観測点が拾ってしまう。
@@ -2434,7 +2433,21 @@ def _mesh_population_body(point_summary: pd.DataFrame, point_labels: dict,
 
     col_map, col_ts = st.columns([2, 3], gap="large")
     with col_ts:
-        st.subheader("選択メッシュの人口推計値 × 選択観測点の交通量")
+        # どのメッシュ・どの観測点かは見出しに出す（系列名に入れると凡例が
+        # 長くなり、変なところで折り返す）。
+        parts = []
+        if selected:
+            parts.append(
+                f"メッシュ {mesh_population.mesh_label(summary, selected[0])}"
+                "の人口推計値"
+            )
+        if selected_points:
+            label = point_labels.get(selected_points[0], selected_points[0])
+            parts.append(f"{label} の交通量")
+        st.subheader(
+            " × ".join(parts) if parts
+            else "選択メッシュの人口推計値 × 選択観測点の交通量"
+        )
     with col_map:
         st.subheader("500mメッシュ別の人口の変化")
         # 操作するものは地図の真上に置く。画面の幅が狭いノートPCでは、
@@ -2585,9 +2598,9 @@ def _mesh_population_body(point_summary: pd.DataFrame, point_labels: dict,
                      "1日の事情が比にそのまま出ます）。")
                if mesh_population.VALUE_MODES[value_mode] == "ratio" else "")
             + f"いまクリックで選べるのは**{click_target}**です"
-            "（メッシュは最大2つ、観測点は1点）。"
+            "（メッシュ・観測点ともに1つずつ）。"
             "選んだものを右の図に重ねて出します（反映に1〜2秒かかります）。"
-            "メッシュの選択枠は黒・青緑、選択中の観測点は茶で、"
+            "メッシュの選択枠は紫、選択中の観測点は茶で、"
             "図の色もこれに合わせています。"
             "観測点は白丸の小さな印で、メッシュの色を隠さないよう"
             "異常度による描き分けはしていません"
@@ -2784,34 +2797,33 @@ def render_mesh_timeseries(selected, selected_points, summary, meta,
     """
     if not selected and not selected_points:
         st.info(
-            "地図のメッシュ（最大2つ）や観測点（1点）をクリックすると、"
+            "地図のメッシュや観測点（どちらも1つ）をクリックすると、"
             "人口推計値と交通量がここに重ねて出ます。"
         )
         return
 
     fig = go.Figure()
-    for index, (mesh, color, bar_color) in enumerate(zip(
+    for mesh, color, bar_color in zip(
         selected, MESH_SELECTION_COLORS, MESH_BAR_COLORS
-    )):
+    ):
         frame = mesh_population.with_baseline(
             mesh_population.series_for(mesh, meta), pd.Timestamp(quake_at), holidays
         )
-        label = mesh_population.mesh_label(summary, mesh)
         # 人口は棒で出す。1時間ごとに「その時刻にそこに居た人数」を数えた値
         # なので、時点の量として読むほうが分かりやすい（交通量は流れなので線）。
         # 居住者・来訪者・内訳なしの3段に積む。積み上げの合計は総数になる。
+        # 系列名は短くする。どのメッシュ・どの観測点かは図の見出しに出す
+        # （名前に入れると凡例が長くなり、変なところで折り返す）。
         segments = (
             ("pop_rs", "居住者", bar_color[0]),
             ("pop_vi", "来訪者", bar_color[1]),
-            ("pop_other", "内訳なし（居住地別が10人未満）", bar_color[2]),
+            ("pop_other", "内訳なし", bar_color[2]),
         )
-        for column, seg_label, seg_color in segments:
+        for rank, (column, seg_label, seg_color) in enumerate(segments, start=1):
             fig.add_trace(go.Bar(
                 x=frame["datetime"], y=frame[column],
                 marker=dict(color=seg_color, line=dict(width=0)),
-                # メッシュごとに横に並べ、その中で積む
-                offsetgroup=str(index), legendgroup=f"mesh{index}",
-                name=f"{label} {seg_label}",
+                name=seg_label, legendrank=rank,
             ))
         # 平常時は、棒と同じ1時間ごとの水準なので階段（hv）で描く。
         # なめらかな破線だと棒の刻みと合わず、どの棒と比べる線なのかが
@@ -2819,7 +2831,7 @@ def render_mesh_timeseries(selected, selected_points, summary, meta,
         fig.add_trace(go.Scatter(
             x=frame["datetime"], y=frame["baseline"],
             mode="lines", line=dict(color=color, width=1.6, shape="hv"),
-            name=f"{label} 人口 平常時",
+            name="人口 平常時", legendrank=4,
         ))
 
     # 横軸は交通量の図と同じ左端（本震の前日）から、モバイル空間統計の
@@ -2835,7 +2847,6 @@ def render_mesh_timeseries(selected, selected_points, summary, meta,
             ].sort_values("datetime")
             if sub.empty:
                 continue
-            label = point_labels.get(pid, pid)
             # 上下を足して1本にする。平常時も同じ足し方（交通量のタブと
             # 同じ、同じ日区分・同じ時刻の平均）。
             fig.add_trace(go.Scatter(
@@ -2843,13 +2854,13 @@ def render_mesh_timeseries(selected, selected_points, summary, meta,
                 y=sub["baseline_mean_up"] + sub["baseline_mean_down"],
                 yaxis="y2", mode="lines",
                 line=dict(color=color, dash="dot", width=1),
-                opacity=0.6, name=f"{label} 交通量 平常時",
+                opacity=0.6, name="交通量 平常時", legendrank=6,
             ))
             fig.add_trace(go.Scatter(
                 x=sub["datetime"],
                 y=sub["traffic_up"] + sub["traffic_down"],
                 yaxis="y2", mode="lines", line=dict(color=color, width=1.2),
-                name=f"{label} 交通量",
+                name="交通量", legendrank=5,
             ))
 
     for t in other_event_times:
@@ -2861,13 +2872,20 @@ def render_mesh_timeseries(selected, selected_points, summary, meta,
         text="地震発生 16:27", showarrow=False, font=dict(size=11, color="black"),
     )
     fig.update_layout(
-        height=430,
-        # 居住地の区分は積み、メッシュどうしは横に並べる（offsetgroup）。
-        # 棒どうしを少し空けて、1時間ごとの刻みが見えるようにする。
-        barmode="stack", bargap=0.25, bargroupgap=0.1,
-        margin=dict(l=10, r=10, t=26, b=CHART_BOTTOM_MARGIN),
+        # 上下を足して1本にし、メッシュも1つにしたぶん縦を伸ばす（430→600）。
+        # 左の地図（操作＋496px）と高さが揃う。
+        height=600,
+        # 居住地の区分は積む。棒どうしを少し空けて、1時間ごとの刻みが
+        # 見えるようにする。
+        barmode="stack", bargap=0.25,
+        margin=dict(l=10, r=10, t=26, b=54),
+        # 系列は6本までなので、凡例は1行に並ぶ。項目の幅を揃えて、
+        # 変なところで折り返さないようにする。
         legend=dict(orientation="h", yref="container", yanchor="bottom", y=0.012,
-                    xanchor="left", x=0, font=dict(size=10)),
+                    xanchor="left", x=0, font=dict(size=10),
+                    # 追加した順に並べる。既定（reversed）だと交通量が先に
+                    # 来て、人口の3段が後ろに回り、読む順と食い違う。
+                    traceorder="normal", itemwidth=30),
         yaxis=dict(title="人口推計値（人）", rangemode="tozero"),
         yaxis2=dict(
             title="交通量（台/時・上下合計）", overlaying="y", side="right",
