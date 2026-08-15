@@ -9799,10 +9799,10 @@
   ],
   "events_min_intensity": 5,
   "events_period_start": "2026-07-28T16:27:00",
-  "events_period_end": "2026-08-15T03:39:19.317069",
-  "generated_at": "2026-08-15T03:39:19.317069",
+  "events_period_end": "2026-08-15T09:34:28.961477",
+  "generated_at": "2026-08-15T09:34:28.961477",
   "target_start": "2026-07-27T03:00:00",
-  "target_end": "2026-08-15T03:39:19.317069",
+  "target_end": "2026-08-15T09:34:28.961477",
   "target_end_cap": "2026-08-18T16:27:00",
   "baseline_windows": [
     {
