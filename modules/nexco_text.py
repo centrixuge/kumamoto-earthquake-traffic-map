@@ -30,7 +30,7 @@ def emergency_note(nexco: dict) -> str:
     """地図の下に出す1行。該当が無ければ空文字。"""
     items = [
         i for i in (nexco or {}).get("items", [])
-        if i.get("emergency_access", {}).get("sections")
+        if (i.get("emergency_access") or {}).get("sections")
         and not i.get("end_timestamp")
     ]
     if not items:
