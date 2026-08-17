@@ -119,6 +119,7 @@ def main() -> None:
     out["straddles"] = out["n_cities"] > 1
     out["differs"] = out["city_code_center"] != out["city_code_area"]
 
+    out["n_hours"] = out["n_hours"].astype(int)
     out = out[["mesh", "lat", "lon", "n_hours",
                "city_code_area", "city_area", "share_area",
                "city_code_center", "city_center",
