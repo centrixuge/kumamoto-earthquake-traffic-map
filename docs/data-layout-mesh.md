@@ -3,7 +3,7 @@
 500mメッシュまわりで書き出しているファイルの列定義です。集計そのものの考え方は
 [docs/mobile-spatial-statistics.md](mobile-spatial-statistics.md) にあります。
 
-置き場は `data/mss_build/`（`.gitignore` 済み）。このうち **`mesh_city_*` の3つは
+置き場は `data/mss_build/`（`.gitignore` 済み）。このうち **`mesh_city_*` の2つは
 モバイル空間統計の値を含みません**。中身は国土数値情報 行政区域とメッシュコードだけから
 作れるもので、公開の制限はかかりません。`mesh_population*` は集計結果なので非公開の
 置き場（`centrixuge/kumamoto-mesh-population-data`）に置きます。
@@ -12,7 +12,6 @@
 | --- | --: | --- | --- |
 | `mesh_city_table.csv` | 27,830 | [`scripts/export_mesh_city_table.py`](../scripts/export_mesh_city_table.py) | 可 |
 | `mesh_city_coverage.csv` | 31,209 | 同上 | 可 |
-| `mesh_city_table_section9110040.csv` | 104 | 下の抜粋の作り方 | 可 |
 | `mesh_population.parquet` | 4,098,436 | [`scripts/build_mesh_population.py`](../scripts/build_mesh_population.py) | 不可 |
 | `mesh_population_summary.parquet` | 27,830 | 同上 | 不可 |
 | `mesh_population_summary.gpkg` / `.geojson` | 27,830 | 同上 | 不可 |
@@ -76,27 +75,6 @@ CSVはいずれも **UTF-8（BOM付き）・CRLF・ヘッダ1行**です。Excel
 - **`share` の合計は1になりません。** 海や県外がある1,816メッシュでは1未満です。丸めの分だけ1.0001になることもあります
 - 面積は平面直角座標系 第II系（EPSG:6670）で測っています。1メッシュは0.269〜0.273km²です
 - 按分に使う場合、人口は面積に比例しないことにご注意ください。面積按分でよいかは用途次第で、国勢調査のメッシュ人口を重みにするほうが妥当な場面が多いです
-
-## mesh_city_table_section9110040.csv
-
-観測点9110040（氷川町・国道3号）から3km以内の104メッシュの抜粋です。列は
-`mesh_city_table.csv` と同じで、次の2列が3列目・4列目に入ります。
-
-| 列 | 型 | 例 | 内容 |
-| --- | --- | --- | --- |
-| `dist_km` | 小数 | `0.26` | 観測点からメッシュ中心までの距離（km） |
-| `side` | 文字 | `south` | 観測点を通る東西線から見て `north` / `south` |
-
-作り方（`mesh_city_table.csv` から2手）:
-
-```python
-PT, LINE = (32.56558, 130.688167), 32.56558
-d = np.hypot((t.lat - PT[0]) * 111.32,
-             (t.lon - PT[1]) * 111.32 * np.cos(np.radians(PT[0])))
-near = t[d <= 3.0].copy()
-near.insert(3, "dist_km", d[d <= 3.0].round(2))
-near.insert(4, "side", np.where(near.lat >= LINE, "north", "south"))
-```
 
 ---
 
