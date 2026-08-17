@@ -44,10 +44,10 @@
 | 地震情報（震源・マグニチュード・市町村別最大震度） | 気象庁が公開している防災情報JSON (`https://www.jma.go.jp/bosai/quake/data/list.json`) | 公式なAPI仕様として文書化されたものではなく、気象庁ウェブサイトの表示に使われている公開JSONを利用（多くの防災アプリ・サイトで実利用されている形式）。同一地震に複数の報が出るため、報を統合して最新の非空値を採用している |
 | 道路通行規制情報（県・市町村が管理する道路＝**補助国道・県道・市町村道**） | 熊本県「[防災情報くまもと](https://portal.bousai.pref.kumamoto.jp/)」の[通行規制情報](https://portal.bousai.pref.kumamoto.jp/?p=traffic)ページが使う公開JSON (`https://portal.bousai.pref.kumamoto.jp/data/traffic/traffic.json`) | 認証不要。[熊本市防災情報ポータル](https://city-kumamoto.my.salesforce-sites.com/)からもリンクあり。始点・終点の座標のみのため、[OSRM](https://project-osrm.org/) の公開デモサーバーで実際の道路網に沿った経路にスナップして地図に表示。**県が管理する補助国道（国道218/219/265/266/324/442/443/445号）も入ります**（65件中15件） |
 | 道路通行規制情報（**直轄国道・直轄の高規格道路**） | 国土交通省 九州地方整備局 [熊本河川国道事務所](https://www.qsr.mlit.go.jp/kumamoto/)の「事務所からのお知らせ」で公表されるPDF（道第○報） | **上のポータルには国が管理する道路の規制が載らない**ため、PDFから**手作業で転記**して `data/mlit_regulations.json` に持っています（8件）。自動取得ではありません。転記元のPDFは [`data/qsr_regulations/`](data/qsr_regulations) に置いています |
-| 道路通行規制情報（**高速道路＝NEXCO西日本が管理する高速自動車国道など**） | [NEXCO西日本](https://www.w-nexco.co.jp/) 九州支社が公表するPDF（「令和8年熊本地震による通行止め・災害状況等について」第○報） | 高速道路も配信の仕組みがないため、同じくPDFから**手作業で転記**して `data/nexco_regulations.json` に持っています（7件）。転記元のPDFは [`data/nexco_west_regulations/`](data/nexco_west_regulations) に置いています。区間の線形はOSMで当該路線のノードを拾って復元しています |
+| 道路通行規制情報（**高速道路＝NEXCO西日本が管理する高速自動車国道など**） | [NEXCO西日本](https://www.w-nexco.co.jp/) 九州支社が公表するPDF（「令和8年熊本地震による通行止め・災害状況等について」第○報） | 高速道路も配信の仕組みがないため、同じくPDFから**手作業で転記**して `data/nexco_regulations.json` に持っています（8件）。転記元のPDFは [`data/nexco_west_regulations/`](data/nexco_west_regulations) に置いています。区間の線形はOSMで当該路線のノードを拾って復元しています |
 | 道路通行規制情報（**通れる道マップ版・既定のタブ**） | 国土交通省「[通れる道マップ](https://www.mlit.go.jp/road/saigai/r8kumamoto/index.html)」が各時点で配布するGeoJSON（ZIP） | 上の3経路とは**別系統**のデータで、既定のタブで使っています。24ファイル（うち規制情報は23時点）を [`data/mlit_r8kumamoto_map/`](data/mlit_r8kumamoto_map) に保存し、[`scripts/build_mlit_map_regulations.py`](scripts/build_mlit_map_regulations.py) で時点をまたいで突き合わせ、通算110件にまとめています（[docs/mlit-map.md](docs/mlit-map.md)） |
 
-通行規制の3つの経路は、ダッシュボードの地図の下にも同じ形の表（出典ページと収集済みデータへのリンク付き）で出しています。詳しい欠落の理由（管理者の違い・収集開始が本震より後）と、直轄国道8件・高速道路7件の転記内容・手順は **[docs/regulations.md](docs/regulations.md)** にまとめています。
+通行規制の3つの経路は、ダッシュボードの地図の下にも同じ形の表（出典ページと収集済みデータへのリンク付き）で出しています。詳しい欠落の理由（管理者の違い・収集開始が本震より後）と、直轄国道8件・高速道路8件の転記内容・手順は **[docs/regulations.md](docs/regulations.md)** にまとめています。
 
 > **交通量が0でも、その原因の規制が地図に出てこない場合があります。** 県のデータは県・市町村が管理する道路が対象で直轄国道も高速道路も含まず、また規制の収集を始めたのが本震の翌日のため、それ以前に解除された規制は残っていません。
 
