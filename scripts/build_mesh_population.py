@@ -20,9 +20,10 @@
 畳んでから集計し、居住地の市区町村コードは残さない（元データに戻せない）。
 性年代別は読み込まない。
 
-熊本県内の判定は、500mメッシュの中心が国土数値情報の行政区域（N03）の
-熊本県のポリゴンに入るかどうか。メッシュの緯度経度はメッシュコードから
-計算しているので、メッシュのシェープファイルは要らない。
+メッシュと市区町村の対応は面積被覆で決める。500mメッシュの四角形と国土数値情報の
+行政区域（N03）の重なり面積を測り、いちばん広く占める市区町村をそのメッシュの
+市区町村とし、それが熊本県内ならメッシュを対象に入れる。メッシュの四角形は
+メッシュコードから計算しているので、メッシュのシェープファイルは要らない。
 
     python scripts/build_mesh_population.py
 """
@@ -40,10 +41,15 @@ SRC = ROOT / "data" / "mss"
 OUT = ROOT / "data" / "mss_build"
 HOLIDAYS = ROOT / "data" / "holidays.json"
 
-# 国土数値情報 行政区域（令和6年）。熊本県=43
-N03_URL = "https://nlftp.mlit.go.jp/ksj/gml/data/N03/N03-2024/N03-20240101_43_GML.zip"
-N03_ZIP = OUT / "n03_43.zip"
-N03_NAME = "N03-20240101_43.geojson"
+# 国土数値情報 行政区域（令和6年）。熊本県=43 と、県境をまたぐメッシュの
+# 判定に要る隣接4県（福岡40・大分44・宮崎45・鹿児島46）
+N03_URL = ("https://nlftp.mlit.go.jp/ksj/gml/data/N03/N03-2024/"
+           "N03-20240101_{pref}_GML.zip")
+N03_PREFS = ("43", "40", "44", "45", "46")
+KUMAMOTO = "43"
+
+# 面積を測るための平面直角座標系（第II系：熊本と隣接県を含む）
+PLANE_CRS = "EPSG:6670"
 
 # 発災（本震）。この時刻の前を「発災前」とする
 QUAKE_AT = pd.Timestamp("2026-07-28 16:27")
@@ -60,7 +66,7 @@ LAT_STEP = 1 / 240
 LON_STEP = 1 / 160
 
 # 熊本市の行政区。N03の名称欄には「熊本市」としか入らないため、
-# 行政区域コードから補う（2,030メッシュが全部「熊本市」では場所が分からない）
+# 行政区域コードから補う（1,490メッシュが全部「熊本市」では場所が分からない）
 KUMAMOTO_WARDS = {
     "43101": "中央区", "43102": "東区", "43103": "西区",
     "43104": "南区", "43105": "北区",
@@ -84,59 +90,88 @@ def _mesh_center(codes: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     return lat, lon
 
 
-def kumamoto_meshes() -> pd.DataFrame:
-    """熊本県内（メッシュ中心で判定）の500mメッシュの一覧を作る。"""
-    import geopandas as gpd  # 集計時だけ使う。アプリ側では使わない
+def _cities():
+    """熊本県＋隣接4県の市区町村ポリゴン（行政区域コードで融合したもの）。"""
+    import geopandas as gpd
 
     OUT.mkdir(parents=True, exist_ok=True)
-    if not N03_ZIP.exists():
-        import requests
+    frames = []
+    for pref in N03_PREFS:
+        path = OUT / f"n03_{pref}.zip"
+        if not path.exists():
+            import requests
 
-        print(f"行政区域をダウンロード: {N03_URL}")
-        r = requests.get(N03_URL, timeout=180)
-        r.raise_for_status()
-        N03_ZIP.write_bytes(r.content)
+            url = N03_URL.format(pref=pref)
+            print(f"行政区域をダウンロード: {url}")
+            r = requests.get(url, timeout=300)
+            r.raise_for_status()
+            path.write_bytes(r.content)
+        g = gpd.read_file(f"zip://{path}!N03-20240101_{pref}.geojson")
+        frames.append(g[["N03_003", "N03_004", "N03_007", "geometry"]])
 
-    cities = gpd.read_file(f"zip://{N03_ZIP}!{N03_NAME}")
-    pref = cities.union_all()
-    west, south, east, north = pref.bounds
+    cities = gpd.GeoDataFrame(pd.concat(frames, ignore_index=True),
+                              crs="EPSG:4326")
+    cities = cities.dissolve(by="N03_007", as_index=False)
+    # 政令市は N03_003 に市名、N03_004 に区名が入る。熊本市の区はこの年次の
+    # N03では名称の欄に入らず行政区域コードにしかないので、そこから補う
+    name = (cities["N03_003"].fillna("") + cities["N03_004"].fillna("")).str.strip()
+    cities["city"] = name + cities["N03_007"].map(KUMAMOTO_WARDS).fillna("")
+    cities["city_code"] = cities["N03_007"].astype(str)
+    return cities[["city_code", "city", "geometry"]]
 
-    # 県の外接矩形を500mメッシュで刻み、中心が県内のものだけ残す
-    lat_step, lon_step = 1 / 240, 1 / 160
-    lats = np.arange(south - lat_step, north + lat_step, lat_step)
-    lons = np.arange(west - lon_step, east + lon_step, lon_step)
+
+def kumamoto_meshes() -> pd.DataFrame:
+    """
+    熊本県内の500mメッシュの一覧を作る。
+
+    メッシュと市区町村の対応は面積被覆で決める。メッシュの四角形と市区町村
+    ポリゴンの重なり面積を測り、いちばん広く占める市区町村をそのメッシュの
+    市区町村とする。それが熊本県内なら対象に入れる。市区町村界をまたぐメッシュを
+    中心点だけで判定すると、面積では負けている側に寄ることがあるため
+    （熊本県内で128メッシュ）、面積で決める。
+
+    海面はどの市区町村にも属さないので比較に入らない。したがって中心が海上でも
+    陸が少しでもあるメッシュは、その陸の市区町村に入る。県境をまたぐメッシュを
+    正しく落とすため、隣接4県の市区町村も比較対象に入れている。
+    """
+    import geopandas as gpd  # 集計時だけ使う。アプリ側では使わない
+    from shapely.geometry import box
+
+    cities = _cities()
+    kuma = cities[cities["city_code"].str.startswith(KUMAMOTO)]
+    west, south, east, north = kuma.union_all().bounds
+
+    # 県の外接矩形を500mメッシュで刻む（面積で判定するので端は1メッシュ広く取る）
+    lats = np.arange(south - LAT_STEP, north + LAT_STEP, LAT_STEP)
+    lons = np.arange(west - LON_STEP, east + LON_STEP, LON_STEP)
     grid_lat, grid_lon = np.meshgrid(lats, lons, indexing="ij")
-    grid_lat, grid_lon = grid_lat.ravel(), grid_lon.ravel()
+    codes = np.unique(_mesh_code(grid_lat.ravel(), grid_lon.ravel()))
 
-    codes = _mesh_code(grid_lat, grid_lon)
     lat, lon = _mesh_center(codes)  # 刻みの端のずれを中心に直す
-    frame = pd.DataFrame({"mesh": codes.astype(np.int64), "lat": lat, "lon": lon})
-    frame = frame.drop_duplicates("mesh").reset_index(drop=True)
-
-    pts = gpd.points_from_xy(frame["lon"], frame["lat"], crs="EPSG:4326")
-    frame = frame[gpd.GeoSeries(pts).within(pref).values].reset_index(drop=True)
-
-    # メッシュコードだけでは場所が分からないので、市区町村名を持たせる
-    # （政令市は N03_003 に市名、N03_004 に区名が入る）
-    points = gpd.GeoDataFrame(
-        frame,
-        geometry=gpd.points_from_xy(frame["lon"], frame["lat"]),
+    cells = gpd.GeoDataFrame(
+        {"mesh": codes.astype(np.int64), "lat": lat, "lon": lon},
+        geometry=[box(x, y, x + LON_STEP, y + LAT_STEP)
+                  for x, y in zip(lon - LON_STEP / 2, lat - LAT_STEP / 2)],
         crs="EPSG:4326",
     )
-    joined = gpd.sjoin(
-        points, cities[["N03_003", "N03_004", "N03_007", "geometry"]],
-        how="left", predicate="within",
-    ).drop_duplicates("mesh")
-    name = (joined["N03_003"].fillna("") + joined["N03_004"].fillna("")).str.strip()
-    # 熊本市の区は、この年次のN03では名称の欄に入らず行政区域コードにしかない
-    name = name + joined["N03_007"].map(KUMAMOTO_WARDS).fillna("")
-    frame["city"] = name.values
+
+    overlap = gpd.overlay(cells[["mesh", "geometry"]].to_crs(PLANE_CRS),
+                          cities.to_crs(PLANE_CRS),
+                          how="intersection", keep_geom_type=True)
+    overlap["area"] = overlap.geometry.area
+    top = (overlap.sort_values("area", ascending=False)
+                  .drop_duplicates("mesh")
+                  .set_index("mesh"))
+
+    frame = cells.drop(columns="geometry")
+    frame["city"] = frame["mesh"].map(top["city"])
     # 居住地市区町村別の集計で「当該市区町村の居住者か」を判定するのに使う。
     # 配布データの居住地コードは5桁で、熊本市は区単位（43101〜43105）まで
     # 入っており、行政区域コードとそのまま突き合わせられる。
-    frame["city_code"] = joined["N03_007"].astype(str).values
-    print(f"熊本県内の500mメッシュ: {len(frame):,}"
-          f"（市区町村名なし {int((frame['city'] == '').sum())}）")
+    frame["city_code"] = frame["mesh"].map(top["city_code"])
+    frame = frame[frame["city_code"].fillna("").str.startswith(KUMAMOTO)]
+    frame = frame.reset_index(drop=True)
+    print(f"熊本県内の500mメッシュ: {len(frame):,}（面積被覆で判定）")
     return frame
 
 
@@ -474,7 +509,10 @@ def main() -> None:
     meta = {
         "source": "モバイル空間統計®（NTTドコモ／ドコモ・インサイトマーケティング）"
                   "リアルタイム国内人口分布",
-        "area": "熊本県内（500mメッシュの中心が県域に入るもの）",
+        "area": "熊本県内（500mメッシュの面積をいちばん広く占める市区町村が"
+                "熊本県内のもの。海面は比較に入れない）",
+        "city_rule": "面積被覆。メッシュの四角形と行政区域（N03-20240101、"
+                     "熊本県と隣接4県）の重なり面積が最大の市区町村を割り当てる",
         "unit": "500mメッシュ・1時間・人口推計値（総数と居住地別）",
         "start": start.isoformat(),
         "hours": int(len(hours)),
@@ -498,7 +536,8 @@ def main() -> None:
         # 平日・休日それぞれ何日分あるか（地図の比の厚みを画面に出すため）。
         # 本震のあった日は前後にまたがるので、両方で1日と数える。
         "phase_days": _phase_days(hours),
-        "boundary": "国土数値情報 行政区域（N03-20240101_43）",
+        "boundary": "国土数値情報 行政区域（N03-20240101。熊本県43と隣接4県"
+                    "40・44・45・46）",
     }
     (OUT / "mesh_population_meta.json").write_text(
         json.dumps(meta, ensure_ascii=False, indent=1), encoding="utf-8"
