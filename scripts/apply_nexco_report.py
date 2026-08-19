@@ -25,9 +25,13 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 JSON_PATH = os.path.join(ROOT, "data", "nexco_regulations.json")
 REPO_URL = "https://github.com/centrixuge/kumamoto-earthquake-traffic-map"
 APP_URL = "https://kumamoto-earthquake-traffic-map.streamlit.app/"
-# developブランチを映すStreamlitアプリを作ったら、その URL を
-# リポジトリ変数 PREVIEW_APP_URL に入れる。入っていればPRに出す。
+# 転記を載せる作業ブランチ（ワークフローの WORK_BRANCH と同じもの）。
+# PDFへのリンクをこのブランチに向けるために使う。
+WORK_BRANCH = os.environ.get("WORK_BRANCH", "auto/nexco-report").strip()
+# 確認用アプリのURLと、それが映しているブランチ。既定ではdevelopを映して
+# いるので、この作業ブランチのPRの内容はそこには出ない。
 PREVIEW_URL = os.environ.get("PREVIEW_APP_URL", "").strip()
+PREVIEW_BRANCH = os.environ.get("PREVIEW_APP_BRANCH", "develop").strip()
 SOURCE_URL = "https://www.w-nexco.co.jp/"
 
 
@@ -176,19 +180,27 @@ def summary_md(report: dict, changes: list, checks: list, data: dict = None) -> 
         "## 確認用",
         "",
         f"- 元のPDF（NEXCO西日本のニュースリリース）: {SOURCE_URL}",
-        f"- このPRに入っているPDF: {REPO_URL}/blob/develop/"
+        f"- このPRに入っているPDF: {REPO_URL}/blob/{WORK_BRANCH}/"
         f"data/nexco_west_regulations/{report['pdf'].replace(' ', '%20')}",
     ]
-    if PREVIEW_URL:
+    if PREVIEW_URL and PREVIEW_BRANCH == WORK_BRANCH:
         lines += [
             f"- **このPRの内容を映した確認用アプリ**: {PREVIEW_URL}",
-            "  developブランチを映しているので、マージ前にこの変更を"
+            f"  `{WORK_BRANCH}` を映しているので、マージ前にこの変更を"
             "画面で確かめられます（反映まで数分かかることがあります）",
+        ]
+    elif PREVIEW_URL:
+        lines += [
+            f"- 確認用アプリ（{PREVIEW_URL}）は `{PREVIEW_BRANCH}` を"
+            f"映しているため、このPR（`{WORK_BRANCH}`）の内容は出ません。"
+            "上の「反映後に画面に出る文言」で判断してください。"
+            f"画面で確かめたい場合は、確認用アプリの向き先を "
+            f"`{WORK_BRANCH}` に変えてください。",
         ]
     else:
         lines += [
             "- 確認用アプリ（マージ前の状態を映すもの）は未設定です。"
-            "Streamlit Cloudでこのブランチのアプリを作り、そのURLを"
+            f"Streamlit Cloudで `{WORK_BRANCH}` のアプリを作り、そのURLを"
             "リポジトリ変数 `PREVIEW_APP_URL` に入れると、ここに出ます。"
             "上の「反映後に画面に出る文言」で判断することもできます。",
         ]
