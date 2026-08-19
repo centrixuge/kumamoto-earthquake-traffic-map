@@ -124,9 +124,11 @@
 
 ### 規制を追加するとき
 
-高速道路（NEXCO西日本）については、**新しい報が出ていないかを1日2回（日本時間9:00と19:00）自動で見に行きます**（[`.github/workflows/check-nexco-reports.yml`](../.github/workflows/check-nexco-reports.yml)）。NEXCO西日本のトップページに並ぶPDFの表題から「第○報」を拾い、手元に無い番号があれば `data/nexco_west_regulations/` に保存し、読み取れる範囲（緊急車両の通行可能区間）を `data/nexco_regulations.json` に反映して、**developから main へのプルリクエストを出します**（mainへ直接コミットはしません）。すでに開いているPRがあるときは、そこに追記します。
+高速道路（NEXCO西日本）については、**新しい報が出ていないかを1日2回（日本時間9:00と19:00）自動で見に行きます**（[`.github/workflows/check-nexco-reports.yml`](../.github/workflows/check-nexco-reports.yml)）。NEXCO西日本のトップページに並ぶPDFの表題から「第○報」を拾い、手元に無い番号があれば `data/nexco_west_regulations/` に保存し、読み取れる範囲（緊急車両の通行可能区間）を `data/nexco_regulations.json` に反映して、**`auto/nexco-report` から main へのプルリクエストを出します**（mainへ直接コミットはしません）。すでに開いているPRがあるときは、そのブランチに追記します。開いているPRが無ければ、ブランチはmainから切り直します（マージ済み・放置のブランチの古いコミットを引きずらないため）。
 
-PRの本文には、変更前後の対比・報から読み取った内容・**反映後に画面へ出る文言**（地図の下の注記と線のツールチップ。地図と同じ [`modules/nexco_text.py`](../modules/nexco_text.py) で作っているのでずれません）・判断が要るもの・確認用のURLを載せます。developを映す確認用アプリのURLをリポジトリ変数 `PREVIEW_APP_URL` に入れておくと、**マージ前の画面**を出先から確かめられます。手で確認するときは次を実行します。
+**作業ブランチを転記専用にしているのは、PRの差分を転記した分だけに保つためです。** developで作業すると、developに乗っている他の作業（モバイル空間統計の集計など）まで差分に入り、マージするとまとめてmainへ行ってしまいます。マージしたあとは、developにもmainを取り込んで揃えておきます。
+
+PRの本文には、変更前後の対比・報から読み取った内容・**反映後に画面へ出る文言**（地図の下の注記と線のツールチップ。地図と同じ [`modules/nexco_text.py`](../modules/nexco_text.py) で作っているのでずれません）・判断が要るもの・確認用のURLを載せます。確認用アプリ（リポジトリ変数 `PREVIEW_APP_URL`）は既定でdevelopを映しているため、**このPRの内容はそこには出ません**。PR本文にもその旨が出ます。マージ前の画面を出先で確かめたい場合は、確認用アプリの向き先を `auto/nexco-report` に変え、リポジトリ変数 `PREVIEW_APP_BRANCH` に同じブランチ名を入れてください。手で確認するときは次を実行します。
 
 ```bash
 python scripts/check_nexco_reports.py --dry-run   # 見るだけ
