@@ -2928,6 +2928,8 @@ def render_mesh_timeseries(selected, selected_points, summary, meta,
         # hvは「その点から次の点まで水平」に引くので、時刻そのままだと
         # 棒（時刻を中心に前後30分）から右へ30分ずれる。30分手前から引き、
         # 最後の棒の右端まで1点足して、段と棒の幅をそろえる。
+        # 線種は交通量の平常時と同じ点線にして、実測と平常時を線種で
+        # 見分けられるようにしている（色は人口・交通量の区別に使う）。
         half = pd.Timedelta(minutes=30)
         step_x = list(frame["datetime"] - half) + [
             frame["datetime"].iloc[-1] + half
@@ -2935,7 +2937,8 @@ def render_mesh_timeseries(selected, selected_points, summary, meta,
         step_y = list(frame["baseline"]) + [frame["baseline"].iloc[-1]]
         fig.add_trace(go.Scatter(
             x=step_x, y=step_y,
-            mode="lines", line=dict(color=color, width=1.6, shape="hv"),
+            mode="lines",
+            line=dict(color=color, width=1.6, shape="hv", dash="dot"),
             name="人口 平常時", legendrank=4,
         ))
 
