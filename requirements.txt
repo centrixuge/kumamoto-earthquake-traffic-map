@@ -6,3 +6,4 @@ requests>=2.32
 folium>=0.19
 streamlit-folium>=0.27
 openpyxl>=3.1
+boto3>=1.34

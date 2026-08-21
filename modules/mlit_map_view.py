@@ -19,10 +19,10 @@ import folium
 import pandas as pd
 import streamlit as st
 
-DATA_PATH = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-    "data", "mlit_map_regulations.json",
-)
+from modules import datastore
+
+# data/ からの相対パス。置き場（ローカル or S3）は datastore が決める。
+DATA_FILE = "mlit_map_regulations.json"
 
 # 道路種別（3区分にまとめたもの）。現在の地図の観測点の描き分け（JARTICの道路種別
 # 1＝高速自動車国道 / 3＝一般国道）に合わせ、観測点の無い
@@ -112,10 +112,7 @@ MAP_ZOOM = 9
 
 @st.cache_data(ttl=300)
 def load_regulations() -> dict:
-    if not os.path.exists(DATA_PATH):
-        return None
-    with open(DATA_PATH, encoding="utf-8") as f:
-        return json.load(f)
+    return datastore.read_json(DATA_FILE, default=None)
 
 
 def _style(item: dict) -> dict:

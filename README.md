@@ -95,6 +95,7 @@ python fetch_and_prepare.py
 | [docs/regulations.md](docs/regulations.md) | 通行規制データに載らない規制がある理由、直轄国道・高速道路の転記済み一覧、区間の線形の作り方、追加手順 |
 | [docs/mlit-map.md](docs/mlit-map.md) | 既定のタブで使っている「通れる道マップ」の配布データの整理（時点ごとの中身、属性のばらつき、状態の決め方） |
 | [docs/mobile-spatial-statistics.md](docs/mobile-spatial-statistics.md) | モバイル空間統計の扱い（公開しない理由と置き場、集計のしかた、地図と時系列の読み方、操作の重さへの対応） |
+| [docs/deploy-aws.md](docs/deploy-aws.md) | AWSへの移行（ECS Fargate + ALB + Cognito + S3）。コンテナ化とデータの置き場の切り替え、残りの手順と費用の概算 |
 | [docs/data-layout-mesh.md](docs/data-layout-mesh.md) | メッシュ関係のファイルの列定義（メッシュ⇔市区町村の対応表、面積被覆の内訳、人口集計の出力とmeta） |
 | [docs/data-pipeline.md](docs/data-pipeline.md) | 交通量APIの利用条件への対応、追記専用アーカイブの設計、GitHub Actionsによる自動取得、コード・ディレクトリ構成 |
 

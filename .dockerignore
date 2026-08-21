@@ -1,0 +1,26 @@
+# 実行時に読まないものはイメージに入れない（150MB → 5MB弱になる）
+data/mlit_r8kumamoto_map/
+data/qsr_regulations/
+data/nexco_west_regulations/
+data/mss/
+data/mss_build/
+data/mesh/
+data/shelter/
+data/transtron/
+
+.git/
+.github/
+__pycache__/
+**/__pycache__/
+*.pyc
+*.log
+docs/
+scripts/
+tests/
+.streamlit/secrets.toml
+fetch_and_prepare.py
+api_request.py
+app_mlit_map.py
+requirements-fetch.txt
+README.md
+LICENSE

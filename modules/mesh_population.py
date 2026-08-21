@@ -26,6 +26,7 @@ from __future__ import annotations
 import io
 import json
 import re
+import os
 from pathlib import Path
 
 import folium
@@ -139,10 +140,34 @@ class MeshDataUnavailable(RuntimeError):
 # 読み込み
 # ----------------------------------------------------------------------
 def _secrets() -> dict:
+    """置き場の設定。環境変数（AWS）を優先し、無ければ st.secrets を見る。"""
+    bucket = os.environ.get("MESH_S3_BUCKET", "").strip()
+    if bucket:
+        return {"bucket": bucket,
+                "prefix": os.environ.get("MESH_S3_PREFIX", "").strip()}
     try:
         return dict(st.secrets["mesh_population"])
     except Exception:
         return {}
+
+
+def _fetch_s3(cfg: dict, name: str) -> bytes:
+    """S3から読む。鍵は持たず、実行ロール（ECSのタスクロール）で読む。"""
+    import boto3  # AWSでだけ要る
+    from botocore.exceptions import ClientError
+
+    key = "/".join(p for p in (str(cfg.get("prefix", "")).strip("/"), name) if p)
+    try:
+        obj = boto3.client("s3").get_object(Bucket=cfg["bucket"], Key=key)
+        return obj["Body"].read()
+    except ClientError as e:
+        code = e.response.get("Error", {}).get("Code", "")
+        raise MeshDataUnavailable(
+            f"{name} を取得できませんでした（S3: {code}）。"
+            f"取得先: s3://{cfg['bucket']}/{key}" + "\n\n"
+            "バケット名と、タスクロールに s3:GetObject が付いているかを"
+            "確認してください。"
+        ) from e
 
 
 def _fetch(name: str) -> bytes:
@@ -151,6 +176,8 @@ def _fetch(name: str) -> bytes:
         return local.read_bytes()
 
     cfg = _secrets()
+    if cfg.get("bucket"):
+        return _fetch_s3(cfg, name)
     token = _clean_token(cfg.get("token", ""))
     if cfg.get("base_url"):
         url = str(cfg["base_url"]).strip().rstrip("/") + "/" + name

@@ -27,6 +27,7 @@ from streamlit_folium import st_folium
 from modules.holidays import WEEKDAY_LABELS
 from modules.nexco_text import emergency_lines, emergency_note
 from modules import mesh_population, mlit_map_view
+from modules import datastore
 from modules.stations import attach_point_code, load_station_master
 
 DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
@@ -205,27 +206,21 @@ st.set_page_config(
 
 @st.cache_data(ttl=300)
 def load_observations(filename: str = "observations.parquet") -> pd.DataFrame:
-    path = os.path.join(DATA_DIR, filename)
-    if not os.path.exists(path):
-        return pd.DataFrame()
-    df = pd.read_parquet(path)
+    df = datastore.read_parquet(filename)
+    if df.empty:
+        return df
     df["datetime"] = pd.to_datetime(df["datetime"])
     return df
 
 
 @st.cache_data(ttl=300)
 def load_quake_info() -> dict:
-    with open(os.path.join(DATA_DIR, "quake_info.json"), encoding="utf-8") as f:
-        return json.load(f)
+    return datastore.read_json("quake_info.json", default={})
 
 
 @st.cache_data(ttl=300)
 def load_regulations() -> list:
-    path = os.path.join(DATA_DIR, "regulations.json")
-    if not os.path.exists(path):
-        return []
-    with open(path, encoding="utf-8") as f:
-        return json.load(f).get("items", [])
+    return (datastore.read_json("regulations.json", default={}) or {}).get("items", [])
 
 
 @st.cache_data(ttl=300)
@@ -237,11 +232,7 @@ def load_mlit_regulations() -> dict:
     直轄国道は載らない。そのため熊本河川国道事務所の公表PDFから
     手作業で転記したものを別ファイルで持つ。
     """
-    path = os.path.join(DATA_DIR, "mlit_regulations.json")
-    if not os.path.exists(path):
-        return {}
-    with open(path, encoding="utf-8") as f:
-        return json.load(f)
+    return datastore.read_json("mlit_regulations.json", default={})
 
 
 @st.cache_data(ttl=300)
@@ -251,11 +242,7 @@ def load_nexco_regulations() -> dict:
     熊本河川国道事務所のPDFにも載らないため、NEXCO西日本が公表する
     「お知らせ」PDFから手作業で転記したものを別ファイルで持つ。
     """
-    path = os.path.join(DATA_DIR, "nexco_regulations.json")
-    if not os.path.exists(path):
-        return {}
-    with open(path, encoding="utf-8") as f:
-        return json.load(f)
+    return datastore.read_json("nexco_regulations.json", default={})
 
 
 @st.cache_data(ttl=300)
@@ -267,11 +254,8 @@ def regulation_archive_start() -> str:
     本震（7/28 16:27）より後に収集を始めたため、発災直後だけ規制されて
     すぐ解除された区間は取りこぼしている。その境目を画面に出すために使う。
     """
-    path = os.path.join(DATA_DIR, "archive", "regulations_archive.json")
-    if not os.path.exists(path):
-        return ""
-    with open(path, encoding="utf-8") as f:
-        items = json.load(f).get("items", {})
+    items = (datastore.read_json("archive/regulations_archive.json",
+                                 default={}) or {}).get("items", {})
     seen = [v.get("first_seen") for v in items.values() if v.get("first_seen")]
     if not seen:
         return ""
@@ -292,7 +276,7 @@ def mlit_regulations_for_point(mlit: dict, point_code) -> list:
 @st.cache_data(ttl=300)
 def load_station_master_cached() -> dict:
     """常時観測点コードと緯度経度の対応（fetch_and_prepare.py が生成）。"""
-    return load_station_master(os.path.join(DATA_DIR, "stations.json"))
+    return datastore.read_json("stations.json", default={}) or {}
 
 
 @st.cache_data(ttl=300)
@@ -302,10 +286,9 @@ def load_traffic_archive(filename: str) -> pd.DataFrame:
     アーカイブにはコード列を持たない時期のデータも含まれるので、
     観測点マスタからJARTICの常時観測点コードを付け直して先頭列に置く。
     """
-    path = os.path.join(DATA_DIR, "archive", filename)
-    if not os.path.exists(path):
-        return pd.DataFrame()
-    df = pd.read_parquet(path)
+    df = datastore.read_parquet(f"archive/{filename}")
+    if df.empty:
+        return df
     df["datetime"] = pd.to_datetime(df["datetime"])
     df = attach_point_code(df, load_station_master_cached())
     cols = ["point_code"] + [c for c in df.columns if c != "point_code"]
@@ -319,11 +302,10 @@ def load_regulations_archive() -> tuple:
       - 規制一覧: 1件1行（経路の座標列は列数が膨大になるので含めない）
       - 状態変化履歴: 規制内容・終了日時などが変わった時点ごとに1行
     """
-    path = os.path.join(DATA_DIR, "archive", "regulations_archive.json")
-    if not os.path.exists(path):
+    items = ((datastore.read_json("archive/regulations_archive.json",
+                                  default={}) or {}).get("items") or {})
+    if not items:
         return pd.DataFrame(), pd.DataFrame()
-    with open(path, encoding="utf-8") as f:
-        items = (json.load(f).get("items") or {})
 
     rows, hist_rows = [], []
     for key, rec in items.items():
@@ -2364,11 +2346,7 @@ def render_mlit_beta_tab(point_summary: pd.DataFrame, point_labels: dict,
 @st.cache_data
 def load_holiday_set() -> set:
     """祝日の一覧（日付文字列）。平常時の平均を取る日区分の判定に使う。"""
-    path = os.path.join(DATA_DIR, "holidays.json")
-    if not os.path.exists(path):
-        return set()
-    with open(path, encoding="utf-8") as f:
-        return set(json.load(f))
+    return set(datastore.read_json("holidays.json", default={}) or {})
 
 
 # 地図に出すメッシュは「全時点で配信されたもの」に固定する。10人未満は
@@ -3113,7 +3091,7 @@ def main():
         "</style>",
         unsafe_allow_html=True,
     )
-    data_missing = not os.path.exists(os.path.join(DATA_DIR, "observations.parquet"))
+    data_missing = not datastore.exists("observations.parquet")
     if data_missing:
         st.error(
             "data/observations.parquet が見つかりません。先に `python fetch_and_prepare.py` を実行してください。"
