@@ -1,14 +1,14 @@
 {
-  "generated_at": "2026-08-22T09:33:14.172946",
+  "generated_at": "2026-08-22T15:19:35.327098",
   "items": [
     {
       "region": "八代地域",
       "route_name": "八代港大手町線",
       "reason_type": "その他",
       "reason_detail": "車線規制",
-      "content": "解除",
+      "content": "その他",
       "start_timestamp": "2026-08-21 15:30:00",
-      "end_timestamp": "2026-08-22 08:30:00",
+      "end_timestamp": null,
       "length_km": 0.585,
       "start_lat": 32.506156184548864,
       "start_lon": 130.58840453624722,
