@@ -1,14 +1,14 @@
 {
-  "generated_at": "2026-08-22T03:20:16.500565",
+  "generated_at": "2026-08-22T09:33:14.172946",
   "items": [
     {
       "region": "八代地域",
       "route_name": "八代港大手町線",
       "reason_type": "その他",
-      "reason_detail": null,
-      "content": "全面通行止め",
+      "reason_detail": "車線規制",
+      "content": "解除",
       "start_timestamp": "2026-08-21 15:30:00",
-      "end_timestamp": null,
+      "end_timestamp": "2026-08-22 08:30:00",
       "length_km": 0.585,
       "start_lat": 32.506156184548864,
       "start_lon": 130.58840453624722,
@@ -3507,34 +3507,6 @@
     },
     {
       "region": "熊本地域",
-      "route_name": "市道 水前寺公園第2号線",
-      "reason_type": "災害",
-      "reason_detail": "事前交通規制(民有地建物損傷)",
-      "content": "全面通行止め",
-      "start_timestamp": "2026-07-28 21:30:00",
-      "end_timestamp": null,
-      "length_km": 0.01,
-      "start_lat": 32.7911258093134,
-      "start_lon": 130.73228895664215,
-      "end_lat": 32.79108522289809,
-      "end_lon": 130.7323533296585,
-      "path": [
-        [
-          32.79114,
-          130.73229
-        ],
-        [
-          32.791136,
-          130.732373
-        ],
-        [
-          32.791086,
-          130.732375
-        ]
-      ]
-    },
-    {
-      "region": "熊本地域",
       "route_name": "市道 京町1丁目宮内第1号線",
       "reason_type": "災害",
       "reason_detail": "石積変状",
@@ -3586,6 +3558,34 @@
         [
           32.809412,
           130.703727
+        ]
+      ]
+    },
+    {
+      "region": "熊本地域",
+      "route_name": "市道 水前寺公園第2号線",
+      "reason_type": "災害",
+      "reason_detail": "事前交通規制(民有地建物損傷)",
+      "content": "全面通行止め",
+      "start_timestamp": "2026-07-28 21:30:00",
+      "end_timestamp": null,
+      "length_km": 0.01,
+      "start_lat": 32.7911258093134,
+      "start_lon": 130.73228895664215,
+      "end_lat": 32.79108522289809,
+      "end_lon": 130.7323533296585,
+      "path": [
+        [
+          32.79114,
+          130.73229
+        ],
+        [
+          32.791136,
+          130.732373
+        ],
+        [
+          32.791086,
+          130.732375
         ]
       ]
     },
