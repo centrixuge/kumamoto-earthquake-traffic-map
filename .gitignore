@@ -10,6 +10,11 @@ data/mss_build/
 # 世界測地系経緯度メッシュのDL物（500mメッシュはコードから計算できるので、
 # 公開repoに置く必要がない）
 data/mesh/
+# トランストロン社の商用車プローブデータ（提供条件の確認前。生データは
+# 公開repoに入れない。公開するのは集計してよいと確認できたものだけ）
+data/transtron/
+# 手元の確認・分析用。成果物になったら scripts/ に移す
+scratch/
 .streamlit/secrets.toml
 api_request.py
 new_reports.txt
