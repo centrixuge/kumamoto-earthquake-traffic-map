@@ -425,7 +425,7 @@ def main():
         "generated_at": now.isoformat(),
         "target_start": TARGET_START.isoformat(),
         "target_end": target_end.isoformat(),
-        "target_end_cap": target_end_cap.isoformat(),
+        "target_end_cap": TARGET_END_CAP.isoformat(),
         # ダッシュボード側で「平常時」の定義を正確に説明できるように、
         # 実際に使ったベースライン期間もそのまま書き出しておく。
         "baseline_windows": [

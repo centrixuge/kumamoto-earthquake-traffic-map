@@ -2,8 +2,9 @@ name: Fetch and archive traffic data
 
 on:
   schedule:
-    # 6時間ごと。復旧期（本震から2週間）を過ぎるとfetch_and_prepare.py側が
-    # 新規取得なしを返すため実質no-opになる。不要になったらこのスケジュールを止めてよい。
+    # 6時間ごと。取得の上限（fetch_and_prepare.py の TARGET_END_CAP、いまは
+    # 2026-09-07 03:00）を過ぎると新規取得なしを返すため実質no-opになる。
+    # 不要になったらこのスケジュールを止めてよい。
     - cron: "0 */6 * * *"
   workflow_dispatch: {}
 
@@ -22,6 +23,18 @@ jobs:
 
       - name: Install dependencies
         run: pip install -r requirements.txt -r requirements-fetch.txt
+
+      # 取得だけで20分近くかかるので、その前に未定義名だけ落としておく。
+      # 参照が消え残った変数（実際に起きた）を、取得の後ではなく先に落とすため。
+      - name: Check for undefined names
+        run: |
+          pip install pyflakes
+          python -m pyflakes app.py fetch_and_prepare.py modules scripts > pyflakes.txt || true
+          # 未使用importなどは無視し、未定義名だけを失敗にする
+          if grep -i "undefined name" pyflakes.txt; then
+            echo "::error::未定義の名前があります（上の行）"
+            exit 1
+          fi
 
       - name: Fetch and archive traffic data
         run: python fetch_and_prepare.py
