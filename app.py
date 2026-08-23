@@ -125,6 +125,9 @@ TIMESERIES_RANGES = {
     "発災後1週間": _since_quake(7),
     "発災後2週間": _since_quake(14),
     "発災後3週間": _since_quake(21),
+    # 取得の上限を9月第1週まで伸ばしたので、そこまで一度に見られる幅も置く。
+    # 日数で書くと上限を動かすたびに直すことになるため、右端はデータの最後。
+    "全期間": lambda quake, last: (TIMESERIES_DISPLAY_START, last),
     "最新3日間": lambda quake, last: (last - pd.Timedelta(days=3), last),
 }
 # 既定は発災後1週間。発災直後の落ち込みと戻り始めが1枚で読める。
@@ -3172,7 +3175,7 @@ def main():
         '<div class="dash-src">'
         f"{archive_period}"
         f"異常検知の対象期間: 本震（{period_start}）〜 {period_end}"
-        f"（本震+3週間または現在時刻の早い方）　｜　"
+        f"（9月第1週の終わり＝9/7 03:00 または現在時刻の早い方）　｜　"
         f"データ生成: {quake_info.get('generated_at', '不明')}<br>"
         # 並びは 交通量 → 人口 → 通行規制（道路種別の階層順：全体をまとめた
         # 配布データ、高速道路、直轄国道、県が管理する補助国道・県道・
