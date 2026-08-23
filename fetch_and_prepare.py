@@ -82,10 +82,12 @@ HOURLY_FETCH_STEP = timedelta(hours=1)
 
 TARGET_START = datetime(2026, 7, 27, 3, 0)
 # 復旧期（被災後72時間はもちろん、その後の交通パターンが平常に戻る過程まで）を
-# 動的取得の対象に含めるため、本震発生時刻からの経過期間で取得終了日時を決める。
-# 当初は2週間としていたが、8/14まで九州自動車道の通行止めが続き、その解除後の
-# 動きまで見たいので3週間に伸ばした（本震+3週間＝2026-08-18 16:27）。
-RECOVERY_PERIOD = timedelta(days=21)
+# 動的取得の対象に含めるため、取得の終端に上限を置く。
+# 当初は本震+2週間、次に+3週間（2026-08-18 16:27）としていたが、学生の夏休み
+# 明けの戻り方まで見たいので、9月第1週の終わりまで伸ばした。日の区切りは
+# 5分間値側と揃えて03:00起点なので、9/7(月) 03:00 を上限にすると
+# 9/6(日) の24時間ぶんが最後まで入る。
+TARGET_END_CAP = datetime(2026, 9, 7, 3, 0)
 
 # 5分間値は過去1ヶ月しか遡れないため、これまでの平常時は直前2回の火曜だけだった。
 BASELINE_WINDOWS = [
@@ -315,8 +317,7 @@ def main():
     quake_occurred_at = pd.Timestamp(
         datetime.fromisoformat(mainshock["occurred_at"]).replace(tzinfo=None)
     )
-    target_end_cap = quake_occurred_at.to_pydatetime() + RECOVERY_PERIOD
-    target_end = min(now, target_end_cap)
+    target_end = min(now, TARGET_END_CAP)
 
     archive = _load_archive()
     new_target_df = _fetch_missing_target(archive, target_end)
