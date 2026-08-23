@@ -71,6 +71,11 @@ PLACE_POINTS = {
 PLACE_SECTIONS = {
     ("国道3号", "氷川町大野〜八代市岡町中（舗装補修3箇所）"):
         ("熊本県八代郡氷川町大野", "熊本県八代市岡町中", "国道3号"),
+    # 第3弾は南端が「八代市二見」としか示されていない。二見の町名は
+    # 洲口町・下大野町・本町・赤松町と南北4kmに散らばるので、最も北の
+    # 二見洲口町を採って区間を短めに見る（path_source にその旨を書く）。
+    ("国道3号", "宇城市松橋町久具〜八代市二見（歩道部補修3箇所・第3弾）"):
+        ("熊本県宇城市松橋町久具", "熊本県八代市二見洲口町", "国道3号", 2500),
 }
 
 # 高速道路（NEXCO西日本）の規制区間の端点。data/nexco_regulations.json 用。
@@ -79,6 +84,10 @@ EXPRESSWAY_IC_NODES = {
     "益城熊本空港IC": (810949465, 32.78782, 130.79083),
     "松橋IC": (810949667, 32.64472, 130.70676),
     "八代JCT": (835367426, 32.50641, 130.64642),
+    # 上下線で分かれているので2ノードの中点（表記も mentioned_points と揃える）。
+    # 妙見第一橋の損傷で八代JCT〜八代南IC が通行止めとして残ったため、
+    # 区間の端点として要る。
+    "八代南IC": ("1709280616+1709352526", 32.46413, 130.60142),
     "田浦IC": (1709376186, 32.36512, 130.51330),
     "嘉島JCT": (810949406, 32.75277, 130.78863),
     "益城TB": (2847572263, 32.75140, 130.79723),
@@ -100,8 +109,12 @@ EXPRESSWAY_SECTIONS = {
         ("えびのIC", "栗野IC", "九州自動車道"),
     ("E10 宮崎自動車道", "えびのJCT〜高原IC"):
         ("えびのJCT", "高原IC", "宮崎自動車道"),
-    ("E3A 南九州自動車道", "八代JCT〜田浦IC"):
-        ("八代JCT", "田浦IC", "南九州自動車道|日奈久芦北道路"),
+    # 八代南IC〜田浦IC が 2026-08-18 6:00 に解除され、八代JCT〜八代南IC
+    # （妙見第一橋）だけが残ったため、区間を2つに分けている。
+    ("E3A 南九州自動車道", "八代JCT〜八代南IC"):
+        ("八代JCT", "八代南IC", "南九州自動車道|日奈久芦北道路"),
+    ("E3A 南九州自動車道", "八代南IC〜田浦IC"):
+        ("八代南IC", "田浦IC", "南九州自動車道|日奈久芦北道路"),
     ("E77 九州中央自動車道", "嘉島JCT〜益城TB"):
         ("嘉島JCT", "益城TB", "九州中央自動車道"),
 }
@@ -227,7 +240,8 @@ def expressway_path(ic_a: tuple, ic_b: tuple, road_name: str,
     }
 
 
-def parallel_route(ic_a: tuple, ic_b: tuple, road_name: str) -> tuple:
+def parallel_route(ic_a: tuple, ic_b: tuple, road_name: str,
+                   off_limit: float = 400) -> tuple:
     """
     2つのIC の間を、指定した一般国道に沿ってルーティングする。
 
@@ -264,8 +278,10 @@ def parallel_route(ic_a: tuple, ic_b: tuple, road_name: str) -> tuple:
         wx, wy = xy(n)[0] - ax, xy(n)[1] - ay
         t = wx * ux + wy * uy
         off = math.hypot(wx - t * ux, wy - t * uy)
-        # 中心線から400m以上離れたノードは別路線の枝とみなして捨てる
-        if -200 <= t <= length + 200 and off < 400:
+        # 中心線から off_limit 以上離れたノードは別路線の枝とみなして捨てる。
+        # 長い区間や海沿いで国道が大きく膨らむ区間では、既定の400mだと本線の
+        # ノードまで落ちて経由地が抜け、OSRMが高速道路や県道へ逃げる。
+        if -200 <= t <= length + 200 and off < off_limit:
             k = max(0, int(t // 2000))
             if k not in bins or off < bins[k][0]:
                 bins[k] = (off, n)
@@ -423,11 +439,12 @@ def process(json_path: str, dry_run: bool) -> None:
 
         ps = PLACE_SECTIONS.get(key)
         if ps:
-            pa, pb, road = ps
+            pa, pb, road = ps[0], ps[1], ps[2]
+            off_limit = ps[3] if len(ps) > 3 else 400
             na, ma, _ = snap_place(pa, road)
             nb, mb, _ = snap_place(pb, road)
             path, km, info = parallel_route(
-                (None, na[0], na[1]), (None, nb[0], nb[1]), road
+                (None, na[0], na[1]), (None, nb[0], nb[1]), road, off_limit
             )
             print(f"[ok]   {key[0]}（{key[1][:18]}…）… {len(path)}点 / {km:.2f}km "
                   f"/ {road}上 {info['on_road_pct']}%（最大{info['max_off_m']}m）")
