@@ -26,13 +26,13 @@ from __future__ import annotations
 import io
 import json
 import re
-import os
 from pathlib import Path
 
 import folium
 import pandas as pd
-import requests
 import streamlit as st
+
+from modules import private_store
 
 LOCAL_DIR = Path(__file__).resolve().parents[1] / "data" / "mss_build"
 SERIES_FILE = "mesh_population.parquet"
@@ -132,137 +132,25 @@ def required_summary_columns() -> list[str]:
     ]
 
 
-class MeshDataUnavailable(RuntimeError):
+class MeshDataUnavailable(private_store.PrivateDataUnavailable):
     """集計済みファイルが手元にも非公開の置き場にも無い。"""
 
 
 # ----------------------------------------------------------------------
 # 読み込み
 # ----------------------------------------------------------------------
-def _secrets() -> dict:
-    """置き場の設定。環境変数（AWS）を優先し、無ければ st.secrets を見る。"""
-    bucket = os.environ.get("MESH_S3_BUCKET", "").strip()
-    if bucket:
-        return {"bucket": bucket,
-                "prefix": os.environ.get("MESH_S3_PREFIX", "").strip()}
-    try:
-        return dict(st.secrets["mesh_population"])
-    except Exception:
-        return {}
-
-
-def _fetch_s3(cfg: dict, name: str) -> bytes:
-    """S3から読む。鍵は持たず、実行ロール（ECSのタスクロール）で読む。"""
-    import boto3  # AWSでだけ要る
-    from botocore.exceptions import ClientError
-
-    key = "/".join(p for p in (str(cfg.get("prefix", "")).strip("/"), name) if p)
-    try:
-        obj = boto3.client("s3").get_object(Bucket=cfg["bucket"], Key=key)
-        return obj["Body"].read()
-    except ClientError as e:
-        code = e.response.get("Error", {}).get("Code", "")
-        raise MeshDataUnavailable(
-            f"{name} を取得できませんでした（S3: {code}）。"
-            f"取得先: s3://{cfg['bucket']}/{key}" + "\n\n"
-            "バケット名と、タスクロールに s3:GetObject が付いているかを"
-            "確認してください。"
-        ) from e
-
-
 def _fetch(name: str) -> bytes:
-    local = LOCAL_DIR / name
-    if local.exists():
-        return local.read_bytes()
-
-    cfg = _secrets()
-    if cfg.get("bucket"):
-        return _fetch_s3(cfg, name)
-    token = _clean_token(cfg.get("token", ""))
-    if cfg.get("base_url"):
-        url = str(cfg["base_url"]).strip().rstrip("/") + "/" + name
-        headers = {"Authorization": f"Bearer {token}"} if token else {}
-    elif cfg.get("repo"):
-        if not token:
-            raise MeshDataUnavailable(
-                "`token` が空です。secrets の `[mesh_population]` の中に "
-                "`token = \"github_pat_...\"` があるかご確認ください"
-                "（キー名の綴り違いや、別のセクションに入っている場合も"
-                "空になります）。"
-            )
-        repo = str(cfg["repo"]).strip().strip("/")
-        ref = str(cfg.get("ref", "main")).strip()
-        url = f"https://api.github.com/repos/{repo}/contents/{name}?ref={ref}"
-        headers = {
-            "Accept": "application/vnd.github.raw",
-            "Authorization": f"Bearer {token}",
-            "X-GitHub-Api-Version": "2022-11-28",
-        }
-    else:
-        raise MeshDataUnavailable("置き場が設定されていません。")
-
-    res = requests.get(url, headers=headers, timeout=120)
-    if res.status_code != 200:
-        hint = _http_hint(res.status_code) + "\n\n" + _token_shape(token)
-        # 例外をそのまま投げるとページ全体が落ちるうえ、公開環境では本文が
-        # 伏せられて原因が分からない。状態コードと当たり先だけ残して返す
-        # （トークンは出さない）。
-        raise MeshDataUnavailable(
-            f"{name} を取得できませんでした（HTTP {res.status_code}）。"
-            f"取得先: {url}\n\n" + hint
-        )
-    return res.content
-
-
-def _clean_token(value) -> str:
     """
-    貼り付け事故に強くする。トークンに空白は入らないので全部落とし、
-    引用符や `Bearer ` が一緒に入ってしまった場合も剥がす。
-
-    secretsの入力欄で長い値が折り返されて改行が混ざると、見た目は正しくても
-    401になる。
+    集計済みファイルを1つ読む。探す順序と設定の書き方は
+    modules/private_store.py にまとめてある（商用車プローブと共通）。
     """
-    token = "".join(str(value).split())
-    if token[:6].lower() == "bearer":
-        token = token[6:]
-    return token.strip("\"'")
-
-
-def _token_shape(token: str) -> str:
-    """トークンの中身は出さず、形だけ出す（欠けや取り違えの切り分け用）。"""
-    if not token:
-        return "設定されたトークン: **空**"
-    kinds = {
-        "github_pat_": "fine-grained PAT",
-        "ghp_": "classic PAT",
-        "gho_": "OAuthトークン",
-        "ghs_": "GitHub Appのトークン",
-    }
-    kind = next(
-        (v for k, v in kinds.items() if token.startswith(k)), "**未知の形式**"
-    )
-    return (
-        f"設定されたトークン: {kind}・{len(token)}文字"
-        "（fine-grained PATは `github_pat_` で始まり90文字前後です。"
-        "短ければ貼り付けが欠けています）"
-    )
-
-
-def _http_hint(status: int) -> str:
-    if status == 404:
-        return (
-            "**404** はトークンにそのリポジトリの権限が無いときにも出ます"
-            "（存在しない場合と区別が付きません）。fine-grained PAT の "
-            "Repository access で対象リポジトリを選んでいるか、"
-            "Repository permissions の **Contents: Read-only** が付いているか、"
-            "`repo` と `ref`（ブランチ名）の綴りをご確認ください。"
-        )
-    if status in (401, 403):
-        return (
-            f"**{status}** はトークンが無効・期限切れ・権限不足のときに出ます。"
-            "fine-grained PAT の有効期限と Contents: Read-only をご確認ください。"
-        )
-    return "GitHubの応答をご確認ください。"
+    try:
+        return private_store.fetch(
+            name, local_dir=LOCAL_DIR, section="mesh_population",
+            env_prefix="MESH")
+    except private_store.PrivateDataUnavailable as e:
+        # このモジュールの呼び出し側は MeshDataUnavailable を捕まえている
+        raise MeshDataUnavailable(str(e)) from e
 
 
 @st.cache_data(ttl=3600, show_spinner="モバイル空間統計を読み込み中")
@@ -336,7 +224,8 @@ def series() -> pd.DataFrame:
 
 
 def available() -> bool:
-    return (LOCAL_DIR / META_FILE).exists() or bool(_secrets())
+    return ((LOCAL_DIR / META_FILE).exists()
+            or bool(private_store.config("mesh_population", "MESH")))
 
 
 # ----------------------------------------------------------------------

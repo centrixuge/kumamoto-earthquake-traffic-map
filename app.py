@@ -27,7 +27,7 @@ from streamlit_folium import st_folium
 from modules.holidays import WEEKDAY_LABELS
 from modules.nexco_text import emergency_lines, emergency_note
 from modules import mesh_population, mlit_map_view
-from modules import datastore
+from modules import datastore, transtron
 from modules.stations import attach_point_code, load_station_master
 
 DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
@@ -3237,13 +3237,15 @@ def main():
     # 通れる道マップ版を先に置く。規制の収録が国の配信で揃っており、
     # 高速道路の緊急車両の通行可能区間まで区間ごとの線で入るため、
     # こちらを主に見てもらう。県のJSON＋PDF転記の版は(旧版)に下げた。
-    tab_mlit, tab_mesh, tab_mesh_cmp, tab_overview, tab_dl = st.tabs(
+    (tab_mlit, tab_mesh, tab_mesh_cmp, tab_overview, tab_dl,
+     tab_probe) = st.tabs(
         [
             "道路規制×交通量",
             "人口推計値×交通量",
             "人口推計値の時点比較",
             "(旧版)道路規制×交通量",
             "データダウンロード",
+            "商用車プローブ",
         ]
     )
 
@@ -3720,6 +3722,13 @@ def main():
     # ------------------------------------------------------------------
     with tab_mesh_cmp:
         render_mesh_compare_tab(mainshock)
+
+    # ------------------------------------------------------------------
+    # 商用車プローブタブ（トランストロン）
+    # データレイアウトと、全期間を1本にまとめたCSVのダウンロード
+    # ------------------------------------------------------------------
+    with tab_probe:
+        transtron.render_tab()
 
 
 if __name__ == "__main__":
