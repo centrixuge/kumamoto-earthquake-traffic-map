@@ -31,7 +31,7 @@ from pathlib import Path
 import pandas as pd
 import streamlit as st
 
-from modules import private_store
+from modules import bzone, private_store
 
 LOCAL_DIR = Path(__file__).resolve().parents[1] / "data" / "transtron" / "bundle"
 META_FILE = "transtron_bundle_meta.json"
@@ -261,6 +261,35 @@ def render_tab() -> None:
             st.warning(str(e))
         if doc.get("sections_caption"):
             st.caption(doc["sections_caption"])
+
+    with st.expander("Bゾーンコードを市区町村に読み替える"):
+        st.markdown(bzone.RULE)
+        if doc.get("bzone_note"):
+            st.markdown(doc["bzone_note"])
+        if bzone.available():
+            table = bzone.load_table()
+            meta_b = bzone.load_meta()
+            st.dataframe(table.head(30), use_container_width=True,
+                         hide_index=True)
+            st.caption(
+                f"{len(table):,}行。出所: {meta_b.get('source', '-')}"
+                f"（取得 {str(meta_b.get('fetched_at', ''))[:10]}）。"
+                "上は先頭30行です。"
+            )
+            st.download_button(
+                "市区町村コード表をダウンロード（municipality_codes.csv）",
+                data=table.to_csv(index=False).encode("utf-8-sig"),
+                file_name="municipality_codes.csv", mime="text/csv",
+                key="bzone_dl")
+        else:
+            st.info(
+                "市区町村コード表がありません。"
+                "`python scripts/build_bzone_table.py` を実行してください。"
+            )
+        st.caption(
+            "ゾーン内訳（市区町村内のどのゾーンか）まで要る場合は、"
+            "道路交通センサスのゾーン区分表が別に必要です。"
+        )
 
     with st.expander("元の配布ファイルとの対応"):
         if doc.get("delivery_note"):
