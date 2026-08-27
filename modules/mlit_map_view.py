@@ -53,6 +53,9 @@ CONTENT_COLOR = {name: color for name, color, _ in CONTENT_CLASSES}
 # 解除後に残る規制も書かれていない。色を割り当てても意味が無いので
 # 地図・凡例・件数からは外す（一覧には残す）。
 RELEASED = ("通行止め解除", "通行止解除")
+# 解除済みは内容によらず灰色にする。「いま何が規制されているか」を先に読める
+# ようにするためで、解除済みの規制内容は色ではなくツールチップと一覧で見る。
+ENDED_COLOR = "#9aa3af"
 # 解除の告知は、規制の色分け（赤〜橙）とは別の色にする。緑の破線。
 RELEASE_COLOR = "#1f9d55"
 RELEASE_LAYER_NAME = "解除の告知"
@@ -132,15 +135,25 @@ def load_regulations() -> dict:
 
 def _style(item: dict) -> dict:
     """
-    色＝規制の内容、太さ＝道路種別、実線／破線＝規制中／解除済み。
-    色の意味を「道路規制×交通量」タブと揃え、道路種別は
-    レイヤと線の太さで分かるようにする。
+    色は「いまの状態」を先に表す。
+
+      規制中   … 規制の内容ごとの色（赤〜黄）
+      解除済み … 内容によらず灰色
+      解除の告知 … 緑（build_map 側で別レイヤに描く）
+
+    線種は色と重ねて読めるようにそろえる（実線＝規制中、破線＝いま規制は
+    無い）。太さは道路種別で、レイヤの区切りと同じ。
+
+    解除済みまで内容で色分けすると、地図の赤の大半が「もう解除された規制」に
+    なり、いま通れない場所が読み取れない。解除済みの内容はツールチップと
+    下の一覧で見る。
     """
     ended = display_state(item) == "解除済み"
     return {
-        "color": CONTENT_COLOR.get(content_class(item), "#5b6470"),
+        "color": ENDED_COLOR if ended
+                 else CONTENT_COLOR.get(content_class(item), "#5b6470"),
         "weight": LEVEL_WEIGHT.get(item["道路種別"], 4),
-        "opacity": 0.45 if ended else 0.95,
+        "opacity": 0.55 if ended else 0.95,
         "dashArray": "6,8" if ended else None,
     }
 
@@ -180,6 +193,30 @@ def _tooltip(item: dict) -> str:
         f"<b>{item['道路種別']}</b>"
         f"<table style='font-size:11px;border-collapse:collapse;'>{body}</table>"
     )
+
+
+def _draw(item: dict, style: dict, group) -> None:
+    """
+    1件を地図に置く。線が入っていないレコード（1地点だけのもの）は、
+    folium に任せると既定の青いピンになり、色の規則から外れる。
+    同じ色の小さい丸で描いて、規則の中に収める。
+    """
+    geometry = item["geometry"]
+    tooltip = folium.Tooltip(_tooltip(item), sticky=True)
+    if geometry.get("type") == "Point":
+        lon, lat = geometry["coordinates"][:2]
+        folium.CircleMarker(
+            location=[lat, lon], radius=5, color=style["color"],
+            weight=2, opacity=style["opacity"], fill=True,
+            fill_color=style["color"], fill_opacity=style["opacity"] * 0.5,
+            tooltip=tooltip,
+        ).add_to(group)
+        return
+    folium.GeoJson(
+        {"type": "Feature", "geometry": geometry, "properties": {}},
+        style_function=lambda _f, s=style: s,
+        tooltip=tooltip,
+    ).add_to(group)
 
 
 def build_map(data: dict, center=None, zoom: int = None,
@@ -231,12 +268,7 @@ def build_map(data: dict, center=None, zoom: int = None,
     used = set()
     for item in drawn_items(data):
         key = (item["道路種別"], display_state(item))
-        style = _style(item)
-        folium.GeoJson(
-            {"type": "Feature", "geometry": item["geometry"], "properties": {}},
-            style_function=lambda _f, s=style: s,
-            tooltip=folium.Tooltip(_tooltip(item), sticky=True),
-        ).add_to(layers[key])
+        _draw(item, _style(item), layers[key])
         used.add(key)
 
     for key, group in layers.items():
@@ -249,12 +281,7 @@ def build_map(data: dict, center=None, zoom: int = None,
     if releases:
         group = folium.FeatureGroup(name=RELEASE_LAYER_NAME, show=True)
         for item in releases:
-            folium.GeoJson(
-                {"type": "Feature", "geometry": item["geometry"],
-                 "properties": {}},
-                style_function=lambda _f: dict(RELEASE_STYLE),
-                tooltip=folium.Tooltip(_tooltip(item), sticky=True),
-            ).add_to(group)
+            _draw(item, dict(RELEASE_STYLE), group)
         group.add_to(fmap)
     if epicenter and epicenter_icon is not None:
         folium.Marker(
@@ -296,7 +323,11 @@ def legend_html(data: dict) -> str:
     このモジュールを古いまま使った時に、引数の不一致でページ全体が落ちる）。
     """
     items = drawn_items(data)
-    present_content = {content_class(i) for i in items}
+    # 規制中に出てくる内容だけを色の凡例に並べる。解除済みは内容によらず
+    # 灰色なので、解除済みにしか無い内容の色を出しても地図には存在しない。
+    active_content = {content_class(i) for i in items
+                      if display_state(i) == "規制中"}
+    has_ended = any(display_state(i) == "解除済み" for i in items)
     present_level = {i["道路種別"] for i in items}
 
     def _row(head: str, marks: str) -> str:
@@ -306,29 +337,39 @@ def legend_html(data: dict) -> str:
             f'<b style="white-space:nowrap;">{head}:</b>{marks}</div>'
         )
 
-    color_marks = " ".join(
-        f'<span style="white-space:nowrap;">'
-        f'<span style="display:inline-block;width:20px;height:5px;'
-        f'background:{color};vertical-align:middle;"></span> {name}</span>'
-        for name, color, _ in CONTENT_CLASSES if name in present_content
+    def _line(color: str, label: str, dashed: bool = False) -> str:
+        bar = (
+            f'<span style="display:inline-block;width:20px;height:0;'
+            f'border-top:5px dashed {color};vertical-align:middle;"></span>'
+            if dashed else
+            f'<span style="display:inline-block;width:20px;height:5px;'
+            f'background:{color};vertical-align:middle;"></span>'
+        )
+        return f'<span style="white-space:nowrap;">{bar} {label}</span>'
+
+    active_marks = " ".join(
+        _line(color, name)
+        for name, color, _ in CONTENT_CLASSES if name in active_content
     )
+    ended_marks = []
+    if has_ended:
+        ended_marks.append(_line(ENDED_COLOR, "解除済み（内容によらず灰色）",
+                                 dashed=True))
+    if release_items(data):
+        ended_marks.append(_line(RELEASE_COLOR, RELEASE_LAYER_NAME, dashed=True))
     width_marks = " ".join(
         f'<span style="white-space:nowrap;">'
         f'<span style="display:inline-block;width:20px;height:{weight}px;'
         f'background:#8a94a6;vertical-align:middle;"></span> {name}</span>'
         for name, _, weight in LEVELS if name in present_level
     )
+    rows = [_row("規制中の色（規制の内容）", active_marks)]
+    if ended_marks:
+        rows.append(_row("いま規制の無いもの（破線）", " ".join(ended_marks)))
+    rows.append(_row("線の太さ（道路種別）", width_marks))
     return (
         '<div style="font-size:0.79rem;line-height:1.45;margin:0 0 4px 0;">'
-        + _row("規制の色", color_marks)
-        + _row(
-            "線の太さ（道路種別）",
-            width_marks
-            + '<span style="white-space:nowrap;">'
-            '<span style="display:inline-block;width:20px;height:0;'
-            'border-top:4px dashed #888;vertical-align:middle;"></span>'
-            " 破線は解除済み</span>",
-        )
+        + "".join(rows)
         + "</div>"
     )
 
@@ -359,17 +400,24 @@ def content_note(data: dict) -> str:
     （104件・赤84件…）が残っていた。数え直して出す。
     """
     items = drawn_items(data)
-    counts = Counter(content_class(i) for i in items)
+    active = [i for i in items if display_state(i) == "規制中"]
+    ended = [i for i in items if display_state(i) == "解除済み"]
+    counts = Counter(content_class(i) for i in active)
     detail = "、".join(
         f"{name} {counts[name]}件"
         for name, _, _ in CONTENT_CLASSES if counts.get(name)
-    )
+    ) or "なし"
+    ended_detail = Counter(content_class(i) for i in ended)
     # 地図から外しているのは解除の告知だけ（道路種別が取れないものは
     # 解除済みの扱いで地図に残すので、ここでは外さない）。
     released = [i for i in data["items"] if is_release_record(i)]
     text = (
-        f"色は規制の内容で分けています（地図に出している{len(items)}件の内訳は"
-        f"{detail}）。"
+        f"色は「いまの状態」を先に読めるようにしています。**規制中の{len(active)}件**は"
+        f"規制の内容ごとの色（{detail}）、**解除済みの{len(ended)}件は内容によらず灰色**の"
+        "破線です（解除済みの内容は線をなぞるとツールチップに出ます。内訳は "
+        + "、".join(f"{name} {ended_detail[name]}件"
+                    for name, _, _ in CONTENT_CLASSES if ended_detail.get(name))
+        + "）。"
     )
     if released:
         text += (
