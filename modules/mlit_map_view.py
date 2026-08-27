@@ -60,6 +60,13 @@ ENDED_COLOR = "#9aa3af"
 # 解除済みの扱いにする（display_state）
 UNKNOWN_LEVEL = "不明"
 
+# 重なりの順。レイヤ一覧の並び（規制中が上、解除済みが下）とは別に、
+# 描く順は「解除済みの上に規制中」で固定する。レイヤは切り替えるたびに
+# 追加し直されるので、追加した順に任せるとオン・オフの操作で上下が入れ替わる。
+# 数字はLeafletの既定の重なり（タイル200・overlayPane400）の間に入れて、
+# 規制の線が観測点のマーカーを覆わないようにする。
+PANES = {"解除済み": ("kisei-ended", 396), "規制中": ("kisei-active", 398)}
+
 
 def is_release_record(item: dict) -> bool:
     """解除だけを告知しているレコードか（規制ではないので地図に出さない）。"""
@@ -182,27 +189,35 @@ def _tooltip(item: dict) -> str:
     )
 
 
-def _draw(item: dict, style: dict, group) -> None:
+def _draw(item: dict, style: dict, group, pane: str) -> None:
     """
     1件を地図に置く。線が入っていないレコード（1地点だけのもの）は、
     folium に任せると既定の青いピンになり、色の規則から外れる。
     同じ色の小さい丸で描いて、規則の中に収める。
+
+    pane は重なりの順を決める（PANES 参照）。レイヤ一覧の並びとは別に、
+    解除済みが規制中の上に乗らないようにするために要る。
     """
     geometry = item["geometry"]
     tooltip = folium.Tooltip(_tooltip(item), sticky=True)
     if geometry.get("type") == "Point":
         lon, lat = geometry["coordinates"][:2]
-        folium.CircleMarker(
+        marker = folium.CircleMarker(
             location=[lat, lon], radius=5, color=style["color"],
             weight=2, opacity=style["opacity"], fill=True,
             fill_color=style["color"], fill_opacity=style["opacity"] * 0.5,
             tooltip=tooltip,
-        ).add_to(group)
+        )
+        # folium は円の描画オプションを絞り込んでいて pane を落とすので、
+        # 出来上がったオプションに直接入れる（これが無いとこの1件だけ
+        # 既定の重なりに乗り、解除済みでも規制中の上に出る）。
+        marker.options["pane"] = pane
+        marker.add_to(group)
         return
     folium.GeoJson(
         {"type": "Feature", "geometry": geometry, "properties": {}},
         style_function=lambda _f, s=style: s,
-        tooltip=tooltip,
+        tooltip=tooltip, pane=pane,
     ).add_to(group)
 
 
@@ -253,10 +268,17 @@ def build_map(data: dict, center=None, zoom: int = None,
                 name=f"{SHORT_LEVEL.get(level, level)}：{state}", show=True,
             )
 
+    # 重なりの順を決めるpane。ツールチップを出したいので pointer_events を
+    # 有効にする（既定のFalseだと線に当たらなくなる）。
+    for pane_name, z_index in PANES.values():
+        folium.map.CustomPane(pane_name, z_index=z_index,
+                              pointer_events=True).add_to(fmap)
+
     used = set()
     for item in drawn_items(data):
-        key = (item["道路種別"], display_state(item))
-        _draw(item, _style(item), layers[key])
+        state = display_state(item)
+        key = (item["道路種別"], state)
+        _draw(item, _style(item), layers[key], PANES[state][0])
         used.add(key)
 
     for key, group in layers.items():
