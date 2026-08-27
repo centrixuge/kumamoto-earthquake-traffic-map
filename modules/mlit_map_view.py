@@ -56,11 +56,6 @@ RELEASED = ("通行止め解除", "通行止解除")
 # 解除済みは内容によらず灰色にする。「いま何が規制されているか」を先に読める
 # ようにするためで、解除済みの規制内容は色ではなくツールチップと一覧で見る。
 ENDED_COLOR = "#9aa3af"
-# 解除の告知は、規制の色分け（赤〜橙）とは別の色にする。緑の破線。
-RELEASE_COLOR = "#1f9d55"
-RELEASE_LAYER_NAME = "解除の告知"
-RELEASE_STYLE = {"color": RELEASE_COLOR, "weight": 5, "opacity": 0.75,
-                 "dashArray": "2,7"}
 # 道路種別が取れなかったレコードに付ける名前。地図では規制中として出さず、
 # 解除済みの扱いにする（display_state）
 UNKNOWN_LEVEL = "不明"
@@ -105,16 +100,6 @@ def display_state(item: dict) -> str:
 def drawn_items(data: dict) -> list:
     """規制として色分けして出すもの。解除の告知だけのレコードは含めない。"""
     return [i for i in data["items"] if not is_release_record(i)]
-
-
-def release_items(data: dict) -> list:
-    """
-    「通行止め解除」とだけ書かれたレコード。規制ではなく解除の告知だが、
-    配布データには区間の線形が入っていて、配布元の地図にも出ている。
-    どこが解除されたかは読み取れるので、規制の色分けとは別のレイヤに出す。
-    """
-    return [i for i in data["items"]
-            if is_release_record(i) and i.get("geometry")]
 
 
 # レイヤ一覧に出す短い名前。正式な呼び方は凡例に出している。
@@ -260,9 +245,11 @@ def build_map(data: dict, center=None, zoom: int = None,
     layers = {}
     for state in ("規制中", "解除済み"):
         for level, _, _ in LEVELS:
+            # 解除済みも既定で出す。既定の交通量は発災後1週間で、その頃の
+            # 規制はいまはほとんど解除済み。隠すと、交通量が落ちた場所に
+            # 規制があったことが地図から読めない。
             layers[(level, state)] = folium.FeatureGroup(
-                name=f"{SHORT_LEVEL.get(level, level)}：{state}",
-                show=(state == "規制中"),
+                name=f"{SHORT_LEVEL.get(level, level)}：{state}", show=True,
             )
 
     used = set()
@@ -274,15 +261,6 @@ def build_map(data: dict, center=None, zoom: int = None,
     for key, group in layers.items():
         if key in used:
             group.add_to(fmap)
-
-    # 解除の告知は規制ではないので、規制の色分け（赤〜橙）には混ぜず、
-    # 緑の破線で別レイヤに出す。どの区間が解除されたかは読み取れるため。
-    releases = release_items(data)
-    if releases:
-        group = folium.FeatureGroup(name=RELEASE_LAYER_NAME, show=True)
-        for item in releases:
-            _draw(item, dict(RELEASE_STYLE), group)
-        group.add_to(fmap)
     if epicenter and epicenter_icon is not None:
         folium.Marker(
             location=epicenter, icon=epicenter_icon, tooltip="震源（本震）",
@@ -353,10 +331,8 @@ def legend_html(data: dict) -> str:
     )
     ended_marks = []
     if has_ended:
-        ended_marks.append(_line(ENDED_COLOR, "解除済み（内容によらず灰色）",
+        ended_marks.append(_line(ENDED_COLOR, "内容によらず灰色の破線",
                                  dashed=True))
-    if release_items(data):
-        ended_marks.append(_line(RELEASE_COLOR, RELEASE_LAYER_NAME, dashed=True))
     width_marks = " ".join(
         f'<span style="white-space:nowrap;">'
         f'<span style="display:inline-block;width:20px;height:{weight}px;'
@@ -365,7 +341,7 @@ def legend_html(data: dict) -> str:
     )
     rows = [_row("規制中の色（規制の内容）", active_marks)]
     if ended_marks:
-        rows.append(_row("いま規制の無いもの（破線）", " ".join(ended_marks)))
+        rows.append(_row("解除済み", " ".join(ended_marks)))
     rows.append(_row("線の太さ（道路種別）", width_marks))
     return (
         '<div style="font-size:0.79rem;line-height:1.45;margin:0 0 4px 0;">'
@@ -422,10 +398,9 @@ def content_note(data: dict) -> str:
     if released:
         text += (
             f"このほかに「通行止め解除」とだけ書かれたレコードが{len(released)}件"
-            "あります。規制ではなく解除の告知で、解除後に残る規制も書かれて"
-            "いませんが、区間の線形は入っているので、"
-            f"レイヤ「{RELEASE_LAYER_NAME}」（緑の破線）として別に出しています"
-            "（規制の色分けには混ぜていません）。"
+            "ありますが、地図には出していません。規制ではなく解除の告知で、"
+            "同じ区間の規制じたいは解除済み（灰色）として出ているためです"
+            "（下の一覧には入っています）。"
         )
     if not counts.get("対面通行・片側交互など"):
         text += (
