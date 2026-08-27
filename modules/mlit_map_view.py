@@ -336,13 +336,21 @@ def legend_html(data: dict) -> str:
         )
 
     def _line(color: str, label: str, dashed: bool = False) -> str:
-        bar = (
-            f'<span style="display:inline-block;width:20px;height:0;'
-            f'border-top:5px dashed {color};vertical-align:middle;"></span>'
-            if dashed else
-            f'<span style="display:inline-block;width:20px;height:5px;'
-            f'background:{color};vertical-align:middle;"></span>'
-        )
+        # 破線は border の dashed だと、20px の見本では破線に見えない
+        # （5px 幅の border は破線の1つ分が10px近くあり、1本しか入らない）。
+        # 地図と同じ 6px の線・8px のすき間を、背景の繰り返しで描く。
+        if dashed:
+            bar = (
+                f'<span style="display:inline-block;width:34px;height:5px;'
+                f'background:repeating-linear-gradient(to right,'
+                f'{color} 0 6px,transparent 6px 14px);'
+                f'vertical-align:middle;"></span>'
+            )
+        else:
+            bar = (
+                f'<span style="display:inline-block;width:20px;height:5px;'
+                f'background:{color};vertical-align:middle;"></span>'
+            )
         return f'<span style="white-space:nowrap;">{bar} {label}</span>'
 
     active_marks = " ".join(
