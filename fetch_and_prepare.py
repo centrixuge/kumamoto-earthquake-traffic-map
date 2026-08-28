@@ -309,11 +309,51 @@ def _fetch_missing_baseline(
     return pd.concat(new_dfs, ignore_index=True)
 
 
+def _load_quake_info() -> dict:
+    """前回書き出した quake_info.json（無ければ空）。"""
+    path = os.path.join(DATA_DIR, "quake_info.json")
+    if not os.path.exists(path):
+        return {}
+    with open(path, encoding="utf-8") as f:
+        return json.load(f)
+
+
+def _mainshock_info(stored: dict) -> dict:
+    """
+    本震の震源・震度。気象庁のlist.jsonは約1か月で古いものが流れるので、
+    本震が消えたあとは前回書き出した値をそのまま使う（本震は変わらない）。
+    """
+    try:
+        return get_quake_info(MAINSHOCK_EID)
+    except ValueError:
+        prev = stored.get("mainshock")
+        if not prev:
+            raise
+        print(f"[quake] 本震 {MAINSHOCK_EID} は気象庁のlist.jsonから流れたため、"
+              "前回取得した値を使う")
+        return prev
+
+
+def _merge_events(stored: list, fetched: list) -> list:
+    """
+    余震の一覧を追記専用にする。list.jsonから流れた地震も残す。
+    同じeidが両方にあれば新しく取れたほうを採る（続報で震度が変わるため）。
+    """
+    merged = {e.get("eid"): e for e in stored if e.get("eid")}
+    merged.update({e.get("eid"): e for e in fetched if e.get("eid")})
+    dropped = len(merged) - len(fetched)
+    if dropped > 0:
+        print(f"[quake] 気象庁のlist.jsonから流れた地震 {dropped}件を、"
+              "前回までの記録から補った")
+    return sorted(merged.values(), key=lambda e: e.get("occurred_at") or "")
+
+
 def main():
     os.makedirs(DATA_DIR, exist_ok=True)
     now = _now_jst()
 
-    mainshock = get_quake_info(MAINSHOCK_EID)
+    stored_quake = _load_quake_info()
+    mainshock = _mainshock_info(stored_quake)
     quake_occurred_at = pd.Timestamp(
         datetime.fromisoformat(mainshock["occurred_at"]).replace(tzinfo=None)
     )
@@ -380,11 +420,14 @@ def main():
     # 期間で数える。TARGET_STARTは交通量データの取得開始日（本震の前日）であり、
     # 地震の集計期間とは意味が異なるため別に定義する。
     events_period_start = quake_occurred_at.to_pydatetime()
-    aftershocks = get_significant_events(
-        bbox=BBOX,
-        start_dt=events_period_start,
-        end_dt=target_end,
-        min_intensity=MIN_AFTERSHOCK_INTENSITY,
+    aftershocks = _merge_events(
+        stored_quake.get("events") or [],
+        get_significant_events(
+            bbox=BBOX,
+            start_dt=events_period_start,
+            end_dt=target_end,
+            min_intensity=MIN_AFTERSHOCK_INTENSITY,
+        ),
     )
 
     # 実績の既定は5分間値。平常時は同じ日区分の1時間値（各区分8日分）から求め、
@@ -420,6 +463,11 @@ def main():
         "mainshock": mainshock,
         "events": aftershocks,
         "events_min_intensity": MIN_AFTERSHOCK_INTENSITY,
+        "events_note": (
+            "気象庁のlist.jsonは約1か月で古いものが流れる。"
+            "本震も余震も、いちど取得したものは quake_info.json に残し続ける"
+            "（追記専用）。"
+        ),
         "events_period_start": events_period_start.isoformat(),
         "events_period_end": target_end.isoformat(),
         "generated_at": now.isoformat(),
