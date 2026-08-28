@@ -96,6 +96,17 @@ def main() -> None:
             _write(joined[cols], f"docomo_od_{axis}_all.csv")
             | {"axis": AXIS_LABEL[axis], "period": "震災前＋震災後"})
 
+    # 画面に出す説明文（期間・区分など、データの中身に触れるもの）は、
+    # 公開リポジトリに置かない。gitignore下の display.json に書いておき、
+    # ここでは読んでメタに載せるだけにする。無ければ何も足さない
+    # （アプリ側は提供の条件だけを出す）。
+    display = SRC / "display.json"
+    if display.exists():
+        meta["display"] = json.loads(display.read_text(encoding="utf-8"))
+        print(f"  display.json を読み込んだ（{len(meta['display'])}項目）")
+    else:
+        print("  display.json がありません（画面の説明文は出ません）")
+
     layout = SRC / LAYOUT_XLSX
     if layout.exists():
         (OUT / layout.name).write_bytes(layout.read_bytes())

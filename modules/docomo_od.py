@@ -50,29 +50,17 @@ USAGE_LIMIT = (
     "この範囲を超えて配らないでください。"
 )
 
-# ---- 中身の説明（配布時の早見表から） ----
-INTRO = (
-    "**震災前**（2026/07/04〜07/10）と**震災後**（2026/07/28〜08/21）の2期間。"
-    "集計軸は居住地別・年代別・飛行機の3通りで、"
-    "**震災後だけ氷川町断面の方向別**（北から／南から）になっています。"
-    "震災前は自動車と鉄道、震災後は鉄道を自動車に置き換えて集計されています。"
-)
-TYPO_NOTE = (
-    "配布データのタイポを1か所だけ直しています。`DIRECTION` の値が "
-    "`Fron South`（`From` の誤り）だったので `From South` にしました。"
-    "ほかの値・行は配布のままです（直した記録は `docomo_od_meta.json` の "
-    "`direction_fix` に残しています）。"
-)
 WIP_NOTE = (
     "**分析結果の可視化は作業中です。** いまはデータの配布だけを行っています。"
 )
 
-# 表示の並び（集計軸ごとに、まとめたもの → 期間別の順）
-GROUPS = [
-    ("residence", "居住地別",
-     "居住地（熊本市・宇城市・宇土市・氷川町・八代市・九州各県・九州以外）ごとの集計。"),
-    ("age", "年代別", "10代〜80代の年代ごとの集計。"),
-    ("air", "飛行機", "飛行機での移動の集計（日別）。"),
+# 中身の説明（期間・集計軸・直したところ）は、公開リポジトリに置かない。
+# 置き場の docomo_od_meta.json の "display" から読む。読めないときは
+# 提供の条件と「準備中」だけを出す。
+FALLBACK_GROUPS = [
+    {"key": "residence", "label": "居住地別"},
+    {"key": "age", "label": "年代別"},
+    {"key": "air", "label": "飛行機"},
 ]
 
 PREPARING = (
@@ -149,7 +137,9 @@ def render_tab() -> None:
         st.warning(str(e))
         return
 
-    st.markdown(INTRO)
+    display = meta.get("display", {})
+    if display.get("intro"):
+        st.markdown(display["intro"])
 
     rows = []
     for info in meta.get("files", []):
@@ -166,10 +156,13 @@ def render_tab() -> None:
         f"{private_store.source_label(LOCAL_DIR, META_FILE, SECTION, ENV_PREFIX)}"
     )
 
-    tabs = st.tabs([label for _, label, _ in GROUPS])
-    for tab, (axis, label, note) in zip(tabs, GROUPS):
+    groups = display.get("groups") or FALLBACK_GROUPS
+    tabs = st.tabs([g["label"] for g in groups])
+    for tab, group in zip(tabs, groups):
+        axis, label = group["key"], group["label"]
         with tab:
-            st.markdown(f"**{label}** — {note}")
+            st.markdown(f"**{label}**"
+                        + (f" — {group['note']}" if group.get("note") else ""))
             names = [i["file"] for i in meta.get("files", [])
                      if i["file"].startswith(f"docomo_od_{axis}_")]
             # まとめたもの（_all）を先に出す
@@ -201,7 +194,8 @@ def render_tab() -> None:
                         st.warning(str(e))
 
     with st.expander("配布ファイルとの対応・直したところ"):
-        st.markdown(TYPO_NOTE)
+        if display.get("typo_note"):
+            st.markdown(display["typo_note"])
         st.dataframe(pd.DataFrame([
             {"配布ファイル": src, "このタブのファイル": info["file"]}
             for src, info in ((i.get("source"), i) for i in meta.get("files", []))
@@ -216,6 +210,7 @@ def render_tab() -> None:
                     mime=("application/vnd.openxmlformats-officedocument"
                           ".spreadsheetml.sheet"),
                     key="docomo_dl_layout")
-                st.caption("配布時に付いていたファイル名の説明と集計軸の早見表です。")
+                if display.get("layout_caption"):
+                    st.caption(display["layout_caption"])
             except private_store.PrivateDataUnavailable as e:
                 st.warning(str(e))
