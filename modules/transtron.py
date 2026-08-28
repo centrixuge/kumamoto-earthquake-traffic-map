@@ -1,7 +1,7 @@
 """
 商用車プローブデータ（トランストロン）のダウンロードタブ。
 
-配布は期間ごと・県ごと・日ごとに30ファイルに分かれている。分析のたびに
+配布は期間ごと・県ごと・日ごとに分かれている（いまは3配布・46ファイル）。分析のたびに
 つなぎ直すのは手間で、しかも**同じキーが隣の期間のファイルにも現れる**ため
 素朴につなぐと二重に数える。そこで `scripts/build_transtron_bundle.py` が
 全期間を1本にまとめたものを作り、このタブではそれを配る。
@@ -180,8 +180,29 @@ def _download_block(file_name: str, key: str, info: dict) -> None:
             "押すと読み込んでからダウンロードのボタンが出ます。")
 
 
+# 提供元。日野データシステムのデータは受け取り待ち。
+PROVIDERS = [
+    ("トランストロン", "受領済み"),
+    ("日野データシステム", "受け取り待ち"),
+]
+WIP_NOTE = (
+    "**分析結果の可視化は作業中です。** いまはデータの配布だけを行っています。"
+)
+
+
+def _provider_note() -> None:
+    """提供元の状況。データが読めるかどうかにかかわらず出す。"""
+    st.markdown(WIP_NOTE)
+    st.caption(
+        "提供元: "
+        + " ／ ".join(f"{name}（{state}）" for name, state in PROVIDERS)
+        + "。受け取ったものから順にこのタブへ足していきます。"
+    )
+
+
 def render_tab() -> None:
-    st.subheader("商用車プローブデータ（トランストロン）")
+    st.subheader("商用車プローブデータ")
+    _provider_note()
     if not available():
         st.info(PREPARING)
         return
@@ -192,6 +213,7 @@ def render_tab() -> None:
         st.warning(str(e))
         return
 
+    st.markdown("#### トランストロン")
     st.caption(doc.get("source_note", ""), unsafe_allow_html=True)
     if doc.get("terms_note"):
         st.warning(doc["terms_note"])
@@ -321,3 +343,9 @@ def render_tab() -> None:
     if notes:
         with st.expander("分析にあたっての注意と、別途必要になるデータ"):
             st.markdown("\n".join(f"- {n}" for n in notes))
+
+    st.markdown("#### 日野データシステム")
+    st.info(
+        "データを受け取り次第、トランストロンと同じようにここへ置きます"
+        "（提供条件の確認が済んだものから）。"
+    )

@@ -51,6 +51,8 @@ DELIVERIES = {
     "202607": {"danmen": "danmen202607.zip", "keiro": "keiro202607.zip"},
     "20260801to04": {"danmen": "danmen20260801to04.zip",
                      "keiro": "keiro20260801to04.zip"},
+    "20260805to09": {"danmen": "danmen20260805to09.zip",
+                     "keiro": "keiro20260805to09.zip"},
 }
 
 
