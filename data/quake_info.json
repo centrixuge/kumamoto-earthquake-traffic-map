@@ -9800,10 +9800,10 @@
   "events_min_intensity": 5,
   "events_note": "気象庁のlist.jsonは約1か月で古いものが流れる。本震も余震も、いちど取得したものは quake_info.json に残し続ける（追記専用）。",
   "events_period_start": "2026-07-28T16:27:00",
-  "events_period_end": "2026-08-30T19:51:09.384690",
-  "generated_at": "2026-08-30T19:51:09.384690",
+  "events_period_end": "2026-08-31T00:38:54.947332",
+  "generated_at": "2026-08-31T00:38:54.947332",
   "target_start": "2026-07-27T03:00:00",
-  "target_end": "2026-08-30T19:51:09.384690",
+  "target_end": "2026-08-31T00:38:54.947332",
   "target_end_cap": "2026-09-07T03:00:00",
   "baseline_windows": [
     {
