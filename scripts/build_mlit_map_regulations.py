@@ -189,13 +189,41 @@ def _ends(geometry) -> list:
 
 
 def _load_pref() -> list:
+    """
+    熊本県の公開JSON。6時間ごとの自動取得で更新されるが、その取得は main に
+    しかコミットされないので、作業ブランチでは古いことがある。**古いまま
+    突き合わせると、とうに解除された規制を規制中のままにしてしまう**ので、
+    ファイルの更新時刻を出して、古ければ警告する。
+    """
     if not os.path.exists(PREF_FILE):
         print("  熊本県の公開JSONが見つからないので突き合わせは行わない")
         return []
+    mtime = datetime.fromtimestamp(os.path.getmtime(PREF_FILE))
+    age_days = (datetime.now() - mtime).total_seconds() / 86400
     with open(PREF_FILE, encoding="utf-8") as f:
         data = json.load(f)
     items = data["items"] if isinstance(data, dict) and "items" in data else data
-    return items or []
+    items = items or []
+    released = sum(1 for i in items if (i.get("content") or "").strip() == "解除")
+    print(f'  熊本県の公開JSON: {len(items)}件（「解除」{released}件）'
+          f' 更新 {mtime:%Y-%m-%d %H:%M}')
+    if age_days > 2:
+        print(f'  ※ この突き合わせ元は {age_days:.1f}日前のものです。'
+              '自動取得は main に入るので、`git checkout origin/main -- '
+              'data/regulations.json` で新しくしてから作り直してください')
+    _load_pref.info = {
+        "件数": len(items), "解除": released,
+        "更新": mtime.strftime("%Y-%m-%d %H:%M"),
+        "経過日数": round(age_days, 2),
+    }
+    return items
+
+
+def _is_released(p: dict, now: datetime) -> bool:
+    """県の公開JSONの1件が、いま解除されているか。"""
+    ended = parse_time(p.get("end_timestamp"))
+    return ((p.get("content") or "").strip() == "解除"
+            or (ended is not None and ended <= now))
 
 
 def cross_check(results: list, now: datetime) -> int:
@@ -224,20 +252,30 @@ def cross_check(results: list, now: datetime) -> int:
             dist = min((_km(e, pt) for e in ends), default=None)
             if dist is not None and (best is None or dist < best[0]):
                 best = (dist, p)
+        same_route = by_route.get(_norm_route(item["路線名"]), [])
+        basis = "区間単位"
         if best is None or best[0] > PREF_MATCH_KM:
-            continue
-        dist, p = best
+            # 近い区間が見つからなくても、その路線について県が持っている
+            # 規制がすべて解除済みなら、路線としては解除されたと見る
+            # （県道・市区町村道は県のフィードが権威。高速・直轄国道は
+            # そもそも県のフィードに載らないので、この判定はしない）。
+            if item["道路種別"] != "県道・市区町村道" or not same_route:
+                continue
+            if not all(_is_released(p, now) for p in same_route):
+                continue
+            p = max(same_route, key=lambda x: str(x.get("end_timestamp") or ""))
+            dist = best[0] if best else None
+            basis = "路線単位"
+        else:
+            dist, p = best
         end_text = p.get("end_timestamp")
-        ended = parse_time(end_text)
-        is_released = (
-            (p.get("content") or "").strip() == "解除"
-            or (ended is not None and ended <= now)
-        )
+        is_released = _is_released(p, now)
         item["県フィード照合"] = {
             "路線名": p.get("route_name"),
             "内容": p.get("content"),
             "終了日時": end_text,
-            "距離km": round(dist, 2),
+            "距離km": round(dist, 2) if dist is not None else None,
+            "判定根拠": basis,
             "判定": "解除済み" if is_released else "規制中",
         }
         released += bool(is_released)
@@ -348,6 +386,8 @@ def build() -> dict:
         "regulation_stale_days": round(stale_days, 2),
         # 県の公開JSONでは解除されているのに、配布にはまだ残っている件数
         "pref_released_count": pref_released,
+        # 突き合わせに使った県の公開JSONの素性（古いまま使うと取りこぼす）
+        "pref_source": getattr(_load_pref, "info", None),
         "latest_snapshot": last_time.strftime("%Y-%m-%d %H:%M"),
         # 規制情報としての最新時点。上のファイル名の時刻とずれることがある
         "latest_regulation_time": last_reg_time.strftime("%Y-%m-%d %H:%M"),

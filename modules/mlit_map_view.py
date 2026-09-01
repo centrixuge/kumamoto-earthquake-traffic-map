@@ -236,7 +236,9 @@ def _tooltip(item: dict) -> str:
             f"解除済みとして表示。通れる道マップの配布にはまだ残っていますが、"
             f"熊本県の公開JSONでは「{pref.get('内容')}」"
             f"{'・終了 ' + str(pref['終了日時']) if pref.get('終了日時') else ''}"
-            f"（{pref.get('路線名')}／{pref.get('距離km')}km 離れた同名区間と照合）",
+            f"（{pref.get('路線名')}と照合／{pref.get('判定根拠', '')}"
+            + (f"・{pref['距離km']}km 離れた区間" if pref.get("距離km") is not None else "")
+            + "）",
         ))
     if item["状態"] == "解除済み":
         rows.append(("解除の確認", item["解除確認時点"] or "（最新時点で消失）"))
