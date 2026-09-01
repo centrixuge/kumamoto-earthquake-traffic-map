@@ -454,6 +454,56 @@ _REGULATION_HISTORY_COLUMNS = [
 
 # (CSVファイル名, Excelのシート名, データセット名, 列定義)
 # シート名はExcelの制約（31文字以内・ : \ / ? * [ ] を含まない）に収まるよう短くしている。
+CUSTOM_RANGE_LABEL = "期間を指定"
+
+
+def period_selector(key_prefix: str, quake_at, last_at, first_at=None):
+    """
+    交通量のグラフ（と規制の地図）の対象期間を選ぶ。
+
+    既定の選択肢に加えて「期間を指定」を置き、選ぶと開始日・終了日を
+    直接入れられるようにする。日単位で、開始日の0:00から終了日の24:00まで。
+    2つのタブで同じものを出すので、ここにまとめてある。
+
+    戻り値は (選択したラベル, (開始, 終了))。
+    """
+    names = list(TIMESERIES_RANGES.keys()) + [CUSTOM_RANGE_LABEL]
+    state_key = f"_ts_range_{key_prefix}"
+    saved = st.session_state.get(state_key, TIMESERIES_DEFAULT_RANGE)
+    name = st.selectbox(
+        "交通量のグラフの表示期間", names,
+        index=names.index(saved) if saved in names
+        else names.index(TIMESERIES_DEFAULT_RANGE),
+        key=f"timeseries_range_{key_prefix}",
+    )
+    st.session_state[state_key] = name
+
+    if name != CUSTOM_RANGE_LABEL:
+        return name, TIMESERIES_RANGES[name](quake_at, last_at)
+
+    # 既定の幅を初期値にしておく。下限はデータの最初（無ければ表示の左端）。
+    default_from, default_to = TIMESERIES_RANGES[TIMESERIES_DEFAULT_RANGE](
+        quake_at, last_at)
+    low = (first_at or TIMESERIES_DISPLAY_START).normalize()
+    high = last_at.normalize()
+    picked = st.date_input(
+        "集計する期間（開始日・終了日）",
+        value=(max(default_from, low).date(),
+               min(default_to - pd.Timedelta(days=1), high).date()),
+        min_value=low.date(), max_value=high.date(),
+        key=f"timeseries_dates_{key_prefix}",
+        help="開始日の0:00から終了日の24:00までを集計します。",
+    )
+    # 選び直している途中は1日しか返ってこないので、その間は同じ日で扱う
+    if isinstance(picked, (list, tuple)):
+        start_d, end_d = (picked if len(picked) == 2 else (picked[0], picked[0]))
+    else:
+        start_d = end_d = picked
+    start = pd.Timestamp(start_d)
+    end = pd.Timestamp(end_d) + pd.Timedelta(days=1)
+    return name, (start, end)
+
+
 DATA_DICTIONARY = [
     ("kumamoto_traffic_5min_archive.csv", "5分間交通量", "5分間交通量（アーカイブ全期間）", _TRAFFIC_COLUMNS),
     ("kumamoto_traffic_hourly_archive.csv", "1時間交通量", "1時間交通量（アーカイブ全期間）", _TRAFFIC_COLUMNS),
@@ -1977,17 +2027,19 @@ def render_mlit_beta_tab(point_summary: pd.DataFrame, point_labels: dict,
         st.session_state["_ts_view_beta"] = view
         cfg = TIMESERIES_VIEWS[view]
     with col_range:
-        range_names = list(TIMESERIES_RANGES.keys())
-        saved_range = st.session_state.get("_ts_range_beta", TIMESERIES_DEFAULT_RANGE)
-        range_name = st.selectbox(
-            "交通量のグラフの表示期間", range_names,
-            index=(
-                range_names.index(saved_range) if saved_range in range_names
-                else range_names.index(TIMESERIES_DEFAULT_RANGE)
-            ),
-            key="timeseries_range_beta",
+        # 期間の選択肢と、指定できる範囲の上下限に使うので、ここで読む
+        # （load_observations はキャッシュ済み）。
+        ts_obs = load_observations(cfg["file"])
+        last_at = (
+            ts_obs["datetime"].max() if not ts_obs.empty
+            else quake_at + pd.Timedelta(days=7)
         )
-        st.session_state["_ts_range_beta"] = range_name
+        first_at = (
+            ts_obs["datetime"].min() if not ts_obs.empty
+            else TIMESERIES_DISPLAY_START
+        )
+        range_name, x_range = period_selector(
+            "beta", quake_at, last_at, first_at)
     with col_clear:
         st.write("")
         if st.button("選択をクリア", disabled=not selected_points, key="clear_beta"):
@@ -1998,14 +2050,6 @@ def render_mlit_beta_tab(point_summary: pd.DataFrame, point_labels: dict,
     selected_points = picked
     st.session_state["selected_points_beta"] = picked
 
-    # 表示期間の右端はデータの最後の時刻。地図（規制の期間の絞り込み）と
-    # 時系列の両方で使うので、列を分ける前に出しておく。
-    ts_obs = load_observations(cfg["file"])
-    last_at = (
-        ts_obs["datetime"].max() if not ts_obs.empty
-        else quake_at + pd.Timedelta(days=7)
-    )
-
     col_map, col_ts = st.columns([2, 3], gap="large")
     with col_ts:
         st.subheader("選択観測点の交通量の時系列変化（平常時 vs 観測実績）")
@@ -2015,7 +2059,7 @@ def render_mlit_beta_tab(point_summary: pd.DataFrame, point_labels: dict,
         # 押し下げるので、地図の下に置く。
         # 地図は「交通量のグラフで選んでいる期間に効いていた規制」だけにする。
         # 交通量が落ちた時期と規制の対応を、同じ期間で読めるようにするため。
-        win_from, win_to = TIMESERIES_RANGES[range_name](quake_at, last_at)
+        win_from, win_to = x_range
         data_window = mlit_map_view.filter_window(data, win_from, win_to)
         st.markdown(
             mlit_map_view.legend_html(data_window)
@@ -2096,7 +2140,7 @@ def render_mlit_beta_tab(point_summary: pd.DataFrame, point_labels: dict,
             mlit_bands=(),
             baseline_daytypes=quake_info.get("hourly_baseline_daytypes"),
             series_mode=cfg.get("series", "total"),
-            x_range=TIMESERIES_RANGES[range_name](quake_at, last_at),
+            x_range=x_range,
             key_prefix="beta",
         )
 
@@ -2412,20 +2456,17 @@ def main():
             with col_range:
                 # 粒度ラジオと同じ理由で地図より前に作る（地図クリックの
                 # st.rerun() で中断されるとウィジェットの状態が落ちるため）。
-                range_names = list(TIMESERIES_RANGES.keys())
-                saved_range = st.session_state.get(
-                    "_timeseries_range_choice", TIMESERIES_DEFAULT_RANGE
+                ts_obs_legacy = load_observations(cfg["file"])
+                last_at_legacy = (
+                    ts_obs_legacy["datetime"].max() if not ts_obs_legacy.empty
+                    else quake_at + pd.Timedelta(days=7)
                 )
-                range_name = st.selectbox(
-                    "交通量のグラフの表示期間",
-                    range_names,
-                    index=(
-                        range_names.index(saved_range) if saved_range in range_names
-                        else range_names.index(TIMESERIES_DEFAULT_RANGE)
-                    ),
-                    key="timeseries_range",
+                first_at_legacy = (
+                    ts_obs_legacy["datetime"].min() if not ts_obs_legacy.empty
+                    else TIMESERIES_DISPLAY_START
                 )
-                st.session_state["_timeseries_range_choice"] = range_name
+                range_name, x_range_legacy = period_selector(
+                    "legacy", quake_at, last_at_legacy, first_at_legacy)
             with col_clear:
                 st.write("")
                 if st.button("選択をクリア", disabled=not selected_points):
@@ -2648,13 +2689,8 @@ def main():
                                 f"{item['route_name']}（{item['section']}）{item['content']}"
                             ),
                         })
-                ts_obs = load_observations(cfg["file"])
-                last_at = (
-                    ts_obs["datetime"].max() if not ts_obs.empty
-                    else quake_at + pd.Timedelta(days=7)
-                )
                 render_timeseries(
-                    ts_obs,
+                    ts_obs_legacy,
                     selected_points, quake_at, other_event_times, point_labels,
                     quake_info.get("hourly_baseline_windows"),
                     unit_label=cfg["unit_label"],
@@ -2662,7 +2698,7 @@ def main():
                     mlit_bands=mlit_bands,
                     baseline_daytypes=quake_info.get("hourly_baseline_daytypes"),
                     series_mode=cfg.get("series", "total"),
-                    x_range=TIMESERIES_RANGES[range_name](quake_at, last_at),
+                    x_range=x_range_legacy,
                 )
 
     # ------------------------------------------------------------------
