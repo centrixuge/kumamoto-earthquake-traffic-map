@@ -125,7 +125,6 @@ TIMESERIES_RANGES = {
     # 取得の上限を9月第1週まで伸ばしたので、そこまで一度に見られる幅も置く。
     # 日数で書くと上限を動かすたびに直すことになるため、右端はデータの最後。
     "全期間": lambda quake, last: (TIMESERIES_DISPLAY_START, last),
-    "最新3日間": lambda quake, last: (last - pd.Timedelta(days=3), last),
 }
 # 既定は発災後1週間。発災直後の落ち込みと戻り始めが1枚で読める。
 TIMESERIES_DEFAULT_RANGE = "発災後1週間"
@@ -1999,6 +1998,14 @@ def render_mlit_beta_tab(point_summary: pd.DataFrame, point_labels: dict,
     selected_points = picked
     st.session_state["selected_points_beta"] = picked
 
+    # 表示期間の右端はデータの最後の時刻。地図（規制の期間の絞り込み）と
+    # 時系列の両方で使うので、列を分ける前に出しておく。
+    ts_obs = load_observations(cfg["file"])
+    last_at = (
+        ts_obs["datetime"].max() if not ts_obs.empty
+        else quake_at + pd.Timedelta(days=7)
+    )
+
     col_map, col_ts = st.columns([2, 3], gap="large")
     with col_ts:
         st.subheader("選択観測点の交通量の時系列変化（平常時 vs 観測実績）")
@@ -2006,13 +2013,17 @@ def render_mlit_beta_tab(point_summary: pd.DataFrame, point_labels: dict,
         st.subheader("常時観測点別の異常度 × 通行規制")
         # 地図の上は色分けだけにする。件数の表は縦に場所を取って地図を
         # 押し下げるので、地図の下に置く。
+        # 地図は「交通量のグラフで選んでいる期間に効いていた規制」だけにする。
+        # 交通量が落ちた時期と規制の対応を、同じ期間で読めるようにするため。
+        win_from, win_to = TIMESERIES_RANGES[range_name](quake_at, last_at)
+        data_window = mlit_map_view.filter_window(data, win_from, win_to)
         st.markdown(
-            mlit_map_view.legend_html(data)
+            mlit_map_view.legend_html(data_window)
             + point_z_legend_row(point_summary),
             unsafe_allow_html=True,
         )
         base_map = mlit_map_view.build_map(
-            data,
+            data_window,
             center=_map_center(point_summary, mainshock),
             zoom=MAP_ZOOM,
             epicenter_icon=_epicenter_icon(),
@@ -2033,15 +2044,21 @@ def render_mlit_beta_tab(point_summary: pd.DataFrame, point_labels: dict,
             key="mlit_beta_map_v1",
         )
         st.caption(
-            "規制中（実線）と解除済み（灰色の破線）の両方を出しています。"
-            "交通量が落ちた場所に、そのとき規制があったかを重ねて見るためです"
+            f"**{range_name}**（{win_from:%m/%d %H:%M}〜{win_to:%m/%d %H:%M}）に"
+            f"効いていた規制 **{len(mlit_map_view.drawn_items(data_window))}件**を"
+            "出しています（交通量のグラフの表示期間に連動します）。"
+            "色は現在の状態で、赤＝いまも規制中、灰色の破線＝すでに解除済みです"
             "（地図の右下の「≡ レイヤ」にマウスを載せると一覧が開き、種別ごとに消せます。"
             "一覧の「高速」「国道」「県・市町村道」は上の3段階の略記）。"
+            "**期間の判定は配布に現れた回〜消えた回**で行っており、"
+            "配布データに規制の開始・解除の時刻そのものが無いため、"
+            "配布の間隔（半日〜3日）より細かくは切れません。",
+            unsafe_allow_html=True,
         )
         # 観測点の読み方は（参考）タブと同じ文言を出す
         st.caption(point_marker_caption(anomaly_end))
         st.caption(
-            mlit_map_view.content_note(data)
+            mlit_map_view.content_note(data_window)
         )
         note = mlit_map_view.unknown_level_note(data)
         if note:
@@ -2069,11 +2086,6 @@ def render_mlit_beta_tab(point_summary: pd.DataFrame, point_labels: dict,
             st.rerun()
 
     with col_ts:
-        ts_obs = load_observations(cfg["file"])
-        last_at = (
-            ts_obs["datetime"].max() if not ts_obs.empty
-            else quake_at + pd.Timedelta(days=7)
-        )
         render_timeseries(
             ts_obs, selected_points, quake_at, other_event_times, point_labels,
             quake_info.get("hourly_baseline_windows"),
@@ -2089,6 +2101,11 @@ def render_mlit_beta_tab(point_summary: pd.DataFrame, point_labels: dict,
         )
 
     with st.expander(f"規制の一覧（{len(data['items'])}件）", expanded=False):
+        st.caption(
+            "**この一覧と下のダウンロードは全期間の記録**です"
+            f"（地図は表示期間に効いていた{len(mlit_map_view.drawn_items(data_window))}件"
+            "に絞っています）。"
+        )
         # 表やグラフにも明示のキーを振る。Streamlitは要素のidを中身から
         # 自動生成するため、他のタブと同じ中身になるとidがぶつかる。
         st.dataframe(
