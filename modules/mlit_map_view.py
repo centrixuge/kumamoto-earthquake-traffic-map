@@ -87,15 +87,23 @@ def content_class(item: dict) -> str:
 
 def pref_released(item: dict) -> dict:
     """
-    熊本県の公開JSONでは解除されている、と分かっているか。
-    分かっていればその中身（路線名・内容・終了日時・距離）を返す。
+    ほかの資料では解除されている、と分かっているか。
+    分かっていればその中身（出典・路線名・内容・終了日時・距離）を返す。
 
-    通れる道マップの配布は、県道・市町村道の解除が反映されないまま止まる
-    ことがある。県の公開JSONは6時間ごとに取っていて新しいので、同じ区間が
-    そちらで解除されていれば、地図でも解除済みとして扱う。
+    通れる道マップの配布は、解除が反映されないまま止まることがある。
+    そこで2つの資料と突き合わせている（scripts/build_mlit_map_regulations.py）。
+
+      県フィード照合 … 熊本県の公開JSON（6時間ごとに自動取得）。県道・
+                       市区町村道と補助国道が載る
+      転記照合       … NEXCO西日本・熊本河川国道事務所のPDFからの転記。
+                       高速道路・直轄国道はこちらにしか載らない
     """
-    info = item.get("県フィード照合") or {}
-    return info if info.get("判定") == "解除済み" else {}
+    for field, source in (("県フィード照合", "熊本県の公開JSON"),
+                          ("転記照合", None)):
+        info = item.get(field) or {}
+        if info.get("判定") == "解除済み":
+            return {**info, "出典": info.get("出典") or source}
+    return {}
 
 
 def display_state(item: dict) -> str:
@@ -234,9 +242,10 @@ def _tooltip(item: dict) -> str:
         rows.append((
             "地図での扱い",
             f"解除済みとして表示。通れる道マップの配布にはまだ残っていますが、"
-            f"熊本県の公開JSONでは「{pref.get('内容')}」"
+            f"{pref.get('出典')}では「{pref.get('内容')}」"
             f"{'・終了 ' + str(pref['終了日時']) if pref.get('終了日時') else ''}"
-            f"（{pref.get('路線名')}と照合／{pref.get('判定根拠', '')}"
+            f"（{pref.get('路線名')}{'・' + str(pref['区間']) if pref.get('区間') else ''}"
+            f"と照合／{pref.get('判定根拠', '')}"
             + (f"・{pref['距離km']}km 離れた区間" if pref.get("距離km") is not None else "")
             + "）",
         ))
@@ -482,6 +491,7 @@ def freshness_note(data: dict) -> str:
     reg = data.get("latest_regulation_time")
     stale = data.get("regulation_stale_days") or 0
     pref = data.get("pref_released_count") or 0
+    trans = data.get("transcript_released_count") or 0
 
     text = f"規制情報は **{reg} 時点**です"
     if reg != snap:
@@ -490,15 +500,21 @@ def freshness_note(data: dict) -> str:
             f"{stale:.0f}日前の回と同じもの**でした）"
         )
     text += "。"
-    if pref:
+    if pref or trans:
+        parts = []
+        if pref:
+            parts.append(f"熊本県の公開JSON（6時間ごとに取得）で**{pref}件**")
+        if trans:
+            parts.append(
+                f"NEXCO西日本・熊本河川国道事務所の報（PDFからの転記）で**{trans}件**")
         text += (
-            f"配布に残ったままの区間のうち、**{pref}件**は熊本県の公開JSON"
-            "（6時間ごとに取得）で解除が確認できたので、地図では解除済み"
-            "として出しています。線をなぞると照合の中身が出ます。"
+            "配布に残ったままの区間のうち、" + "、".join(parts)
+            + "の解除が確認できたので、地図では解除済みとして出しています。"
+            "線をなぞると照合の中身が出ます。"
         )
     if stale >= 3:
         text += (
-            "**配布が止まっている間の解除は、県の公開JSONで拾えるもの以外は"
+            "**この2つで拾えない解除（照合できなかった区間）は、"
             "地図に反映されません。**"
         )
     return text

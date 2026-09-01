@@ -21,6 +21,7 @@ import json
 import os
 import re
 import math
+import unicodedata
 import zipfile
 from collections import Counter
 from datetime import datetime
@@ -282,6 +283,119 @@ def cross_check(results: list, now: datetime) -> int:
     return released
 
 
+# ---- 高速道路・直轄国道の転記との突き合わせ -----------------------------
+# 県の公開JSONには高速道路と直轄国道が載らない。こちらはPDFから手作業で
+# 転記したもので、解除の日時が入っている。配布が止まっている間の解除は
+# こちらで拾う。
+TRANSCRIPTS = [
+    ("NEXCO西日本の報", os.path.join(os.path.dirname(DATA_DIR), "nexco_regulations.json")),
+    ("熊本河川国道事務所の報", os.path.join(os.path.dirname(DATA_DIR), "mlit_regulations.json")),
+]
+# 転記の線形から端点までの距離がこれ以内なら同じ区間とみなす
+TRANSCRIPT_MATCH_KM = 3.0
+
+
+def _road_key(name) -> str:
+    """
+    路線名を突き合わせ用の鍵にする。
+
+      E3A 南九州自動車道 → 南九州自動車道
+      E3南九州自動車道（西回り） → 南九州自動車道
+      ５７号（北側復旧道路） → 国道57号
+      国道３号 → 国道3号
+
+    道路が並走していることが多く（国道3号と南九州道など）、線形の近さだけで
+    突き合わせると平気で取り違える。路線名が一致することを必ず条件にする。
+    """
+    text = unicodedata.normalize("NFKC", str(name or ""))
+    text = re.sub(r"[\s　]", "", text)
+    text = re.sub(r"^E\d+[A-Z]?", "", text)
+    m = re.search(r"([^（(]*?自動車道)", text)
+    if m:
+        return m.group(1)
+    m = re.search(r"(\d+)号", text)
+    return f"国道{m.group(1)}号" if m else text
+
+
+def _content_kind(text) -> str:
+    """規制の種類をざっくり3つに分ける（取り違え防止に使う）。"""
+    t = str(text or "")
+    if "緊急車両" in t:
+        return "緊急車両のみ"
+    if any(k in t for k in ("対面", "片側", "車線")):
+        return "片側交互など"
+    if "通行止" in t:
+        return "全面通行止め"
+    return "不明"
+
+
+def _path_distance_km(ends: list, path: list) -> float:
+    """端点それぞれから線形までの距離のうち、大きいほう。"""
+    if not ends or not path:
+        return None
+    return max(min(_km(pt, p) for p in path) for pt in ends)
+
+
+def _load_transcripts() -> list:
+    out = []
+    for label, path in TRANSCRIPTS:
+        if not os.path.exists(path):
+            continue
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+        for item in data.get("items", []):
+            if item.get("path"):
+                out.append((label, item))
+    print(f"  高速道路・直轄国道の転記: {len(out)}件（線形のあるもの）")
+    return out
+
+
+def cross_check_transcripts(results: list, now: datetime) -> int:
+    """
+    高速道路・直轄国道について、PDFからの転記と突き合わせる。
+
+    路線名の鍵が一致し、規制の種類も一致し、線形が近いものだけを同じ区間と
+    みなす。並走する別の道路や、同じ道路の別種類の規制（全面通行止めと
+    舗装補修の片側交互）を取り違えないため。
+    """
+    sources = _load_transcripts()
+    if not sources:
+        return 0
+    released = 0
+    for item in results:
+        if item["状態"] != "規制中":
+            continue
+        if item["道路種別"] not in ("高速自動車国道", "一般国道"):
+            continue
+        ends = _ends(item.get("geometry"))
+        key, kind = _road_key(item["路線名"]), _content_kind(item.get("規制内容"))
+        best = None
+        for label, src in sources:
+            if _road_key(src.get("route_name")) != key:
+                continue
+            if _content_kind(src.get("content")) != kind:
+                continue
+            dist = _path_distance_km(ends, src["path"])
+            if dist is not None and (best is None or dist < best[0]):
+                best = (dist, label, src)
+        if best is None or best[0] > TRANSCRIPT_MATCH_KM:
+            continue
+        dist, label, src = best
+        ended = parse_time(src.get("end_timestamp"))
+        is_released = ended is not None and ended <= now
+        item["転記照合"] = {
+            "出典": label,
+            "路線名": src.get("route_name"),
+            "区間": src.get("section"),
+            "内容": src.get("content"),
+            "終了日時": src.get("end_timestamp"),
+            "距離km": round(dist, 2),
+            "判定": "解除済み" if is_released else "規制中",
+        }
+        released += bool(is_released)
+    return released
+
+
 def build() -> dict:
     zips = sorted(
         (p for p in glob.glob(os.path.join(DATA_DIR, "*.zip"))),
@@ -370,7 +484,9 @@ def build() -> dict:
             "geometry": item["geometry"],
         })
 
-    pref_released = cross_check(results, datetime.now())
+    now = datetime.now()
+    pref_released = cross_check(results, now)
+    transcript_released = cross_check_transcripts(results, now)
 
     results.sort(key=lambda r: (
         [n for n, _ in ROAD_LEVELS + [("不明", set())]].index(r["道路種別"]),
@@ -386,6 +502,8 @@ def build() -> dict:
         "regulation_stale_days": round(stale_days, 2),
         # 県の公開JSONでは解除されているのに、配布にはまだ残っている件数
         "pref_released_count": pref_released,
+        # 高速道路・直轄国道の転記で解除が確認できた件数
+        "transcript_released_count": transcript_released,
         # 突き合わせに使った県の公開JSONの素性（古いまま使うと取りこぼす）
         "pref_source": getattr(_load_pref, "info", None),
         "latest_snapshot": last_time.strftime("%Y-%m-%d %H:%M"),
