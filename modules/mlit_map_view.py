@@ -104,6 +104,48 @@ def display_state(item: dict) -> str:
     return item["状態"]
 
 
+def _parse_stamp(value):
+    """"YYYY-MM-DD HH:MM" を Timestamp に。空なら None。
+
+    （このモジュールにはファイル名用の _stamp が別にあるので名前を分ける）
+    """
+    if not value:
+        return None
+    return pd.Timestamp(value)
+
+
+def active_in(item: dict, start, end) -> bool:
+    """
+    その規制が、指定した期間に効いていたか。
+
+    配布データには規制の開始・解除の時刻そのものが入っていないので、
+    時点をまたいだ突き合わせの結果を使う。
+
+      効いていた期間 = [初出時点, 解除確認時点)
+        初出時点     … その規制が最初に配布に現れた回
+        解除確認時点 … 配布から消えたのを最初に確認した回（規制中ならNone）
+
+    したがって**配布の間隔（半日〜3日）より細かい判定はできません**。
+    最初の配布（2026-07-29 12:00）より前に始まって解除された規制は、
+    そもそもこのデータに入っていません。
+    """
+    first = _parse_stamp(item.get("初出時点"))
+    released = _parse_stamp(item.get("解除確認時点"))
+    if first is not None and first >= end:
+        return False
+    if released is not None and released <= start:
+        return False
+    return True
+
+
+def filter_window(data: dict, start, end) -> dict:
+    """指定した期間に効いていた規制だけにした data を返す。"""
+    if start is None or end is None:
+        return data
+    items = [i for i in data["items"] if active_in(i, start, end)]
+    return {**data, "items": items, "window": (start, end)}
+
+
 def drawn_items(data: dict) -> list:
     """規制として色分けして出すもの。解除の告知だけのレコードは含めない。"""
     return [i for i in data["items"] if not is_release_record(i)]
