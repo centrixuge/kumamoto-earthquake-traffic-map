@@ -12,7 +12,6 @@
 data/mlit_map_regulations.json。
 """
 import json
-import os
 from collections import Counter
 
 import folium
@@ -106,6 +105,30 @@ def pref_released(item: dict) -> dict:
     return {}
 
 
+def released_at(item: dict):
+    """
+    解除が確認できている時刻。分かっている中でいちばん早いものを返す。
+
+      解除確認時点 … 配布から消えたのを最初に確認した回
+      県フィード照合・転記照合の終了日時 … 配布に残っていても、ほかの
+      資料で終了時刻が分かっているもの
+
+    どれも分からなければ None（＝いまも規制中）。
+    """
+    stamps = [_parse_stamp(item.get("解除確認時点"))]
+    for field in ("県フィード照合", "転記照合"):
+        info = item.get(field) or {}
+        if info.get("判定") == "解除済み" and info.get("終了日時"):
+            stamps.append(_parse_stamp(str(info["終了日時"]).replace("/", "-")))
+    stamps = [s for s in stamps if s is not None]
+    if stamps:
+        return min(stamps)
+    # 配布から消えているのに時刻が取れないものは、最後に見えた回で切る
+    if item.get("状態") == "解除済み":
+        return _parse_stamp(item.get("最終確認時点"))
+    return None
+
+
 def display_state(item: dict) -> str:
     """
     地図での扱い（規制中／解除済み）。
@@ -122,10 +145,32 @@ def display_state(item: dict) -> str:
     """
     if item["道路種別"] == UNKNOWN_LEVEL:
         return "解除済み"
+    # 期間を選んでいるときは、**その期間に効いていた規制**として色を付ける。
+    # 交通量のグラフと並べて見るので、「いま解除されているか」ではなく
+    # 「その期間に通行止めだったか」が読めないと意味がない。既定の
+    # 発災後1週間なら、その週に規制されていた区間はすべて内容ごとの色。
+    # 期間中に解除されたものは同じ色の破線にする（_style）。
+    # _as_of は filter_window が入れる。
+    if item.get("_as_of") is not None:
+        return "規制中"
     # 配布にはまだ残っていても、県の公開JSONで解除が確認できたものは解除済み
     if pref_released(item):
         return "解除済み"
     return item["状態"]
+
+
+def ended_by(item: dict) -> bool:
+    """
+    その時点までに解除が確認できているか。線を破線にするかの判定に使う。
+
+    期間を選んでいるときは「期間の終わり」まで、選んでいないときは
+    いままで（＝display_state と同じ見方）で判定する。
+    """
+    as_of = item.get("_as_of")
+    if as_of is None:
+        return display_state(item) == "解除済み"
+    released = released_at(item)
+    return released is not None and released <= as_of
 
 
 def _parse_stamp(value):
@@ -154,13 +199,7 @@ def active_in(item: dict, start, end) -> bool:
     そもそもこのデータに入っていません。
     """
     first = _parse_stamp(item.get("初出時点"))
-    released = _parse_stamp(item.get("解除確認時点"))
-    pref = pref_released(item)
-    if pref.get("終了日時"):
-        # 県の公開JSONで解除が分かっているものは、その時刻で切る
-        pref_end = _parse_stamp(str(pref["終了日時"]).replace("/", "-"))
-        if pref_end is not None:
-            released = min(released, pref_end) if released else pref_end
+    released = released_at(item)
     if first is not None and first >= end:
         return False
     if released is not None and released <= start:
@@ -172,7 +211,8 @@ def filter_window(data: dict, start, end) -> dict:
     """指定した期間に効いていた規制だけにした data を返す。"""
     if start is None or end is None:
         return data
-    items = [i for i in data["items"] if active_in(i, start, end)]
+    items = [{**i, "_as_of": end} for i in data["items"]
+             if active_in(i, start, end)]
     return {**data, "items": items, "window": (start, end)}
 
 
@@ -188,6 +228,20 @@ SHORT_LEVEL = {
     "県道・市区町村道": "県・市町村道",
 }
 
+def _layer_name(level: str, state: str, windowed: bool) -> str:
+    """
+    右下のレイヤ一覧に出す名前。長いと一覧の幅が地図を圧迫するので短くする。
+
+    期間を選んでいるときは、色が付いている方が「その期間に効いていた規制」、
+    灰色の方が「道路種別が取れず、何の規制か分からないもの」になる。
+    """
+    if windowed:
+        if state == "解除済み":
+            return "種別不明（灰色）"
+        return f"{SHORT_LEVEL.get(level, level)}：期間中の規制"
+    return f"{SHORT_LEVEL.get(level, level)}：{state}"
+
+
 MAP_CENTER = [32.72, 130.85]
 MAP_ZOOM = 9
 
@@ -199,25 +253,25 @@ def load_regulations() -> dict:
 
 def _style(item: dict) -> dict:
     """
-    色は「いまの状態」を先に表す。
+    期間を選んでいるとき（地図はいつもこの形）は、
 
-      規制中   … 規制の内容ごとの色（赤〜黄）
-      解除済み … 内容によらず灰色
+      色   … その期間に効いていた規制の内容（赤〜黄）
+      線種 … 実線＝期間の終わりの時点でも規制中／破線＝期間中に解除
+      灰色 … 道路種別が取れないもの（何の規制か分からないので色を付けない）
+      太さ … 道路種別（レイヤの区切りと同じ）
 
-    線種は色と重ねて読めるようにそろえる（実線＝規制中、破線＝解除済み）。
-    太さは道路種別で、レイヤの区切りと同じ。
-
-    解除済みまで内容で色分けすると、地図の赤の大半が「もう解除された規制」に
-    なり、いま通れない場所が読み取れない。解除済みの内容はツールチップと
-    下の一覧で見る。
+    期間中に解除された規制まで灰色にすると、その期間に通行止めだった場所が
+    地図から読めなくなる。交通量の落ち込みと見比べるのが目的なので、
+    期間中に効いていた規制はすべて内容の色で塗る。
     """
-    ended = display_state(item) == "解除済み"
+    gray = display_state(item) == "解除済み"
+    dashed = gray or ended_by(item)
     return {
-        "color": ENDED_COLOR if ended
+        "color": ENDED_COLOR if gray
                  else CONTENT_COLOR.get(content_class(item), "#5b6470"),
         "weight": LEVEL_WEIGHT.get(item["道路種別"], 4),
-        "opacity": 0.55 if ended else 0.95,
-        "dashArray": "6,8" if ended else None,
+        "opacity": 0.55 if gray else (0.8 if dashed else 0.95),
+        "dashArray": "6,8" if dashed else None,
     }
 
 
@@ -237,11 +291,20 @@ def _tooltip(item: dict) -> str:
             "解除の告知（規制ではありません）。解除後に残る規制は"
             "このデータには書かれていません",
         ))
+    as_of = item.get("_as_of")
+    if as_of is not None and display_state(item) == "規制中":
+        released = released_at(item)
+        rows.append((
+            "この期間での扱い",
+            (f"期間中に解除（{released:%Y-%m-%d %H:%M}）。同じ色の破線で表示"
+             if released is not None else
+             f"期間の終わり（{as_of:%Y-%m-%d %H:%M}）の時点でも規制中。実線で表示"),
+        ))
     pref = pref_released(item)
     if pref:
         rows.append((
-            "地図での扱い",
-            f"解除済みとして表示。通れる道マップの配布にはまだ残っていますが、"
+            "解除の確認",
+            f"通れる道マップの配布にはまだ残っていますが、"
             f"{pref.get('出典')}では「{pref.get('内容')}」"
             f"{'・終了 ' + str(pref['終了日時']) if pref.get('終了日時') else ''}"
             f"（{pref.get('路線名')}{'・' + str(pref['区間']) if pref.get('区間') else ''}"
@@ -249,15 +312,13 @@ def _tooltip(item: dict) -> str:
             + (f"・{pref['距離km']}km 離れた区間" if pref.get("距離km") is not None else "")
             + "）",
         ))
-    if item["状態"] == "解除済み":
-        rows.append(("解除の確認", item["解除確認時点"] or "（最新時点で消失）"))
-    elif display_state(item) == "解除済み":
-        # 最新の配布には入っているが、道路種別が取れないので規制中としては
-        # 出していない。地図の見た目（破線）とデータの食い違いを説明する。
+    if item["状態"] == "解除済み" and not pref:
+        rows.append(("配布から消えた回", item["解除確認時点"] or "（最新時点で消失）"))
+    if display_state(item) == "解除済み":
+        # 道路種別が取れないもの。何の規制か分からないので色を付けない。
         rows.append((
             "地図での扱い",
-            "解除済みとして表示（道路種別が取れないため、"
-            "最新の配布にあっても規制中としては出していません）",
+            "灰色で表示（道路種別が取れず、何の規制か分からないため）",
         ))
     body = "".join(
         f"<tr><td style='color:#666;padding-right:6px;white-space:nowrap;'>{k}</td>"
@@ -307,7 +368,7 @@ def build_map(data: dict, center=None, zoom: int = None,
               point_legend: str = "", point_legend_css: str = "") -> folium.Map:
     """
     規制の地図を作る。中心・縮尺・震源の印・観測点の凡例は、並べて見比べ
-    られるように「道路規制×交通量」タブと同じものを呼び出し側から
+    られるように「地図・交通量の時系列変化」タブと同じものを呼び出し側から
     渡せるようにしている（観測点の描き方は両方の地図で共通なので、
     その凡例もこちらに出さないと何の印か分からなくなる）。
     """
@@ -339,14 +400,12 @@ def build_map(data: dict, center=None, zoom: int = None,
     # レイヤは「道路種別 × 状態」。規制中を上、解除済みをその下に置く。
     # 名前は短くする。長いとレイヤ一覧の幅がそれに引きずられて、
     # 地図の右下で場所を取る（本家で県・市町村道の行を詰めたのと同じ理由）。
+    windowed = data.get("window") is not None
     layers = {}
     for state in ("規制中", "解除済み"):
         for level, _, _ in LEVELS:
-            # 解除済みも既定で出す。既定の交通量は発災後1週間で、その頃の
-            # 規制はいまはほとんど解除済み。隠すと、交通量が落ちた場所に
-            # 規制があったことが地図から読めない。
             layers[(level, state)] = folium.FeatureGroup(
-                name=f"{SHORT_LEVEL.get(level, level)}：{state}", show=True,
+                name=_layer_name(level, state, windowed), show=True,
             )
 
     # 重なりの順を決めるpane。ツールチップを出したいので pointer_events を
@@ -359,7 +418,9 @@ def build_map(data: dict, center=None, zoom: int = None,
     for item in drawn_items(data):
         state = display_state(item)
         key = (item["道路種別"], state)
-        _draw(item, _style(item), layers[key], PANES[state][0])
+        # まだ規制中のものが、解除済みの線に隠れないようにする
+        pane = PANES["解除済み" if ended_by(item) else "規制中"][0]
+        _draw(item, _style(item), layers[key], pane)
         used.add(key)
 
     for key, group in layers.items():
@@ -405,11 +466,13 @@ def legend_html(data: dict) -> str:
     このモジュールを古いまま使った時に、引数の不一致でページ全体が落ちる）。
     """
     items = drawn_items(data)
-    # 規制中に出てくる内容だけを色の凡例に並べる。解除済みは内容によらず
-    # 灰色なので、解除済みにしか無い内容の色を出しても地図には存在しない。
+    # 地図に出てくる内容だけを色の凡例に並べる（配布データに片側交互が
+    # 無いなど、出てくる区分は時期で変わる）。
     active_content = {content_class(i) for i in items
                       if display_state(i) == "規制中"}
-    has_ended = any(display_state(i) == "解除済み" for i in items)
+    has_unknown = any(display_state(i) == "解除済み" for i in items)
+    has_ended = any(ended_by(i) for i in items
+                    if display_state(i) == "規制中")
     present_level = {i["道路種別"] for i in items}
 
     def _row(head: str, marks: str) -> str:
@@ -441,9 +504,16 @@ def legend_html(data: dict) -> str:
         _line(color, name)
         for name, color, _ in CONTENT_CLASSES if name in active_content
     )
+    # 破線の見本は、実際に出ている内容の色のうち最初のもので描く
+    dash_color = next(
+        (color for name, color, _ in CONTENT_CLASSES if name in active_content),
+        "#c0392b")
     ended_marks = []
     if has_ended:
-        ended_marks.append(_line(ENDED_COLOR, "内容によらず灰色の破線",
+        ended_marks.append(_line(dash_color, "期間中に解除（同じ色の破線）",
+                                 dashed=True))
+    if has_unknown:
+        ended_marks.append(_line(ENDED_COLOR, "灰色＝道路種別が取れないもの",
                                  dashed=True))
     width_marks = " ".join(
         f'<span style="white-space:nowrap;">'
@@ -451,9 +521,13 @@ def legend_html(data: dict) -> str:
         f'background:#8a94a6;vertical-align:middle;"></span> {name}</span>'
         for name, _, weight in LEVELS if name in present_level
     )
-    rows = [_row("規制中の色（規制の内容）", active_marks)]
+    windowed = data.get("window") is not None
+    head = "期間中の規制の色（規制の内容）" if windowed else "規制中の色（規制の内容）"
+    rows = [_row(head, active_marks)]
     if ended_marks:
-        rows.append(_row("解除済み", " ".join(ended_marks)))
+        rows.append(_row("線種", " ".join(
+            [_line(dash_color, "実線＝期間の終わりも規制中")] + ended_marks)
+            if windowed else " ".join(ended_marks)))
     rows.append(_row("線の太さ（道路種別）", width_marks))
     return (
         '<div style="font-size:0.79rem;line-height:1.45;margin:0 0 4px 0;">'
@@ -482,76 +556,68 @@ def summary_html(data: dict) -> str:
 
 def freshness_note(data: dict) -> str:
     """
-    規制情報がいつ時点のもので、どれだけ古いかを出す。
+    規制情報がいつ時点のものかを1行で。強調はしない（注意書きではなく出典）。
 
     配布の回が新しくても、中の規制情報が前の回の使い回しであることがある。
-    そのまま「最新」と出すと、実際より新しい情報に見えてしまう。
+    そのまま「最新」と出すと、実際より新しい情報に見えてしまうので、
+    中身の時点の方を書く。
     """
     snap = data.get("latest_snapshot")
     reg = data.get("latest_regulation_time")
     stale = data.get("regulation_stale_days") or 0
-    pref = data.get("pref_released_count") or 0
-    trans = data.get("transcript_released_count") or 0
+    released = ((data.get("pref_released_count") or 0)
+                + (data.get("transcript_released_count") or 0))
 
-    text = f"規制情報は **{reg} 時点**です"
+    text = f"規制情報：通れる道マップ {reg} 時点"
     if reg != snap:
-        text += (
-            f"（配布そのものは {snap} の回ですが、**中の道路規制情報は"
-            f"{stale:.0f}日前の回と同じもの**でした）"
-        )
-    text += "。"
-    if pref or trans:
-        parts = []
-        if pref:
-            parts.append(f"熊本県の公開JSON（6時間ごとに取得）で**{pref}件**")
-        if trans:
-            parts.append(
-                f"NEXCO西日本・熊本河川国道事務所の報（PDFからの転記）で**{trans}件**")
-        text += (
-            "配布に残ったままの区間のうち、" + "、".join(parts)
-            + "の解除が確認できたので、地図では解除済みとして出しています。"
-            "線をなぞると照合の中身が出ます。"
-        )
-    if stale >= 3:
-        text += (
-            "**この2つで拾えない解除（照合できなかった区間）は、"
-            "地図に反映されません。**"
-        )
-    return text
+        text += f"（配布は {snap} の回だが、中身は{stale:.0f}日前と同じもの）"
+    if released:
+        text += (f"／熊本県の公開JSONとNEXCO西日本・熊本河川国道事務所の報で"
+                 f"解除を確認できた{released}件を反映済み")
+    return text + "。"
 
 
 def content_note(data: dict) -> str:
     """
-    色分けの区分ごとの件数を、データから数えて書く。
+    地図の色分けの意味と、区分ごとの件数をデータから数えて書く。
 
-    以前はここに件数を直書きしていて、データが増えたあとも古い数字
-    （104件・赤84件…）が残っていた。数え直して出す。
+    件数を直書きすると、データが増えたあとも古い数字が残る。数え直す。
     """
     items = drawn_items(data)
-    active = [i for i in items if display_state(i) == "規制中"]
-    ended = [i for i in items if display_state(i) == "解除済み"]
-    counts = Counter(content_class(i) for i in active)
+    shown = [i for i in items if display_state(i) == "規制中"]
+    unknown = [i for i in items if display_state(i) == "解除済み"]
+    ended = [i for i in shown if ended_by(i)]
+    counts = Counter(content_class(i) for i in shown)
     detail = "、".join(
         f"{name} {counts[name]}件"
         for name, _, _ in CONTENT_CLASSES if counts.get(name)
     ) or "なし"
-    ended_detail = Counter(content_class(i) for i in ended)
-    # 地図から外しているのは解除の告知だけ（道路種別が取れないものは
-    # 解除済みの扱いで地図に残すので、ここでは外さない）。
+    windowed = data.get("window") is not None
+    if windowed:
+        text = (
+            f"**その期間に効いていた規制{len(shown)}件**を、規制の内容ごとの色で"
+            f"出しています（{detail}）。"
+        )
+        if ended:
+            text += (
+                f"うち**{len(ended)}件は期間の終わりまでに解除**が確認できたもので、"
+                "同じ色の破線にしています（解除の時点は線をなぞると出ます）。"
+            )
+    else:
+        text = (
+            f"**規制中の{len(shown)}件**を規制の内容ごとの色で出しています"
+            f"（{detail}）。"
+        )
+    if unknown:
+        text += (
+            f"道路種別が取れない{len(unknown)}件は、何の規制か分からないので"
+            "灰色にしています。"
+        )
     released = [i for i in data["items"] if is_release_record(i)]
-    text = (
-        f"色は「いまの状態」を先に読めるようにしています。**規制中の{len(active)}件**は"
-        f"規制の内容ごとの色（{detail}）、**解除済みの{len(ended)}件は内容によらず灰色**の"
-        "破線です（解除済みの内容は線をなぞるとツールチップに出ます。内訳は "
-        + "、".join(f"{name} {ended_detail[name]}件"
-                    for name, _, _ in CONTENT_CLASSES if ended_detail.get(name))
-        + "）。"
-    )
     if released:
         text += (
             f"このほかに「通行止め解除」とだけ書かれたレコードが{len(released)}件"
-            "ありますが、地図には出していません。規制ではなく解除の告知で、"
-            "同じ区間の規制じたいは解除済み（灰色）として出ているためです"
+            "ありますが、規制ではなく解除の告知なので地図には出していません"
             "（下の一覧には入っています）。"
         )
     if not counts.get("対面通行・片側交互など"):
@@ -585,16 +651,15 @@ def unknown_level_note(data: dict) -> str:
         f"うち{bare}件は配布されているGeoJSONに道路の線形（LineString）だけが"
         "入っていて、路線名・区間・規制内容・開始日時のどれも持ちません"
         f"（{stamps[0]} 以降の配布分に現れます）。"
-        "**このレコードは地図では「規制中」として出さず、解除済みの扱いで"
-        "残しています**（レイヤ一覧の「不明：解除済み」で表示を切り替え、"
-        "既定では非表示）。配布元の地図でも凡例に無い紫色で描かれており、"
+        "**このレコードは規制の内容で色分けせず、灰色で出しています**"
+        "（レイヤ一覧の「種別不明（灰色）」で消せます）。"
+        "配布元の地図でも凡例に無い紫色で描かれており、"
         "いまの配布分については不備と見られるためで、そこに規制があったという"
         "記録は消さずに残す、という扱いにしています。"
     )
     if latest:
         text += (
-            f"うち{len(latest)}件は最新の配布にも入っていますが、"
-            "同じ扱いです。"
+            f"うち{len(latest)}件は最新の配布にも入っていますが、同じ扱いです。"
         )
     return text + "各件の中身は、このページ下の「規制の一覧」で確認できます。"
 

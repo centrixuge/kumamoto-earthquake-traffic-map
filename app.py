@@ -2143,20 +2143,10 @@ def render_mlit_beta_tab(point_summary: pd.DataFrame, point_labels: dict,
     st.caption(
         "地図の通行規制は"
         f"[{data['source_name']}]({data['source_url']})の配布データで作っています。"
-        "県の公開JSONとPDFからの転記で集めた版は「(旧版)道路規制×交通量」"
-        "タブにあり、規制の収録範囲が違うので同じ観測点でも見え方が変わります。  \n"
-        f"**規制情報は {data['latest_regulation_time']} 時点のものです**"
-        # 配布の回と、その回に入っている規制情報の時点がずれることがある
-        # （8/7 16:00 の回は規制情報だけ10:00時点だった）。ずれている
-        # ときだけ断りを入れる。
-        + (
-            f"（配布は {data['latest_snapshot']} の回ですが、そこに入っている"
-            "道路規制情報はこの時点のものです）"
-            if data["latest_snapshot"] != data["latest_regulation_time"] else ""
-        )
-        + "。交通量は最新まで出ますが、"
-        "この時点より後の規制の変化は地図に反映されていません。",
-        unsafe_allow_html=False,
+        "県の公開JSONとPDFからの転記で集めた版は「地図・交通量の時系列変化（参考）」"
+        "タブにあり、規制の収録範囲が違うので同じ観測点でも見え方が変わります。"
+        # 規制情報の時点は、地図の下の freshness_note に一本化している
+        # （同じことを上下で二度書くと、どちらが本文か分からなくなる）。
     )
 
     # 既定の観測点は本家と同じにする（開いた直後に時系列が空だと、
@@ -2262,7 +2252,8 @@ def render_mlit_beta_tab(point_summary: pd.DataFrame, point_labels: dict,
             f"**{range_name}**（{win_from:%m/%d %H:%M}〜{win_to:%m/%d %H:%M}）に"
             f"効いていた規制 **{len(mlit_map_view.drawn_items(data_window))}件**を"
             "出しています（交通量のグラフの表示期間に連動します）。"
-            "色は現在の状態で、赤＝いまも規制中、灰色の破線＝すでに解除済みです"
+            "色は**その期間に効いていた規制の内容**で、線種は実線＝期間の終わりも"
+            "規制中、破線＝期間中に解除です"
             "（地図の右下の「≡ レイヤ」にマウスを載せると一覧が開き、種別ごとに消せます。"
             "一覧の「高速」「国道」「県・市町村道」は上の3段階の略記）。"
             "**期間の判定は配布に現れた回〜消えた回**で行っており、"
@@ -2272,7 +2263,7 @@ def render_mlit_beta_tab(point_summary: pd.DataFrame, point_labels: dict,
         )
         # 観測点の読み方は(旧版)タブと同じ文言を出す
         st.caption(point_marker_caption(anomaly_end))
-        st.warning(mlit_map_view.freshness_note(data))
+        st.caption(mlit_map_view.freshness_note(data))
         st.caption(
             mlit_map_view.content_note(data_window)
         )
