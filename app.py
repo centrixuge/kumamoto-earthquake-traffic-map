@@ -469,12 +469,19 @@ def period_selector(key_prefix: str, quake_at, last_at, first_at=None):
     """
     names = list(TIMESERIES_RANGES.keys()) + [CUSTOM_RANGE_LABEL]
     state_key = f"_ts_range_{key_prefix}"
+    widget_key = f"timeseries_range_{key_prefix}"
+    # 選択肢を減らしたとき、前のセッションで選んでいた値（例: 廃止した
+    # 「最新3日間」）がウィジェットの状態に残っていると、Streamlitは
+    # 「options に無い」と言って例外を投げ、タブごと真っ白になる。
+    # 残っていたら捨てて、既定から選び直す。
+    if st.session_state.get(widget_key) not in names:
+        st.session_state.pop(widget_key, None)
     saved = st.session_state.get(state_key, TIMESERIES_DEFAULT_RANGE)
     name = st.selectbox(
         "交通量のグラフの表示期間", names,
         index=names.index(saved) if saved in names
         else names.index(TIMESERIES_DEFAULT_RANGE),
-        key=f"timeseries_range_{key_prefix}",
+        key=widget_key,
     )
     st.session_state[state_key] = name
 
@@ -486,12 +493,19 @@ def period_selector(key_prefix: str, quake_at, last_at, first_at=None):
         quake_at, last_at)
     low = (first_at or TIMESERIES_DISPLAY_START).normalize()
     high = last_at.normalize()
+    # 上と同じ理由で、範囲外の日付が残っていたら捨てる（データの期間が
+    # 変わると、前に選んだ日が min/max の外に出ることがある）。
+    date_key = f"timeseries_dates_{key_prefix}"
+    kept = st.session_state.get(date_key)
+    kept = kept if isinstance(kept, (list, tuple)) else ([kept] if kept else [])
+    if any(d < low.date() or d > high.date() for d in kept):
+        st.session_state.pop(date_key, None)
     picked = st.date_input(
         "集計する期間（開始日・終了日）",
         value=(max(default_from, low).date(),
                min(default_to - pd.Timedelta(days=1), high).date()),
         min_value=low.date(), max_value=high.date(),
-        key=f"timeseries_dates_{key_prefix}",
+        key=date_key,
         help="開始日の0:00から終了日の24:00までを集計します。",
     )
     # 選び直している途中は1日しか返ってこないので、その間は同じ日で扱う
