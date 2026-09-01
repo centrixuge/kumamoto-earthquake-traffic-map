@@ -20,6 +20,7 @@ import hashlib
 import json
 import os
 import re
+import math
 import zipfile
 from collections import Counter
 from datetime import datetime
@@ -65,7 +66,9 @@ ROAD_LEVELS = [
 ROUTE_NAME_IN_TYPE = re.compile(r"^国道\d+号")
 
 # 開始日時の書き方が2通りある
-TIME_FORMATS = ("%Y/%m/%d %H:%M", "%Y/%m/%d/%H:%M", "%Y/%m/%d %H:%M:%S", "%Y/%m/%d")
+# 配布データは「2026/8/7 10:00」の形。県の公開JSONは「2026-08-07 10:00:00」の形
+TIME_FORMATS = ("%Y/%m/%d %H:%M", "%Y/%m/%d/%H:%M", "%Y/%m/%d %H:%M:%S", "%Y/%m/%d",
+                "%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d")
 
 # 「規制内容」に解除と書かれている値
 RELEASED_CONTENTS = {"通行止め解除", "通行止解除"}
@@ -79,13 +82,28 @@ def snapshot_time(zip_name: str) -> datetime:
 
 
 def read_features(zip_path: str) -> list:
-    features = []
+    return _read_regulations(zip_path)[0]
+
+
+def _read_regulations(zip_path: str):
+    """
+    道路規制情報の中身と、その中身のハッシュを返す。
+
+    ハッシュは「この回の規制情報は前の回と同じものか」を見るために使う。
+    配布の回が新しくても、中の規制情報が前の回の使い回しであることがある
+    （実測: 2026-08-31 16:00 の回に入っているのは 08-25 09:00 の回と
+    同一のファイル）。その場合、規制の時点は前の回のものとして扱わないと、
+    実際より新しい情報のように見えてしまう。
+    """
+    features, digest = [], hashlib.md5()
     with zipfile.ZipFile(zip_path) as z:
-        for entry in z.namelist():
+        for entry in sorted(z.namelist()):
             if REG_FILE.match(os.path.basename(entry)):
-                data = json.loads(z.read(entry).decode("utf-8-sig"))
-                features.extend(data.get("features", []))
-    return features
+                raw = z.read(entry)
+                digest.update(raw)
+                features.extend(
+                    json.loads(raw.decode("utf-8-sig")).get("features", []))
+    return features, (digest.hexdigest() if features else None)
 
 
 def road_level(props: dict) -> str:
@@ -132,26 +150,126 @@ def identity(feature: dict) -> str:
     return hashlib.md5("|".join(parts).encode()).hexdigest()[:12]
 
 
+# ---- 熊本県の公開JSONとの突き合わせ -------------------------------------
+# 通れる道マップの配布は、県道・市町村道の解除が反映されないまま止まることが
+# ある（実測: 2026-08-31 の配布に入っているのは 08-25 の内容で、その中には
+# 県の公開JSONではとうに解除されている区間が残っている）。
+# 同じ区間を県のフィードで見つけられたら、その状態も持たせておく。
+PREF_FILE = os.path.join(os.path.dirname(DATA_DIR), "regulations.json")
+# 路線名が一致し、端点がこの距離以内なら同じ区間とみなす
+PREF_MATCH_KM = 3.0
+
+
+def _norm_route(name) -> str:
+    """路線名の書き方をそろえる（県道17号坂本人吉線 → 坂本人吉線）。"""
+    text = re.sub(r"[\s　]", "", str(name or ""))
+    text = re.sub(r"^(主要地方道|一般県道|市道|町道|村道)", "", text)
+    text = re.sub(r"^県道\d+号", "", text)
+    text = re.sub(r"^(国道\d+号).*", r"", text)
+    return text
+
+
+def _km(a, b) -> float:
+    la1, lo1, la2, lo2 = map(math.radians, [a[0], a[1], b[0], b[1]])
+    return 6371 * 2 * math.asin(math.sqrt(
+        math.sin((la2 - la1) / 2) ** 2
+        + math.cos(la1) * math.cos(la2) * math.sin((lo2 - lo1) / 2) ** 2))
+
+
+def _ends(geometry) -> list:
+    g = geometry or {}
+    c = g.get("coordinates") or []
+    if g.get("type") == "LineString" and c:
+        return [(c[0][1], c[0][0]), (c[-1][1], c[-1][0])]
+    if g.get("type") == "MultiLineString" and c and c[0]:
+        return [(c[0][0][1], c[0][0][0]), (c[-1][-1][1], c[-1][-1][0])]
+    if g.get("type") == "Point" and len(c) >= 2:
+        return [(c[1], c[0])]
+    return []
+
+
+def _load_pref() -> list:
+    if not os.path.exists(PREF_FILE):
+        print("  熊本県の公開JSONが見つからないので突き合わせは行わない")
+        return []
+    with open(PREF_FILE, encoding="utf-8") as f:
+        data = json.load(f)
+    items = data["items"] if isinstance(data, dict) and "items" in data else data
+    return items or []
+
+
+def cross_check(results: list, now: datetime) -> int:
+    """
+    県の公開JSONで同じ区間を探し、そちらの状態を各件に持たせる。
+    見つからなければ何も足さない（憶測で埋めない）。
+    """
+    pref = _load_pref()
+    if not pref:
+        return 0
+    by_route = {}
+    for p in pref:
+        by_route.setdefault(_norm_route(p.get("route_name")), []).append(p)
+
+    released = 0
+    for item in results:
+        if item["状態"] != "規制中":
+            continue
+        ends = _ends(item.get("geometry"))
+        best = None
+        for p in by_route.get(_norm_route(item["路線名"]), []):
+            try:
+                pt = (float(p["start_lat"]), float(p["start_lon"]))
+            except (TypeError, ValueError, KeyError):
+                continue
+            dist = min((_km(e, pt) for e in ends), default=None)
+            if dist is not None and (best is None or dist < best[0]):
+                best = (dist, p)
+        if best is None or best[0] > PREF_MATCH_KM:
+            continue
+        dist, p = best
+        end_text = p.get("end_timestamp")
+        ended = parse_time(end_text)
+        is_released = (
+            (p.get("content") or "").strip() == "解除"
+            or (ended is not None and ended <= now)
+        )
+        item["県フィード照合"] = {
+            "路線名": p.get("route_name"),
+            "内容": p.get("content"),
+            "終了日時": end_text,
+            "距離km": round(dist, 2),
+            "判定": "解除済み" if is_released else "規制中",
+        }
+        released += bool(is_released)
+    return released
+
+
 def build() -> dict:
     zips = sorted(
         (p for p in glob.glob(os.path.join(DATA_DIR, "*.zip"))),
         key=lambda p: snapshot_time(os.path.basename(p)),
     )
-    snapshots = []
+    snapshots, first_seen_digest = [], {}
     for path in zips:
-        features = read_features(path)
-        if features:
-            snapshots.append((snapshot_time(os.path.basename(path)), path, features))
+        features, digest = _read_regulations(path)
+        if not features:
+            continue
+        stamp = snapshot_time(os.path.basename(path))
+        # 中身が前の回と同一なら、規制としての時点はその前の回のもの
+        content_time = first_seen_digest.setdefault(digest, stamp)
+        snapshots.append((stamp, path, features, content_time))
     if not snapshots:
         raise RuntimeError("道路規制情報を含むZIPが見つからない")
 
     last_time = snapshots[-1][0]
-    # 「いつ時点の規制か」。ファイル名の時刻と中身の時点がずれる回がある
+    # 「いつ時点の規制か」。ファイル名の時刻と中身の時点がずれる回がある。
+    # 手で登録した分（REGULATION_AS_OF）を優先し、無ければ中身の使い回しを見る。
     last_reg_time = REGULATION_AS_OF.get(
-        os.path.basename(snapshots[-1][1]), last_time
+        os.path.basename(snapshots[-1][1]), snapshots[-1][3]
     )
+    stale_days = (last_time - last_reg_time).total_seconds() / 86400
     items = {}
-    for stamp, path, features in snapshots:
+    for stamp, path, features, _ in snapshots:
         for feature in features:
             key = identity(feature)
             props = {
@@ -183,7 +301,7 @@ def build() -> dict:
         # （半日〜3日）より細かくは分からない。
         released_by = None
         if not active:
-            later = [s for s, _, _ in snapshots if s > seen[-1]]
+            later = [s for s, _, _, _ in snapshots if s > seen[-1]]
             released_by = later[0] if later else None
         if started is None:
             before_quake = None
@@ -214,6 +332,8 @@ def build() -> dict:
             "geometry": item["geometry"],
         })
 
+    pref_released = cross_check(results, datetime.now())
+
     results.sort(key=lambda r: (
         [n for n, _ in ROAD_LEVELS + [("不明", set())]].index(r["道路種別"]),
         r["状態"] != "規制中",
@@ -223,7 +343,11 @@ def build() -> dict:
         "source_name": SOURCE_NAME,
         "source_url": SOURCE_URL,
         "quake_at": QUAKE_AT.strftime("%Y-%m-%d %H:%M"),
-        "snapshots": [s.strftime("%Y-%m-%d %H:%M") for s, _, _ in snapshots],
+        "snapshots": [s.strftime("%Y-%m-%d %H:%M") for s, _, _, _ in snapshots],
+        # 規制情報が最後に変わってから、配布が何日ぶん進んだか
+        "regulation_stale_days": round(stale_days, 2),
+        # 県の公開JSONでは解除されているのに、配布にはまだ残っている件数
+        "pref_released_count": pref_released,
         "latest_snapshot": last_time.strftime("%Y-%m-%d %H:%M"),
         # 規制情報としての最新時点。上のファイル名の時刻とずれることがある
         "latest_regulation_time": last_reg_time.strftime("%Y-%m-%d %H:%M"),

@@ -85,6 +85,19 @@ def content_class(item: dict) -> str:
     return "規制内容不明"
 
 
+def pref_released(item: dict) -> dict:
+    """
+    熊本県の公開JSONでは解除されている、と分かっているか。
+    分かっていればその中身（路線名・内容・終了日時・距離）を返す。
+
+    通れる道マップの配布は、県道・市町村道の解除が反映されないまま止まる
+    ことがある。県の公開JSONは6時間ごとに取っていて新しいので、同じ区間が
+    そちらで解除されていれば、地図でも解除済みとして扱う。
+    """
+    info = item.get("県フィード照合") or {}
+    return info if info.get("判定") == "解除済み" else {}
+
+
 def display_state(item: dict) -> str:
     """
     地図での扱い（規制中／解除済み）。
@@ -100,6 +113,9 @@ def display_state(item: dict) -> str:
     （一覧・CSV・GeoJSONには最新の配布にあるかどうかをそのまま残す）。
     """
     if item["道路種別"] == UNKNOWN_LEVEL:
+        return "解除済み"
+    # 配布にはまだ残っていても、県の公開JSONで解除が確認できたものは解除済み
+    if pref_released(item):
         return "解除済み"
     return item["状態"]
 
@@ -131,6 +147,12 @@ def active_in(item: dict, start, end) -> bool:
     """
     first = _parse_stamp(item.get("初出時点"))
     released = _parse_stamp(item.get("解除確認時点"))
+    pref = pref_released(item)
+    if pref.get("終了日時"):
+        # 県の公開JSONで解除が分かっているものは、その時刻で切る
+        pref_end = _parse_stamp(str(pref["終了日時"]).replace("/", "-"))
+        if pref_end is not None:
+            released = min(released, pref_end) if released else pref_end
     if first is not None and first >= end:
         return False
     if released is not None and released <= start:
@@ -209,6 +231,15 @@ def _tooltip(item: dict) -> str:
             "地図での扱い",
             "解除の告知（規制ではありません）。解除後に残る規制は"
             "このデータには書かれていません",
+        ))
+    pref = pref_released(item)
+    if pref:
+        rows.append((
+            "地図での扱い",
+            f"解除済みとして表示。通れる道マップの配布にはまだ残っていますが、"
+            f"熊本県の公開JSONでは「{pref.get('内容')}」"
+            f"{'・終了 ' + str(pref['終了日時']) if pref.get('終了日時') else ''}"
+            f"（{pref.get('路線名')}／{pref.get('距離km')}km 離れた同名区間と照合）",
         ))
     if item["状態"] == "解除済み":
         rows.append(("解除の確認", item["解除確認時点"] or "（最新時点で消失）"))
@@ -439,6 +470,39 @@ def summary_html(data: dict) -> str:
         f'<th style="{td}">規制中</th>'
         f'<th style="{td}color:#888;">解除済み</th></tr>{body}</table>'
     )
+
+
+def freshness_note(data: dict) -> str:
+    """
+    規制情報がいつ時点のもので、どれだけ古いかを出す。
+
+    配布の回が新しくても、中の規制情報が前の回の使い回しであることがある。
+    そのまま「最新」と出すと、実際より新しい情報に見えてしまう。
+    """
+    snap = data.get("latest_snapshot")
+    reg = data.get("latest_regulation_time")
+    stale = data.get("regulation_stale_days") or 0
+    pref = data.get("pref_released_count") or 0
+
+    text = f"規制情報は **{reg} 時点**です"
+    if reg != snap:
+        text += (
+            f"（配布そのものは {snap} の回ですが、**中の道路規制情報は"
+            f"{stale:.0f}日前の回と同じもの**でした）"
+        )
+    text += "。"
+    if pref:
+        text += (
+            f"配布に残ったままの区間のうち、**{pref}件**は熊本県の公開JSON"
+            "（6時間ごとに取得）で解除が確認できたので、地図では解除済み"
+            "として出しています。線をなぞると照合の中身が出ます。"
+        )
+    if stale >= 3:
+        text += (
+            "**配布が止まっている間の解除は、県の公開JSONで拾えるもの以外は"
+            "地図に反映されません。**"
+        )
+    return text
 
 
 def content_note(data: dict) -> str:

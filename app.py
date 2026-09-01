@@ -2101,6 +2101,7 @@ def render_mlit_beta_tab(point_summary: pd.DataFrame, point_labels: dict,
         )
         # 観測点の読み方は（参考）タブと同じ文言を出す
         st.caption(point_marker_caption(anomaly_end))
+        st.warning(mlit_map_view.freshness_note(data))
         st.caption(
             mlit_map_view.content_note(data_window)
         )
