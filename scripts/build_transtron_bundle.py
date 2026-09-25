@@ -165,8 +165,11 @@ def _write(df, name, note):
 
 
 def _date_range(df, col):
+    """年月日の範囲。全部空の分もあるので、その場合は from/to を空にする。"""
     d = df[col].dropna()
-    return {"from": d.min(), "to": d.max(), "days": int(d.nunique()),
+    return {"from": (d.min() if len(d) else None),
+            "to": (d.max() if len(d) else None),
+            "days": int(d.nunique()),
             "blank_rows": int(df[col].isna().sum())}
 
 

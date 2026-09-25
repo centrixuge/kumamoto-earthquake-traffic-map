@@ -158,11 +158,15 @@ def _fmt_size(n) -> str:
 def _period(info: dict) -> str:
     """収録期間。断面データは年月日の列から、経路データは日時から。"""
     def ymd(v):
-        v = str(v or "")
+        v = "" if v is None else str(v)
+        if v.lower() in ("nan", "nat", "none"):
+            v = ""
         return f"{v[:4]}/{v[4:6]}/{v[6:8]}" if len(v) == 8 else v
 
     date = info.get("date") or {}
     if date:
+        if not (ymd(date.get("from")) or ymd(date.get("to"))):
+            return "（年月日の記載なし）"
         return f"{ymd(date.get('from'))}〜{ymd(date.get('to'))}"
     return (f"{str(info.get('link_enter_from', ''))[:10]}〜"
             f"{str(info.get('link_enter_to', ''))[:10]}").replace("-", "/")
@@ -215,12 +219,18 @@ def _download_block(file_name: str, key: str, info: dict,
 
 
 def _part_label(info: dict) -> str:
-    """分割したファイルの見出し。配布ラベルか年月、年月日が空の分は blank。"""
+    """
+    分割したファイルの見出し。
+
+    経路データは配布ごと、集計経路データは年月ごとに分けてある。配布ラベルにも
+    「202607」のように年月と同じ形のものがあるので、どちらの分け方かは
+    データの種類で決める（見出しが行ごとに変わると読みにくいため）。
+    """
     part = str(info.get("part", ""))
     if part == "blank":
         return "年月日が空の行"
-    if len(part) == 6 and part.isdigit():
-        return f"{part[:4]}年{int(part[4:]):d}月"
+    if "danmen_route" in str(info.get("dataset", "")):
+        return f"{part[:4]}年{int(part[4:]):d}月" if len(part) == 6 else part
     return f"配布 {part}"
 
 
