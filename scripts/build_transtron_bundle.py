@@ -46,14 +46,40 @@ OUTPUTS = {
     "transtron_danmen_route_all.csv.gz": ("danmen", "keiro", -1),
 }
 
-# 配布ラベル → zipファイル名
-DELIVERIES = {
-    "202607": {"danmen": "danmen202607.zip", "keiro": "keiro202607.zip"},
-    "20260801to04": {"danmen": "danmen20260801to04.zip",
-                     "keiro": "keiro20260801to04.zip"},
-    "20260805to09": {"danmen": "danmen20260805to09.zip",
-                     "keiro": "keiro20260805to09.zip"},
-}
+# 1ファイルの上限。GitHubは100MBで受け取りを拒み、50MBを超えると警告を出すので、
+# 分けて書く。経路データは配布ごと、集計経路データは年月ごとに分ける
+# （どちらもその単位で完結しているので、分けても数え直さずに済む）。
+PART_LIMIT_MB = 45
+
+# 出力ファイル名 → 分け方
+KEIRO_FILE = "transtron_keiro_link_all.csv.gz"
+OD_FILE = "transtron_danmen_od_all.csv.gz"
+ROUTE_FILE = "transtron_danmen_route_all.csv.gz"
+
+# 同じ置き場から配る資料。配布元の仕様書（PDF）とレイアウト表（Excel）で、
+# ファイル名も配布元のものなので、ここには書かずに data/transtron/ から拾う。
+DOC_SUFFIXES = (".pdf", ".xlsx")
+
+
+def _deliveries():
+    """
+    配布の一覧を data/transtron/ のファイル名から作る。
+
+    配布は danmen<ラベル>.zip と keiro<ラベル>.zip の対で届く。次の配布が来ても
+    このスクリプトを書き換えずに済むよう、対になっているものを拾って使う。
+    ラベルは日付なので、文字列の順がそのまま時間の順になる。
+    """
+    found = {}
+    for path in sorted(SRC.glob("danmen*.zip")):
+        label = path.stem[len("danmen"):]
+        keiro = SRC / f"keiro{label}.zip"
+        if not keiro.exists():
+            print(f"  ! {path.name} と対になる {keiro.name} がありません（とばします）")
+            continue
+        found[label] = {"danmen": path.name, "keiro": keiro.name}
+    if not found:
+        raise SystemExit(f"{SRC} に配布のzipがありません。")
+    return found
 
 
 def _layout_columns():
@@ -84,16 +110,22 @@ def _read_members(zip_path, prefix, cols):
     return frames
 
 
-def _load(kind, prefix, cols):
-    frames = []
-    for label, zips in DELIVERIES.items():
-        got = _read_members(SRC / zips[kind], prefix, cols)
-        for df in got:
-            df["配布"] = label
-        frames.extend(got)
-        print(f"  {zips[kind]} :: {prefix}* → {len(got)}ファイル "
-              f"{sum(len(d) for d in got):,}行")
-    return pd.concat(frames, ignore_index=True)
+def _load_one(label, zips, kind, prefix, cols):
+    """配布1回分を読む。"""
+    got = _read_members(SRC / zips[kind], prefix, cols)
+    for df in got:
+        df["配布"] = label
+    print(f"  {zips[kind]} :: {prefix}* → {len(got)}ファイル "
+          f"{sum(len(d) for d in got):,}行")
+    if not got:
+        return pd.DataFrame(columns=cols + ["元ファイル", "配布"])
+    return pd.concat(got, ignore_index=True)
+
+
+def _load(deliveries, kind, prefix, cols):
+    return pd.concat(
+        [_load_one(label, zips, kind, prefix, cols)
+         for label, zips in deliveries.items()], ignore_index=True)
 
 
 def _pref(series):
@@ -138,67 +170,141 @@ def _date_range(df, col):
             "blank_rows": int(df[col].isna().sum())}
 
 
+def _warn_if_big(info):
+    mb = info["bytes_gz"] / 1e6
+    if mb > PART_LIMIT_MB:
+        print(f"  ! {info['file']} が {mb:.0f}MB あります"
+              f"（1ファイル{PART_LIMIT_MB}MBまでの目安を超えています）")
+
+
+def _dataset_summary(dataset, title, parts, note):
+    """データの種類ごとのまとめ。アプリの一覧に出す。"""
+    return {
+        "dataset": dataset, "title": title, "note": note,
+        "parts": [i["file"] for i in parts],
+        "rows": sum(i["rows"] for i in parts),
+        "bytes_gz": sum(i["bytes_gz"] for i in parts),
+        "columns": parts[0]["columns"] if parts else [],
+    }
+
+
 def main():
     # 列名は置き場のJSONから読む（仕様書からの転記をリポジトリに置かないため）。
     # 位置で参照する箇所には、その位置が何かをコメントで書いておく。
     columns = _layout_columns()
+    deliveries = _deliveries()
+    print(f"配布 {len(deliveries)}回: {'、'.join(deliveries)}\n")
     meta = {"built_at": datetime.now().isoformat(timespec="seconds"),
-            "deliveries": {k: list(v.values()) for k, v in DELIVERIES.items()},
-            "files": []}
+            "deliveries": {k: list(v.values()) for k, v in deliveries.items()},
+            "files": [], "datasets": []}
 
-    name = "transtron_keiro_link_all.csv.gz"
-    kind, prefix, _ = OUTPUTS[name]
-    cols = columns[name]
-    print("経路データ（リンク単位の生データ）")
-    keiro = _load(kind, prefix, cols)
-    keiro = keiro[cols + ["配布", "元ファイル"]]
+    # ── 経路データ（リンク単位の生データ）──
+    # 縦につなぐだけでキーの重複が無いので、配布ごとに1ファイルにする。
+    # 全期間を1本にすると100MBを超えてしまうのと、次の配布が来たときに
+    # 前の分を作り直さずに済む（置き場のgitも新しい分だけ増える）。
+    cols = columns[KEIRO_FILE]
+    kind, prefix, _ = OUTPUTS[KEIRO_FILE]
     vehicle_col, trip_col, enter_col = cols[0], cols[1], cols[6]  # 車両/トリップ/入日時
-    dt = pd.to_datetime(keiro[enter_col], errors="coerce")
-    info = _write(keiro, name, "配布ファイルを縦に連結しただけ（キーの重複なし）")
-    info["link_enter_from"] = str(dt.min())
-    info["link_enter_to"] = str(dt.max())
-    info["link_enter_blank_rows"] = int(dt.isna().sum())
-    info["vehicles"] = int(keiro[vehicle_col].nunique())
-    info["trips"] = int(keiro.groupby([vehicle_col, trip_col]).ngroups)
-    meta["files"].append(info)
-    del keiro
+    print("経路データ（リンク単位の生データ）")
+    keiro_parts = []
+    for label, zips in deliveries.items():
+        df = _load_one(label, zips, kind, prefix, cols)
+        df = df[cols + ["配布", "元ファイル"]]
+        dt = pd.to_datetime(df[enter_col], errors="coerce")
+        info = _write(df, f"transtron_keiro_link_{label}.csv.gz",
+                      "配布ファイルを縦に連結しただけ（キーの重複なし）")
+        info.update({
+            "dataset": KEIRO_FILE, "part": label,
+            "link_enter_from": str(dt.min()), "link_enter_to": str(dt.max()),
+            "link_enter_blank_rows": int(dt.isna().sum()),
+            "vehicles": int(df[vehicle_col].nunique()),
+            "trips": int(df.groupby([vehicle_col, trip_col]).ngroups),
+        })
+        _warn_if_big(info)
+        keiro_parts.append(info)
+        del df
+    meta["files"].extend(keiro_parts)
+    summary = _dataset_summary(
+        KEIRO_FILE, "経路データ", keiro_parts,
+        "配布ごとに1ファイル。縦につなぐだけで重複はありません。")
+    summary["link_enter_from"] = min(i["link_enter_from"] for i in keiro_parts)
+    summary["link_enter_to"] = max(i["link_enter_to"] for i in keiro_parts)
+    summary["vehicles"] = None   # 配布をまたぐ重複があるので合計はしない
+    summary["trips"] = sum(i["trips"] for i in keiro_parts)
+    meta["datasets"].append(summary)
 
-    # 断面別の集計2種は作りが同じなので同じ手順で回す。
+    # ── 断面別の集計2種 ──
+    # こちらは同じキーが配布をまたいで現れるので、全部読んでから足し合わせる。
     # 台数は最後の列、年月日は4番目、断面リンクは先頭2列。
-    for name, label, note in (
-            ("transtron_danmen_od_all.csv.gz", "集計ODデータ",
+    for file_name, label_ja, note in (
+            (OD_FILE, "集計ODデータ",
              "同じキーが複数ファイルにある分は台数を合計した"),
-            ("transtron_danmen_route_all.csv.gz", "集計経路データ",
+            (ROUTE_FILE, "集計経路データ",
              "同じキーが複数ファイルにある分は台数を合計した")):
-        kind, prefix, _ = OUTPUTS[name]
-        cols = columns[name]
+        kind, prefix, _ = OUTPUTS[file_name]
+        cols = columns[file_name]
         count_col, date_col = cols[-1], cols[3]
-        print(label)
-        df = _load(kind, prefix, cols)
+        print(label_ja)
+        df = _load(deliveries, kind, prefix, cols)
         df["県"] = _pref(df["元ファイル"])
         raw_rows = len(df)
         df = _sum_by_key(df, cols, count_col)
         df = df[["県"] + cols + ["元ファイル数", "配布", "元ファイル"]]
-        info = _write(df, name, note)
-        info["rows_before_sum"] = raw_rows
-        info["count_total"] = int(df[count_col].sum())
-        info["date"] = _date_range(df, date_col)
-        info["sections"] = int(df.groupby(list(cols[:2])).ngroups)
-        meta["files"].append(info)
+
+        # 足し合わせたあとの行は年月日ごとに完結しているので、大きいものは
+        # 年月で分けて書く（分けても数え直しは要らない）。
+        # 集計経路データは大きいので年月で分ける。集計ODデータは小さいので1本。
+        parts = []
+        if file_name == ROUTE_FILE:
+            # 年月日が空の行もある（配布データにそのまま入っている）。
+            # 落とさずに blank という1ファイルにまとめる。
+            ym_col = df[date_col].astype(str).str[:6].where(
+                df[date_col].notna(), "blank")
+            groups = [(ym, df[ym_col == ym]) for ym in sorted(ym_col.unique())]
+        else:
+            groups = [(None, df)]
+        for ym, part in groups:
+            out_name = (file_name if ym is None
+                        else file_name.replace("_all.csv.gz", f"_{ym}.csv.gz"))
+            info = _write(part, out_name, note)
+            info.update({"dataset": file_name, "part": ym or "all",
+                         "rows_before_sum": (raw_rows if ym is None else None),
+                         "count_total": int(part[count_col].sum()),
+                         "date": _date_range(part, date_col),
+                         "sections": int(part.groupby(list(cols[:2])).ngroups)})
+            _warn_if_big(info)
+            parts.append(info)
+        meta["files"].extend(parts)
+        summary = _dataset_summary(file_name, label_ja, parts, note)
+        summary.update({
+            "rows_before_sum": raw_rows,
+            "count_total": sum(i["count_total"] for i in parts),
+            "date": _date_range(df, date_col),
+            "sections": int(df.groupby(list(cols[:2])).ngroups),
+        })
+        meta["datasets"].append(summary)
         del df
 
-    # レイアウト表も同じ置き場に置く（アプリの「商用車プローブ」タブから配る）
-    layout = SRC / "商用車プローブ_データレイアウト.xlsx"
-    if layout.exists():
-        (OUT / layout.name).write_bytes(layout.read_bytes())
-        meta["layout_file"] = layout.name
-        print(f"  → {layout.name}  {layout.stat().st_size / 1e3:.0f}KB（コピー）")
-    else:
-        print("  レイアウト表が見つかりません（scratch/transtron_layout_xlsx.py で作る）")
+    # ── 仕様書とレイアウト表 ──
+    # 中身の説明はこのリポジトリに書かず、ファイルそのものを置き場から配る。
+    docs = []
+    for src in sorted(SRC.iterdir()):
+        if src.suffix.lower() not in DOC_SUFFIXES:
+            continue
+        (OUT / src.name).write_bytes(src.read_bytes())
+        docs.append({"file": src.name, "bytes": src.stat().st_size})
+        print(f"  → {src.name}  {src.stat().st_size / 1e3:,.0f}KB（コピー）")
+    if not docs:
+        print("  ! 仕様書・レイアウト表が見つかりません")
+    meta["documents"] = docs
+    meta["layout_file"] = next(
+        (d["file"] for d in docs if d["file"].endswith(".xlsx")), None)
 
     (OUT / "transtron_bundle_meta.json").write_text(
         json.dumps(meta, ensure_ascii=False, indent=1) + "\n", encoding="utf-8")
-    print(f"\nmeta: {OUT / 'transtron_bundle_meta.json'}")
+    total = sum(i["bytes_gz"] for i in meta["files"])
+    print(f"\n合計 {len(meta['files'])}ファイル {total / 1e6:,.0f}MB")
+    print(f"meta: {OUT / 'transtron_bundle_meta.json'}")
 
 
 if __name__ == "__main__":

@@ -36,7 +36,6 @@ from modules import bzone, private_store
 LOCAL_DIR = Path(__file__).resolve().parents[1] / "data" / "transtron" / "bundle"
 META_FILE = "transtron_bundle_meta.json"
 LAYOUT_JSON = "transtron_layout.json"
-LAYOUT_XLSX = "商用車プローブ_データレイアウト.xlsx"
 SECTION = "transtron"
 ENV_PREFIX = "TRANSTRON"
 
@@ -115,6 +114,33 @@ def load_sections() -> pd.DataFrame:
               .sort_values(["県", "台数"], ascending=[True, False]))
 
 
+def dataset_list(meta: dict) -> list:
+    """
+    データの種類ごとのまとめを返す。
+
+    1ファイルが大きくなりすぎないように、経路データは配布ごと、集計経路
+    データは年月ごとに分けて置いている（置き場のGitHubが100MBで受け取りを
+    拒むため）。ここではその分割を「データの種類 → ファイルの一覧」に
+    まとめ直して、タブの単位が配布や年月ではなくデータの種類になるようにする。
+
+    古い形式（分割前）のmetaが置き場に残っていても落ちないよう、
+    datasets が無ければ files から組み立てる。
+    """
+    if meta.get("datasets"):
+        return meta["datasets"]
+    out = []
+    for info in meta.get("files", []):
+        out.append({"dataset": info["file"], "title": "", "note": info.get("note", ""),
+                    "parts": [info["file"]], "rows": info.get("rows", 0),
+                    "bytes_gz": info.get("bytes_gz", 0),
+                    "columns": info.get("columns", []),
+                    "date": info.get("date"),
+                    "rows_before_sum": info.get("rows_before_sum"),
+                    "link_enter_from": info.get("link_enter_from"),
+                    "link_enter_to": info.get("link_enter_to")})
+    return out
+
+
 def _meta_of(meta: dict, file_name: str) -> dict:
     for info in meta.get("files", []):
         if info.get("file") == file_name:
@@ -156,10 +182,17 @@ def _layout_frame(spec: dict, extras: dict) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def _download_block(file_name: str, key: str, info: dict) -> None:
-    """47MBを毎回読まないよう、押されてから用意する2段構えにする。"""
+def _download_block(file_name: str, key: str, info: dict,
+                    mime: str = "application/gzip",
+                    label: str = None) -> None:
+    """
+    数十MBを毎回読まないよう、押されてから用意する2段構えにする。
+
+    Streamlit の download_button は中身をメモリに持つので、タブを開いただけで
+    全ファイルを読むと重い。「用意する」を押したものだけ読む。
+    """
     state_key = f"transtron_ready_{key}"
-    cols = st.columns([1, 1])
+    cols = st.columns([1, 1.4])
     with cols[0]:
         if st.button("ファイルを用意する", key=f"transtron_prep_{key}"):
             st.session_state[state_key] = True
@@ -171,13 +204,63 @@ def _download_block(file_name: str, key: str, info: dict) -> None:
             return
         with cols[1]:
             st.download_button(
-                f"{file_name} をダウンロード（{_fmt_size(len(data))}）",
-                data=data, file_name=file_name, mime="application/gzip",
+                f"{label or file_name} をダウンロード（{_fmt_size(len(data))}）",
+                data=data, file_name=file_name, mime=mime,
                 key=f"transtron_dl_{key}")
     else:
+        with cols[1]:
+            st.caption(
+                f"{_fmt_size(info.get('bytes_gz') or info.get('bytes'))}あります。"
+                "押すと読み込んでからダウンロードのボタンが出ます。")
+
+
+def _part_label(info: dict) -> str:
+    """分割したファイルの見出し。配布ラベルか年月、年月日が空の分は blank。"""
+    part = str(info.get("part", ""))
+    if part == "blank":
+        return "年月日が空の行"
+    if len(part) == 6 and part.isdigit():
+        return f"{part[:4]}年{int(part[4:]):d}月"
+    return f"配布 {part}"
+
+
+def _parts_block(meta: dict, dataset: dict) -> None:
+    """
+    そのデータのファイルを並べて、1つずつダウンロードできるようにする。
+
+    1ファイルが大きくなりすぎないよう、経路データは配布ごと、集計経路データは
+    年月ごとに分けてある。分け方はデータの性質に合わせてあり、**分けた
+    ファイルをつなぐときに数え直しは要らない**（配布をまたぐ重複の足し合わせは、
+    分ける前に済ませてある）。
+    """
+    parts = dataset.get("parts", [])
+    if len(parts) > 1:
         st.caption(
-            f"gzip圧縮で{_fmt_size(info.get('bytes_gz'))}あります。"
-            "押すと読み込んでからダウンロードのボタンが出ます。")
+            f"{len(parts)}ファイルに分かれています"
+            f"（合計 {_fmt_size(dataset.get('bytes_gz'))}）。"
+            "置き場のGitHubが1ファイル100MBまでのため分けたもので、"
+            "必要な分だけ落とせます。全部使うときは縦につなげば元どおりです"
+            "（gzipのまま `cat` でつないでも読めます）。"
+        )
+        st.dataframe(pd.DataFrame([
+            {"ファイル": f,
+             "範囲": _meta_of(meta, f).get("part", ""),
+             "行数": f"{_meta_of(meta, f).get('rows', 0):,}",
+             "期間": _period(_meta_of(meta, f)),
+             "大きさ(gz)": _fmt_size(_meta_of(meta, f).get("bytes_gz"))}
+            for f in parts
+        ]), use_container_width=True, hide_index=True)
+    for name in parts:
+        info = _meta_of(meta, name)
+        if len(parts) > 1:
+            # どのファイルのボタンか分かるように、範囲と期間を見出しに出す
+            # （ボタンにファイル名が出るのは「用意する」を押したあとなので）
+            st.markdown(
+                f"**{_part_label(info)}**"
+                f"　<span style='color:#666;font-size:0.85em;'>{name}"
+                f"　{info.get('rows', 0):,}行　{_period(info)}</span>",
+                unsafe_allow_html=True)
+        _download_block(name, name, info)
 
 
 # 提供元。日野データシステムのデータは受け取り待ち。
@@ -198,6 +281,50 @@ def _provider_note() -> None:
         + " ／ ".join(f"{name}（{state}）" for name, state in PROVIDERS)
         + "。受け取ったものから順にこのタブへ足していきます。"
     )
+
+
+MIME = {
+    ".pdf": "application/pdf",
+    ".xlsx": ("application/vnd.openxmlformats-officedocument"
+              ".spreadsheetml.sheet"),
+}
+
+DOC_NOTE = {
+    ".pdf": "配布元の仕様書そのもの（項目の定義はこれが原本です）",
+    ".xlsx": "仕様書からの転記に、実データを走査した結果を並べたブック",
+}
+
+
+def _documents_block(meta: dict, doc: dict) -> None:
+    """
+    仕様についての資料（仕様書のPDFとレイアウト表のExcel）を配る。
+
+    どちらも配布元の資料なので、中身はここに書き写さず、ファイルのまま置き場
+    （非公開）から配る。表示する説明は置き場のJSON（transtron_layout.json）と、
+    拡張子ごとの短い一言だけにとどめる。
+    """
+    docs = meta.get("documents")
+    if not docs:
+        # 古い形式のmeta。レイアウト表だけは置いてある。
+        docs = [{"file": meta["layout_file"]}] if meta.get("layout_file") else []
+    if not docs:
+        return
+    with st.expander("仕様についての資料（仕様書・レイアウト表）"):
+        st.caption(
+            "データの項目の定義は、次の資料にまとめられています。"
+            "どちらも配布元の資料なので、このタブと同じ範囲でだけ使ってください。"
+        )
+        for info in docs:
+            name = info["file"]
+            ext = Path(name).suffix.lower()
+            st.markdown(f"**{name}**")
+            if DOC_NOTE.get(ext):
+                st.caption(DOC_NOTE[ext])
+            _download_block(name, f"doc_{ext.strip('.')}", info,
+                            mime=MIME.get(ext, "application/octet-stream"),
+                            label=name)
+        if doc.get("layout_caption"):
+            st.caption(doc["layout_caption"])
 
 
 def render_tab() -> None:
@@ -222,49 +349,54 @@ def render_tab() -> None:
 
     datasets = doc.get("datasets", {})
     extras = doc.get("extra_columns", {})
-    # 置き場にあるファイルの順序（metaの並び）に合わせる
-    files = [i["file"] for i in meta.get("files", []) if i["file"] in datasets]
+    # 置き場にあるものの順序（metaの並び）に合わせる
+    sets = [d for d in dataset_list(meta) if d["dataset"] in datasets]
 
     st.dataframe(pd.DataFrame([
-        {"データ": datasets[f].get("title", f),
-         "ファイル": f,
-         "行数": f"{_meta_of(meta, f).get('rows', 0):,}",
-         "列数": len(_meta_of(meta, f).get("columns", [])),
-         "期間": _period(_meta_of(meta, f)),
-         "大きさ(gz)": _fmt_size(_meta_of(meta, f).get("bytes_gz"))}
-        for f in files
+        {"データ": datasets[d["dataset"]].get("title", d["dataset"]),
+         "ファイル": (d["parts"][0] if len(d["parts"]) == 1
+                  else f"{len(d['parts'])}ファイルに分割"),
+         "行数": f"{d.get('rows', 0):,}",
+         "列数": len(d.get("columns", [])),
+         "期間": _period(d),
+         "大きさ(gz)": _fmt_size(d.get("bytes_gz"))}
+        for d in sets
     ]), use_container_width=True, hide_index=True)
     st.caption(
-        f"束ねた日時: {meta.get('built_at', '-')} ／ 読み込み元: "
+        f"束ねた日時: {meta.get('built_at', '-')} ／ 配布 {len(meta.get('deliveries', {}))}回分"
+        f" ／ 読み込み元: "
         f"{private_store.source_label(LOCAL_DIR, META_FILE, SECTION, ENV_PREFIX)}"
     )
 
-    tabs = st.tabs([datasets[f].get("short", f) for f in files])
-    for tab, file_name in zip(tabs, files):
-        spec = datasets[file_name]
-        info = _meta_of(meta, file_name)
+    _documents_block(meta, doc)
+
+    tabs = st.tabs([datasets[d["dataset"]].get("short", d["dataset"])
+                    for d in sets])
+    for tab, dataset in zip(tabs, sets):
+        key = dataset["dataset"]
+        spec = datasets[key]
         with tab:
-            st.markdown(f"**{spec.get('title', file_name)}**")
+            st.markdown(f"**{spec.get('title', key)}**")
             if spec.get("note"):
                 st.markdown(spec["note"])
             if spec.get("sources"):
                 st.caption(f"元の配布ファイル: {spec['sources']}")
             if spec.get("combine"):
                 st.caption(f"束ね方: {spec['combine']}")
-            if info.get("rows_before_sum"):
-                merged = info["rows_before_sum"] - info["rows"]
+            if dataset.get("rows_before_sum"):
+                merged = dataset["rows_before_sum"] - dataset["rows"]
                 st.caption(
-                    f"連結すると{info['rows_before_sum']:,}行で、キーで足し合わせると"
-                    f"{info['rows']:,}行（{merged:,}行が合算）になります。"
+                    f"連結すると{dataset['rows_before_sum']:,}行で、キーで足し合わせると"
+                    f"{dataset['rows']:,}行（{merged:,}行が合算）になります。"
                 )
-            _download_block(file_name, spec.get("short", file_name), info)
+            _parts_block(meta, dataset)
 
             st.markdown("**データレイアウト**")
             st.dataframe(_layout_frame(spec, extras),
                          use_container_width=True, hide_index=True)
             with st.expander("先頭200行を見る"):
                 try:
-                    st.dataframe(load_head(file_name),
+                    st.dataframe(load_head(dataset["parts"][0]),
                                  use_container_width=True, hide_index=True)
                 except private_store.PrivateDataUnavailable as e:
                     st.warning(str(e))
@@ -322,22 +454,6 @@ def render_tab() -> None:
         ]), use_container_width=True, hide_index=True)
         if doc.get("delivery_caption"):
             st.caption(doc["delivery_caption"])
-
-    with st.expander("レイアウト表（Excel）"):
-        if st.button("レイアウト表を用意する", key="transtron_prep_layout"):
-            st.session_state["transtron_ready_layout"] = True
-        if st.session_state.get("transtron_ready_layout"):
-            try:
-                st.download_button(
-                    f"{LAYOUT_XLSX} をダウンロード",
-                    data=load_file(LAYOUT_XLSX), file_name=LAYOUT_XLSX,
-                    mime=("application/vnd.openxmlformats-officedocument"
-                          ".spreadsheetml.sheet"),
-                    key="transtron_dl_layout")
-            except private_store.PrivateDataUnavailable as e:
-                st.warning(str(e))
-        if doc.get("layout_caption"):
-            st.caption(doc["layout_caption"])
 
     notes = doc.get("analysis_notes") or []
     if notes:
