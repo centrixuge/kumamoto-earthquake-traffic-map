@@ -1,17 +1,16 @@
 """
 商用車プローブデータ（トランストロン）のダウンロードタブ。
 
-配布は期間ごと・県ごと・日ごとに分かれている（いまは3配布・46ファイル）。分析のたびに
-つなぎ直すのは手間で、しかも**同じキーが隣の期間のファイルにも現れる**ため
-素朴につなぐと二重に数える。そこで `scripts/build_transtron_bundle.py` が
-全期間を1本にまとめたものを作り、このタブではそれを配る。
+配布は期間ごと・県ごと・日ごとに分かれている。分析のたびにつなぎ直すのは手間で、
+しかも**同じキーが隣の期間のファイルにも現れる**ため素朴につなぐと二重に数える。
+そこで `scripts/build_transtron_bundle.py` が全期間をつないだものを作り、
+このタブではそれを配る。
 
 **このモジュールには、データの中身の説明を一切書かない。**
 develop は公開リポジトリのブランチなので、アプリのURLが非公開でも、
-リポジトリに入れたものは公開される。配布元の仕様書には秘密情報の表示があり、
-第三者提供の可否も未確認なので、項目の定義・値域・断面の一覧といった
-「データの中身」は非公開の置き場に置いた `transtron_layout.json` から読んで
-表示する。ここにあるのは、それを並べる仕組みだけ。
+リポジトリに入れたものは公開される。配布元の仕様書には秘密情報の表示があるので、
+項目の定義・値域・断面の一覧といった「データの中身」は非公開の置き場に置いた
+`transtron_layout.json` から読んで表示する。ここにあるのは、それを並べる仕組みだけ。
 
 ファイルを探す順序は modules/private_store.py と共通。
 
@@ -96,13 +95,6 @@ def load_doc() -> dict:
 @st.cache_data(ttl=3600, show_spinner="ファイルを用意しています")
 def load_file(name: str) -> bytes:
     return _fetch(name)
-
-
-@st.cache_data(ttl=3600, show_spinner="先頭だけ読み込んでいます")
-def load_head(name: str, rows: int = 200) -> pd.DataFrame:
-    """先頭だけ読む。47MBを落とさなくても中身が見えるように。"""
-    with gzip.open(io.BytesIO(_fetch(name)), "rt", encoding="utf-8-sig") as f:
-        return pd.read_csv(f, nrows=rows, dtype=str)
 
 
 @st.cache_data(ttl=3600, show_spinner="断面リンクの一覧を作っています")
@@ -205,108 +197,49 @@ def _layout_frame(spec: dict, extras: dict) -> pd.DataFrame:
 def _download_block(file_name: str, key: str, info: dict,
                     mime: str = "application/gzip",
                     label: str = None) -> None:
-    """
-    数十MBを毎回読まないよう、押されてから用意する2段構えにする。
-
-    Streamlit の download_button は中身をメモリに持つので、タブを開いただけで
-    全ファイルを読むと重い。「用意する」を押したものだけ読む。
-    """
-    state_key = f"transtron_ready_{key}"
-    cols = st.columns([1, 1.4])
-    with cols[0]:
-        if st.button("ファイルを用意する", key=f"transtron_prep_{key}"):
-            st.session_state[state_key] = True
-    if st.session_state.get(state_key):
-        try:
-            data = load_file(file_name)
-        except private_store.PrivateDataUnavailable as e:
-            st.warning(str(e))
-            return
-        with cols[1]:
-            st.download_button(
-                f"{label or file_name} をダウンロード（{_fmt_size(len(data))}）",
-                data=data, file_name=file_name, mime=mime,
-                key=f"transtron_dl_{key}")
-    else:
-        with cols[1]:
-            st.caption(
-                f"{_fmt_size(info.get('bytes_gz') or info.get('bytes'))}あります。"
-                "押すと読み込んでからダウンロードのボタンが出ます。")
-
-
-def _part_label(info: dict) -> str:
-    """
-    分割したファイルの見出し。
-
-    経路データは配布ごと、集計経路データは年月ごとに分けてある。配布ラベルにも
-    「202607」のように年月と同じ形のものがあるので、どちらの分け方かは
-    データの種類で決める（見出しが行ごとに変わると読みにくいため）。
-    """
-    part = str(info.get("part", ""))
-    if part == "blank":
-        return "年月日が空の行"
-    if "danmen_route" in str(info.get("dataset", "")):
-        return f"{part[:4]}年{int(part[4:]):d}月" if len(part) == 6 else part
-    return f"配布 {part}"
+    """そのまま押せるダウンロードのボタンを1つ出す。"""
+    try:
+        data = load_file(file_name)
+    except private_store.PrivateDataUnavailable as e:
+        st.warning(str(e))
+        return
+    st.download_button(
+        f"{label or file_name}（{_fmt_size(len(data))}）",
+        data=data, file_name=file_name, mime=mime,
+        key=f"transtron_dl_{key}")
 
 
 def _parts_block(meta: dict, dataset: dict) -> None:
     """
-    そのデータのファイルを並べて、1つずつダウンロードできるようにする。
+    そのデータのファイルを、そのまま押せるボタンで並べる。
 
     1ファイルが大きくなりすぎないよう、経路データは配布ごと、集計経路データは
-    年月ごとに分けてある。分け方はデータの性質に合わせてあり、**分けた
-    ファイルをつなぐときに数え直しは要らない**（配布をまたぐ重複の足し合わせは、
-    分ける前に済ませてある）。
+    年月ごとに分けてある（置き場のGitHubが1ファイル100MBまでのため）。
+    分けた単位はどちらも数え直しが要らないので、縦につなげば元どおり。
     """
     parts = dataset.get("parts", [])
-    if len(parts) > 1:
-        st.caption(
-            f"{len(parts)}ファイルに分かれています"
-            f"（合計 {_fmt_size(dataset.get('bytes_gz'))}）。"
-            "置き場のGitHubが1ファイル100MBまでのため分けたもので、"
-            "必要な分だけ落とせます。全部使うときは縦につなげば元どおりです"
-            "（gzipのまま `cat` でつないでも読めます）。"
-        )
-        st.dataframe(pd.DataFrame([
-            {"ファイル": f,
-             "範囲": _meta_of(meta, f).get("part", ""),
-             "行数": f"{_meta_of(meta, f).get('rows', 0):,}",
-             "期間": _period(_meta_of(meta, f)),
-             "大きさ(gz)": _fmt_size(_meta_of(meta, f).get("bytes_gz"))}
-            for f in parts
-        ]), use_container_width=True, hide_index=True)
     for name in parts:
         info = _meta_of(meta, name)
-        if len(parts) > 1:
-            # どのファイルのボタンか分かるように、範囲と期間を見出しに出す
-            # （ボタンにファイル名が出るのは「用意する」を押したあとなので）
-            st.markdown(
-                f"**{_part_label(info)}**"
-                f"　<span style='color:#666;font-size:0.85em;'>{name}"
-                f"　{info.get('rows', 0):,}行　{_period(info)}</span>",
-                unsafe_allow_html=True)
-        _download_block(name, name, info)
+        _download_block(
+            name, name, info,
+            label=f"{name}　{info.get('rows', 0):,}行　{_period(info)}")
+    if len(parts) > 1:
+        st.caption(
+            f"{len(parts)}ファイルに分かれています（合計 "
+            f"{_fmt_size(dataset.get('bytes_gz'))}）。必要な分だけ落とせます。"
+            "全部使うときは縦につなげば元どおりです。"
+        )
+    if dataset.get("blank_date_rows_dropped"):
+        st.caption(
+            f"年月日が空の{dataset['blank_date_rows_dropped']:,}行は除いています"
+            "（いつの交通か分からないため）。"
+        )
 
 
-# 提供元。日野データシステムのデータは受け取り待ち。
-PROVIDERS = [
-    ("トランストロン", "受領済み"),
-    ("日野データシステム", "受け取り待ち"),
-]
 WIP_NOTE = (
-    "**分析結果の可視化は作業中です。** いまはデータの配布だけを行っています。"
+    "トランストロンの商用車プローブデータを置いています。"
+    "**分析結果の可視化は作業中です。**"
 )
-
-
-def _provider_note() -> None:
-    """提供元の状況。データが読めるかどうかにかかわらず出す。"""
-    st.markdown(WIP_NOTE)
-    st.caption(
-        "提供元: "
-        + " ／ ".join(f"{name}（{state}）" for name, state in PROVIDERS)
-        + "。受け取ったものから順にこのタブへ足していきます。"
-    )
 
 
 MIME = {
@@ -355,7 +288,7 @@ def _documents_block(meta: dict, doc: dict) -> None:
 
 def render_tab() -> None:
     st.subheader("商用車プローブデータ")
-    _provider_note()
+    st.markdown(WIP_NOTE)
     if not available():
         st.info(preparing_note())
         return
@@ -366,12 +299,9 @@ def render_tab() -> None:
         st.warning(str(e))
         return
 
-    st.markdown("#### トランストロン")
     st.caption(doc.get("source_note", ""), unsafe_allow_html=True)
     if doc.get("terms_note"):
         st.warning(doc["terms_note"])
-    if doc.get("intro"):
-        st.markdown(doc["intro"])
 
     datasets = doc.get("datasets", {})
     extras = doc.get("extra_columns", {})
@@ -403,33 +333,11 @@ def render_tab() -> None:
         spec = datasets[key]
         with tab:
             st.markdown(f"**{spec.get('title', key)}**")
-            if spec.get("note"):
-                st.markdown(spec["note"])
-            if spec.get("sources"):
-                st.caption(f"元の配布ファイル: {spec['sources']}")
-            if spec.get("combine"):
-                st.caption(f"束ね方: {spec['combine']}")
-            if dataset.get("rows_before_sum"):
-                merged = dataset["rows_before_sum"] - dataset["rows"]
-                st.caption(
-                    f"連結すると{dataset['rows_before_sum']:,}行で、キーで足し合わせると"
-                    f"{dataset['rows']:,}行（{merged:,}行が合算）になります。"
-                )
             _parts_block(meta, dataset)
 
             st.markdown("**データレイアウト**")
             st.dataframe(_layout_frame(spec, extras),
                          use_container_width=True, hide_index=True)
-            with st.expander("先頭200行を見る"):
-                try:
-                    st.dataframe(load_head(dataset["parts"][0]),
-                                 use_container_width=True, hide_index=True)
-                except private_store.PrivateDataUnavailable as e:
-                    st.warning(str(e))
-
-    if doc.get("combine_evidence"):
-        with st.expander("同じキーが複数ファイルに現れる理由と、足し合わせの裏付け"):
-            st.markdown(doc["combine_evidence"])
 
     with st.expander("断面リンクの一覧（実データから拾ったもの）"):
         if doc.get("sections_note"):
@@ -471,23 +379,7 @@ def render_tab() -> None:
             "道路交通センサスのゾーン区分表が別に必要です。"
         )
 
-    with st.expander("元の配布ファイルとの対応"):
-        if doc.get("delivery_note"):
-            st.markdown(doc["delivery_note"])
-        st.dataframe(pd.DataFrame([
-            {"配布": label, "ZIP": z}
-            for label, zips in meta.get("deliveries", {}).items() for z in zips
-        ]), use_container_width=True, hide_index=True)
-        if doc.get("delivery_caption"):
-            st.caption(doc["delivery_caption"])
-
     notes = doc.get("analysis_notes") or []
     if notes:
         with st.expander("分析にあたっての注意と、別途必要になるデータ"):
             st.markdown("\n".join(f"- {n}" for n in notes))
-
-    st.markdown("#### 日野データシステム")
-    st.info(
-        "データを受け取り次第、トランストロンと同じようにここへ置きます"
-        "（提供条件の確認が済んだものから）。"
-    )

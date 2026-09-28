@@ -254,15 +254,19 @@ def main():
         df = _sum_by_key(df, cols, count_col)
         df = df[["県"] + cols + ["元ファイル数", "配布", "元ファイル"]]
 
+        # 年月日が空の行は落とす。いつの交通か分からず、つないだデータでは
+        # 使いようがないため（元の配布ファイルにはそのまま残っている）。
+        blank = int(df[date_col].isna().sum())
+        if blank:
+            df = df[df[date_col].notna()]
+            print(f"  年月日が空の{blank:,}行を除きました")
+
         # 足し合わせたあとの行は年月日ごとに完結しているので、大きいものは
         # 年月で分けて書く（分けても数え直しは要らない）。
         # 集計経路データは大きいので年月で分ける。集計ODデータは小さいので1本。
         parts = []
         if file_name == ROUTE_FILE:
-            # 年月日が空の行もある（配布データにそのまま入っている）。
-            # 落とさずに blank という1ファイルにまとめる。
-            ym_col = df[date_col].astype(str).str[:6].where(
-                df[date_col].notna(), "blank")
+            ym_col = df[date_col].astype(str).str[:6]
             groups = [(ym, df[ym_col == ym]) for ym in sorted(ym_col.unique())]
         else:
             groups = [(None, df)]
@@ -280,6 +284,7 @@ def main():
         meta["files"].extend(parts)
         summary = _dataset_summary(file_name, label_ja, parts, note)
         summary.update({
+            "blank_date_rows_dropped": blank,
             "rows_before_sum": raw_rows,
             "count_total": sum(i["count_total"] for i in parts),
             "date": _date_range(df, date_col),
