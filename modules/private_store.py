@@ -169,6 +169,59 @@ def fetch(name: str, *, local_dir: Path, section: str, env_prefix: str,
     return res.content
 
 
+def setup_note(local_dir: Path, name: str, section: str,
+               env_prefix: str) -> str:
+    """
+    「準備中」と出すときに、**どこを探して何が無かったか**を書く。
+
+    置き場は3つあり、どれも見つからないと準備中になる。どれが欠けているのかが
+    画面から分からないと、手元では動くのにデプロイ済みのアプリでだけ準備中、
+    といったときに切り分けができない。値は出さず、**設定されているかどうかと
+    セクション名・キー名だけ**を出す（トークンは形だけ）。
+    """
+    local = Path(local_dir) / name
+    lines = [
+        f"- 手元のファイル `{local}`: "
+        + ("あります" if local.exists() else "**ありません**"),
+        f"- 環境変数 `{env_prefix}_S3_BUCKET`: "
+        + ("設定あり" if os.environ.get(f"{env_prefix}_S3_BUCKET", "").strip()
+           else "未設定"),
+    ]
+    try:
+        sections = sorted(str(k) for k in st.secrets.keys())
+    except Exception:
+        sections = None
+    if sections is None:
+        lines.append("- `st.secrets`: **読めません**（secrets が未設定です）")
+    elif section not in sections:
+        lines.append(
+            f"- `st.secrets` の `[{section}]`: **ありません**"
+            + (f"（読めたセクション: {'、'.join(sections)}）" if sections
+               else "（secrets にセクションがありません）")
+        )
+    else:
+        cfg = dict(st.secrets[section])
+        keys = "、".join(sorted(cfg)) or "（空）"
+        lines.append(f"- `st.secrets` の `[{section}]`: あります（キー: {keys}）")
+        if cfg.get("repo"):
+            lines.append(f"  - `repo` = `{cfg['repo']}` / "
+                         f"`ref` = `{cfg.get('ref', 'main')}`")
+        lines.append("  - " + token_shape(clean_token(cfg.get("token", ""))))
+    return "\n".join(lines)
+
+
+def secrets_example(section: str, repo: str) -> str:
+    """secrets に書く内容の見本（デプロイ済みアプリの設定画面に貼る用）。"""
+    return (
+        "```toml\n"
+        f"[{section}]\n"
+        f'repo = \"{repo}\"\n'
+        'ref  = \"main\"\n'
+        'token = \"github_pat_...\"   # Contents: Read-only の fine-grained PAT\n'
+        "```"
+    )
+
+
 def source_label(local_dir: Path, name: str, section: str,
                  env_prefix: str) -> str:
     """いまどこから読んでいるかを1行で返す（画面の脚注用）。"""

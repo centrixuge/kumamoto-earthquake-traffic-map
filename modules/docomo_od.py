@@ -63,11 +63,21 @@ FALLBACK_GROUPS = [
     {"key": "air", "label": "飛行機"},
 ]
 
-PREPARING = (
-    "ドコモODデータは準備中です。"
-    "`python scripts/build_docomo_od_bundle.py` で整えたファイルを作り、"
-    "`data/docomo_od/bundle/` に置くか、非公開の置き場を設定してください。"
-)
+PRIVATE_REPO = "centrixuge/kumamoto-docomo-od-data"
+
+
+def preparing_note() -> str:
+    """置き場が見つからないときの案内（商用車プローブと同じ作り）。"""
+    return (
+        "**ドコモODデータの置き場が見つかりません。** 次の3つを探しました。\n\n"
+        + private_store.setup_note(LOCAL_DIR, META_FILE, SECTION, ENV_PREFIX)
+        + "\n\nデプロイ済みのアプリでは、Streamlit の Settings → Secrets に"
+        "次を足すと読めるようになります（保存後にアプリを Reboot）。\n\n"
+        + private_store.secrets_example(SECTION, PRIVATE_REPO)
+        + "\n手元で動かすときは "
+        "`python scripts/build_docomo_od_bundle.py` で整えたファイルを作り、"
+        f"`{LOCAL_DIR.name}/` に置きます。"
+    )
 
 
 class DocomoOdUnavailable(private_store.PrivateDataUnavailable):
@@ -129,7 +139,7 @@ def render_tab() -> None:
     st.markdown(WIP_NOTE)
 
     if not available():
-        st.info(PREPARING)
+        st.info(preparing_note())
         return
     try:
         meta = load_meta()

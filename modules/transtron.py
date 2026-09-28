@@ -42,11 +42,27 @@ ENV_PREFIX = "TRANSTRON"
 # 断面の一覧はこのファイル（0.3MB）から作る。大きい2つは読まない。
 OD_FILE = "transtron_danmen_od_all.csv.gz"
 
-PREPARING = (
-    "商用車プローブデータは準備中です。"
-    "`python scripts/build_transtron_bundle.py` で束ねたファイルを作り、"
-    "`data/transtron/bundle/` に置くか、非公開の置き場を設定してください。"
-)
+PRIVATE_REPO = "centrixuge/kumamoto-transtron-probe-data"
+
+
+def preparing_note() -> str:
+    """
+    置き場が見つからないときの案内。**どこを探して何が無かったか**まで出す。
+
+    手元では動くのにデプロイ済みのアプリでだけ準備中、ということが起きる
+    （secrets に `[transtron]` を書いていない場合）。案内が「作ってください」
+    だけだと、デプロイ済みのアプリで何をすればよいのかが分からないため。
+    """
+    return (
+        "**商用車プローブデータの置き場が見つかりません。** 次の3つを探しました。\n\n"
+        + private_store.setup_note(LOCAL_DIR, META_FILE, SECTION, ENV_PREFIX)
+        + "\n\nデプロイ済みのアプリでは、Streamlit の Settings → Secrets に"
+        "次を足すと読めるようになります（保存後にアプリを Reboot）。\n\n"
+        + private_store.secrets_example(SECTION, PRIVATE_REPO)
+        + "\n手元で動かすときは "
+        "`python scripts/build_transtron_bundle.py` で束ねたファイルを作り、"
+        f"`{LOCAL_DIR.name}/` に置きます。"
+    )
 
 
 class TranstronUnavailable(private_store.PrivateDataUnavailable):
@@ -341,7 +357,7 @@ def render_tab() -> None:
     st.subheader("商用車プローブデータ")
     _provider_note()
     if not available():
-        st.info(PREPARING)
+        st.info(preparing_note())
         return
     try:
         meta = load_meta()
