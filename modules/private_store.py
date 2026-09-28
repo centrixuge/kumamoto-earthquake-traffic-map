@@ -85,6 +85,56 @@ def token_shape(token: str) -> str:
     )
 
 
+def access_hint(token: str, repo: str, timeout: int = 15) -> str:
+    """
+    404のときに、**トークンから何が見えているか**を調べて書く。
+
+    404は「存在しない」と「権限が無い」の区別が付かないので、そのままでは
+    綴り違いなのか権限不足なのかが分からない。そこで、同じトークンで
+    「持ち主は誰か」と「そのリポジトリが見えるか」を確かめて、どちらなのかを
+    はっきりさせる（トークンの値は出さない）。
+    """
+    if not token:
+        return ""
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+    owner, _, name = repo.partition("/")
+    lines = []
+    try:
+        me = requests.get("https://api.github.com/user", headers=headers,
+                          timeout=timeout)
+        if me.status_code == 200:
+            login = me.json().get("login", "")
+            lines.append(
+                f"このトークンの持ち主: **{login}**"
+                + ("" if login == owner else
+                   f"（このリポジトリの所有者は **{owner}** です。"
+                   "持ち主が違うと、権限を足しても読めません）")
+            )
+        else:
+            lines.append(
+                f"このトークンの持ち主を確認できませんでした（HTTP {me.status_code}）。"
+                "期限切れか、値が欠けている可能性があります。"
+            )
+        res = requests.get(f"https://api.github.com/repos/{repo}",
+                           headers=headers, timeout=timeout)
+        lines.append(
+            "このトークンから `" + repo + "` は**見えています**。"
+            "ファイル名かブランチ名（`ref`）をご確認ください。"
+            if res.status_code == 200 else
+            f"このトークンから `{repo}` が**見えません**（HTTP {res.status_code}）。"
+            "fine-grained PAT の **Repository access** に "
+            f"`{name}` を足してください（作り直さなくても足せます。"
+            "トークンの値は変わらないので、secrets はそのままで構いません）。"
+        )
+    except requests.RequestException:
+        return ""
+    return "\n\n".join(lines)
+
+
 def http_hint(status: int) -> str:
     if status == 404:
         return (
@@ -159,6 +209,12 @@ def fetch(name: str, *, local_dir: Path, section: str, env_prefix: str,
     res = requests.get(url, headers=headers, timeout=timeout)
     if res.status_code != 200:
         hint = http_hint(res.status_code) + "\n\n" + token_shape(token)
+        if cfg.get("repo"):
+            # 404は権限不足でも出る。トークンから何が見えているかを確かめて、
+            # 綴り違いなのか権限不足なのかをはっきりさせる。
+            extra = access_hint(token, str(cfg["repo"]).strip().strip("/"))
+            if extra:
+                hint += "\n\n" + extra
         # 例外をそのまま投げるとページ全体が落ちるうえ、公開環境では本文が
         # 伏せられて原因が分からない。状態コードと当たり先だけ残して返す
         # （トークンは出さない）。
