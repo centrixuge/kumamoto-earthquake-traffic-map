@@ -83,11 +83,21 @@ HOURLY_FETCH_STEP = timedelta(hours=1)
 TARGET_START = datetime(2026, 7, 27, 3, 0)
 # 復旧期（被災後72時間はもちろん、その後の交通パターンが平常に戻る過程まで）を
 # 動的取得の対象に含めるため、取得の終端に上限を置く。
-# 当初は本震+2週間、次に+3週間（2026-08-18 16:27）としていたが、学生の夏休み
-# 明けの戻り方まで見たいので、9月第1週の終わりまで伸ばした。日の区切りは
-# 5分間値側と揃えて03:00起点なので、9/7(月) 03:00 を上限にすると
-# 9/6(日) の24時間ぶんが最後まで入る。
-TARGET_END_CAP = datetime(2026, 9, 7, 3, 0)
+# 当初は本震+2週間、次に+3週間（2026-08-18 16:27）、次に9月第1週の終わり
+# （2026-09-07 03:00）としていた。いまは**トランストロン商用車プローブの提供
+# 期間（2026-09-14 まで）と揃える**ために 9/15(火) 03:00 にしている。
+# 日の区切りは5分間値側と揃えて03:00起点なので、これで 9/14(月) の24時間ぶんが
+# 最後まで入る。
+#
+# **上限に達すると、取得は静かに止まる**（ジョブは成功のまま、コマが増えない）。
+# 期間を延ばしたいときはここを動かす。1時間値は約3ヶ月遡れるので後から
+# 取り足せるが、**5分間値は約1ヶ月で消える**ので、延ばすなら早めに。
+TARGET_END_CAP = datetime(2026, 9, 15, 3, 0)
+
+# 5分間値が配信に残っている期間。これより古い未取得のコマは、何度問い合わせても
+# 空で返るので取りにいかない（上限を後から延ばしたときに、埋まらない穴を毎回
+# 叩き続けるのを防ぐ）。1時間値は約3ヶ月あるので、この制限はかけない。
+FIVE_MIN_RETENTION = timedelta(days=30)
 
 # 5分間値は過去1ヶ月しか遡れないため、これまでの平常時は直前2回の火曜だけだった。
 BASELINE_WINDOWS = [
@@ -240,6 +250,7 @@ MAX_FRAMES_PER_RUN = 900
 def _fetch_missing_target(
     archive: pd.DataFrame, target_end: datetime,
     type_name: str = TYPE_NAME, step: timedelta = FETCH_STEP, label: str = "target",
+    not_before: datetime = None,
 ) -> pd.DataFrame:
     """
     target範囲のうち、アーカイブに無いコマだけを取得する。
@@ -250,6 +261,10 @@ def _fetch_missing_target(
     真夜中のコマが昼以降の時刻として入り込み、7/29 12:40〜14:55 が丸ごと
     飛ばされた）。そのため、期待されるコマの並びと突き合わせて
     「無いコマだけ」を取りにいく。1コマ=1リクエストなので範囲取得より無駄がない。
+
+    not_before を渡すと、それより古い未取得のコマは取りにいかない。配信に残って
+    いない（＝何度叩いても空で返る）期間を毎回問い合わせないための歯止めで、
+    5分間値に使う。
     """
     grid = pd.date_range(TARGET_START, target_end, freq=step)
     sliced = _slice(archive, TARGET_START, target_end)
@@ -257,6 +272,15 @@ def _fetch_missing_target(
     for rt in ROAD_TYPES:
         existing = _archived_frames(sliced, rt)
         missing = [t for t in grid if t not in existing]
+        if not_before is not None:
+            stale = [t for t in missing if t < not_before]
+            missing = [t for t in missing if t >= not_before]
+            if stale:
+                print(
+                    f"[{label}] 道路種別{rt}: {len(stale)} frames before "
+                    f"{not_before:%Y-%m-%d %H:%M} are past the feed's retention "
+                    "— not fetching", flush=True,
+                )
         if not missing:
             print(
                 f"[{label}] 道路種別{rt}: already up to date "
@@ -360,7 +384,8 @@ def main():
     target_end = min(now, TARGET_END_CAP)
 
     archive = _load_archive()
-    new_target_df = _fetch_missing_target(archive, target_end)
+    new_target_df = _fetch_missing_target(
+        archive, target_end, not_before=now - FIVE_MIN_RETENTION)
     new_baseline_df = _fetch_missing_baseline(archive)
     archive = _merge_into_archive(archive, new_target_df, new_baseline_df)
     archive = _save_archive(archive)
