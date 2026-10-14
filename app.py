@@ -2353,7 +2353,7 @@ def main():
         '<div class="dash-src">'
         f"{archive_period}"
         f"異常検知の対象期間: 本震（{period_start}）〜 {period_end}"
-        f"（9月第1週の終わり＝9/7 03:00 または現在時刻の早い方）　｜　"
+        f"（商用車プローブの提供期間に合わせた 9/15 03:00 または現在時刻の早い方）　｜　"
         f"データ生成: {quake_info.get('generated_at', '不明')}<br>"
         "データ源: "
         '<a href="https://www.jartic-open-traffic.org/" target="_blank">JARTIC 交通量オープンデータ</a>'
